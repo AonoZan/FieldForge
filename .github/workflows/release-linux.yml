@@ -58,6 +58,7 @@ jobs:
           cp addon_code/__init__.py staging/FieldForge/
           cp addon_code/libfive/*.py staging/FieldForge/libfive/
           cp addon_code/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
+        shell: bash
 
       - name: Copy Compiled Linux Libraries from Build
         # Copy directly from the install directory created earlier in THIS job
