@@ -38,11 +38,11 @@ jobs:
 
       # If vcpkg isn't setup globally on the runner, uncomment and adjust this
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v12 # Or @v12
+        uses: lukka/run-vcpkg@v11 # Or @v12
         id: runvcpkg
         with:
           # Define a path within the workflow's workspace for vcpkg
-          #vcpkgGitCommitId: 'fdac52dc790413f4ad041fc50f576a0cf6df17c5'
+          vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f'
           vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
   
       # Make sure dependencies are installed on the runner OR run this step
