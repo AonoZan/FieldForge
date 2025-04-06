@@ -41,8 +41,15 @@ jobs:
       # === END OF COMMENTED STEP ===
 
       - name: Configure CMake for libfive
-        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF
-
+        run: >
+          cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build
+          -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }}
+          -DBUILD_SHARED_LIBS=ON
+          -DLIBFIVE_BUILD_STUDIO=OFF
+          -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
+          -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
+          -DCMAKE_INSTALL_RPATH='$ORIGIN/../src'
+      
       # === CHANGE: Build only, NO install ===
       - name: Build libfive
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
