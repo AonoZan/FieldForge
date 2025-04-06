@@ -70,15 +70,16 @@ jobs:
       - name: Copy Addon Python files
         run: |
           cp addon_code/__init__.py staging/FieldForge/
-          cp addon_code/libfive/*.py staging/FieldForge/libfive/
-          cp addon_code/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
+      - name: Copy Python Bindings
+        run: |
+          cp build/libfive/bind/python/libfive/*.py staging/FieldForge/libfive/
+          cp build/libfive/bind/python/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
         shell: bash
 
       - name: Copy Compiled Linux Libraries from Build
-        # Copy directly from the install directory created earlier in THIS job
         run: |
-          cp build/libfive/libfive.so staging/FieldForge/libfive/src/
-          cp build/libfive/libfive-stdlib.so staging/FieldForge/libfive/stdlib/
+          cp build/libfive/src/libfive.so staging/FieldForge/libfive/src/
+          cp build/libfive/stdlib/libfive-stdlib.so staging/FieldForge/libfive/stdlib/
 
       - name: Create Linux zip file
         run: |
