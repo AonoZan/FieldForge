@@ -47,14 +47,6 @@ FieldForge relies on external components that **must be included** with the addo
 
 **IMPORTANT:** Due to the requirement for pre-compiled libraries, FieldForge cannot be installed *only* from its Python source code. You need the complete package including the necessary library files.
 
-**Recommended Method (Release Package):**
-
-1.  Download the latest `FieldForge_vX.X.X.zip` file from the [Releases Page](https://github.com/YourUsername/FieldForge/releases) (**[TODO: Create Releases Page]**). This zip file should contain the Python code (`__init__.py`) and the `libfive` folder with all required subfolders and compiled libraries (`.dll`, `.so`, `.dylib`).
-2.  In Blender, go to `Edit` > `Preferences` > `Add-ons`.
-3.  Click `Install...` and navigate to the downloaded `.zip` file.
-4.  Select the zip file and click `Install Add-on`.
-5.  Find "FieldForge" in the add-on list and enable it by checking the box.
-
 **Manual Method (From Source):**
 
 This method is generally for developers or if a pre-packaged release is unavailable.
