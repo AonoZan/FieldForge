@@ -47,7 +47,20 @@ jobs:
   
       # Make sure dependencies are installed on the runner OR run this step
       - name: Install libfive dependencies via vcpkg
-        run: vcpkg install eigen3 libpng zlib boost --triplet x64-windows
+        #run: vcpkg install eigen3 libpng zlib boost --triplet x64-windows
+        run: >
+          vcpkg install --triplet x64-windows
+          eigen3
+          boost-container
+          boost-bimap
+          boost-interval
+          boost-lockfree
+          boost-functional
+          boost-algorithm
+          boost-math
+          libpng
+          qt5-base
+          python3
         shell: powershell  # vcpkg command usually works best in pwsh/cmd
 
       - name: Configure CMake for libfive
