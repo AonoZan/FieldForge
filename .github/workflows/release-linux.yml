@@ -31,10 +31,11 @@ jobs:
       # === END OF COMMENTED STEP ===
 
       - name: Configure CMake for libfive
-        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install -DCMAKE_INSTALL_PKGCONFIGDIR=lib/pkgconfig
+        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF
 
-      - name: Build and Install libfive
-        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --target install
+      # === CHANGE: Build only, NO install ===
+      - name: Build libfive
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
 
       # --- Package Addon ---
       - name: Checkout Addon Repository Code
@@ -61,8 +62,8 @@ jobs:
       - name: Copy Compiled Linux Libraries from Build
         # Copy directly from the install directory created earlier in THIS job
         run: |
-          cp install/lib/libfive.so staging/FieldForge/libfive/src/
-          cp install/lib/libfive-stdlib.so staging/FieldForge/libfive/stdlib/
+          cp build/libfive/libfive.so staging/FieldForge/libfive/src/
+          cp build/libfive/libfive-stdlib.so staging/FieldForge/libfive/stdlib/
 
       - name: Create Linux zip file
         run: |
