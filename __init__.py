@@ -7,7 +7,7 @@ FieldForge Addon for Blender: Create and manage dynamic Signed Distance Function
 bl_info = {
     "name": "FieldForge",
     "author": "Your Name & libfive Team",
-    "version": (0, 5, 0),
+    "version": (0, 5, 1),
     "blender": (4, 4, 0),
     "location": "View3D > Add > Mesh > Field Forge SDF | Object Properties",
     "description": "Adds and manages dynamic SDF shapes using libfive with hierarchical blending",
@@ -28,42 +28,70 @@ from bpy.props import (
 )
 from bpy.app.handlers import persistent
 
-# --- Libfive Import Handling ---
 addon_dir = os.path.dirname(os.path.realpath(__file__))
-libfive_python_dir = os.path.join(addon_dir)
+libfive_python_dir = os.path.join(addon_dir) # This seems redundant if addon_dir is already correct
 
-# Ensure the addon directory is in the path for libfive discovery
+# Ensure the addon directory is in the path for libfive *Python module* discovery
 if libfive_python_dir not in sys.path:
     sys.path.append(libfive_python_dir)
+
+libfive_base_dir = os.path.join(addon_dir, 'libfive', 'src')
+
+print(f"FieldForge: Attempting to set LIBFIVE_FRAMEWORK_DIR to: {libfive_base_dir}")
+
+# Check if the directory actually exists before setting the env var
+if os.path.isdir(libfive_base_dir):
+    # Set the environment variable *before* ffi.py is imported.
+    # This tells ffi.py's paths_for() function where to look first.
+    os.environ['LIBFIVE_FRAMEWORK_DIR'] = libfive_base_dir
+    print(f"FieldForge: Set LIBFIVE_FRAMEWORK_DIR environment variable.")
+else:
+    print(f"FieldForge: Warning - Calculated libfive base directory does not exist: {libfive_base_dir}")
+    print(f"FieldForge: Library loading might still fail if libraries are not found elsewhere.")
+
 
 libfive_available = False
 lf = None
 ffi = None
 try:
-    # Attempt to import libfive components
+    print("FieldForge: Attempting to import libfive.ffi...")
     import libfive.ffi as ffi
+    print("FieldForge: Attempting to import libfive.shape...")
     import libfive.shape # Import shape early if stdlib depends on it
+    print("FieldForge: Attempting to import libfive.stdlib...")
     import libfive.stdlib as lf
-    # Basic verification check
+
     if hasattr(lf, 'sphere') and hasattr(ffi.lib, 'libfive_tree_const'):
         libfive_available = True
-        # print("FieldForge: Successfully imported and verified libfive.") # Keep silent in final
+        print("FieldForge: Successfully imported and verified libfive.") # Keep silent in final
     else:
+         print("FieldForge: Libfive imported but core/stdlib function check failed.")
          raise ImportError("Core or stdlib function check failed")
 
 except ImportError as e:
     print(f"FieldForge: Error importing libfive: {e}")
-    # Provide guidance on library paths
-    core_lib_path = os.path.join(addon_dir, "libfive", "src", f"libfive.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
-    stdlib_lib_path = os.path.join(addon_dir, "libfive", "stdlib", f"libfive-stdlib.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
+    # Provide guidance on library paths - Adjust paths based on libfive_base_dir
+    core_lib_path = os.path.join(libfive_base_dir, "src", f"libfive.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
+    stdlib_lib_path = os.path.join(libfive_base_dir, "stdlib", f"libfive-stdlib.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
     print(f"FieldForge: Ensure compiled libfive libraries exist, e.g.:")
     print(f"  - Core: {core_lib_path}")
     print(f"  - Stdlib: {stdlib_lib_path}")
+    # Check the environment variable again if it failed
+    current_env_var = os.environ.get('LIBFIVE_FRAMEWORK_DIR', '<Not Set>')
+    print(f"FieldForge: Current LIBFIVE_FRAMEWORK_DIR='{current_env_var}'")
     print(f"FieldForge: Addon requires libfive. Dynamic functionality disabled.")
 except Exception as e:
-    print(f"FieldForge: An unexpected error occurred during libfive import: {e}")
+    # Catch potential ctypes loading errors more specifically if possible
+    if isinstance(e, OSError) and "cannot open shared object file" in str(e).lower():
+         print(f"FieldForge: OSError during libfive import (likely library load failure): {e}")
+    else:
+        print(f"FieldForge: An unexpected error occurred during libfive import: {type(e).__name__}: {e}")
+    # Print traceback for unexpected errors
+    import traceback
+    traceback.print_exc()
     print(f"FieldForge: Dynamic functionality disabled.")
 
+__all__ = ["libfive_available", "lf", "ffi"]
 
 # --- Constants ---
 SDF_BOUNDS_MARKER = "is_sdf_bounds"           # Custom property key for Bounds objects
