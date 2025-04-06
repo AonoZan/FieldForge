@@ -22,6 +22,9 @@ jobs:
     name: Build libfive and Package Addon (Linux)
     runs-on: [self-hosted, linux, x64, local-run] # <-- ADJUST TO YOUR LINUX RUNNER LABELS
 
+    permissions:
+      contents: write
+
     steps:
       # --- Build libfive ---
       - name: Checkout libfive Source Code
@@ -90,7 +93,7 @@ jobs:
 
       # --- Create/Update GitHub Release ---
       - name: Create Release and Upload Linux Asset
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v0
         # NOTE: This will try to create/update a release named after the INPUT tag
         # Be careful when running manually - ensure the input tag matches an intended release
         with:
