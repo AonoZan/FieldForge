@@ -47,7 +47,7 @@ jobs:
   
       # Make sure dependencies are installed on the runner OR run this step
       - name: Install libfive dependencies via vcpkg
-        run: vcpkg install eigen3 libpng zlib --triplet x64-windows
+        run: vcpkg install eigen3 libpng zlib boost --triplet x64-windows
         shell: powershell  # vcpkg command usually works best in pwsh/cmd
 
       - name: Configure CMake for libfive
@@ -57,7 +57,9 @@ jobs:
           -DBUILD_SHARED_LIBS=ON `
           -DLIBFIVE_BUILD_STUDIO=OFF `
           -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake" `
-          -Deigen3_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/eigen3"
+          -Deigen3_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/eigen3"`
+          -DZLIB_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/zlib" `
+          -DPNG_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/libpng"
         shell: powershell 
 
       # === CHANGE: Build only, NO install ===
