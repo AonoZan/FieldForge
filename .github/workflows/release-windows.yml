@@ -52,12 +52,11 @@ jobs:
 
       - name: Configure CMake for libfive
         run: >
-          cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build
-          -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }}
-          -DBUILD_SHARED_LIBS=ON
-          -DLIBFIVE_BUILD_STUDIO=OFF
-          # Use the explicitly defined vcpkg path here
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake
+          cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build `
+          -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} `
+          -DBUILD_SHARED_LIBS=ON `
+          -DLIBFIVE_BUILD_STUDIO=OFF `
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake" `
           -Deigen3_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/eigen3"
         shell: powershell 
 
