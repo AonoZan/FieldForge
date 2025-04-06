@@ -31,7 +31,7 @@ jobs:
       # === END OF COMMENTED STEP ===
 
       - name: Configure CMake for libfive
-        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install -DCMAKE_INSTALL_PKGCONFIGDIR=lib/pkgconfig
 
       - name: Build and Install libfive
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --target install
