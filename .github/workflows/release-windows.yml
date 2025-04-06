@@ -1,0 +1,96 @@
+name: Build Windows Addon Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v1.0.0
+
+env:
+  LIBFIVE_CHECKOUT_DIR: libfive_src
+  CMAKE_BUILD_TYPE: Release
+  LIBFIVE_VERSION_TAG: 'main' # IMPORTANT: Set to a specific tag like 'v0.17.0'
+
+jobs:
+  build_and_package_windows:
+    name: Build libfive and Package Addon (Windows)
+    runs-on: [self-hosted, windows, x64] # <-- ADJUST TO YOUR WINDOWS RUNNER LABELS
+
+    steps:
+      # --- Build libfive ---
+      - name: Checkout libfive Source Code
+        uses: actions/checkout@v4
+        with:
+          repository: libfive/libfive
+          ref: ${{ env.LIBFIVE_VERSION_TAG }}
+          path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
+
+      - name: Setup vcpkg # Ensure vcpkg works on runner OR dependencies pre-installed
+        uses: lukka/run-vcpkg@v11
+        with: { vcpkgGitCommitId: 'a5e9e37f8a7e105e00367117d64fd96d14e369f9' }
+
+      - name: Install libfive dependencies via vcpkg # Ensure runner can run this OR pre-install
+        run: vcpkg install eigen3 libpng zlib --triplet x64-windows
+        shell: pwsh
+
+      - name: Configure CMake for libfive
+        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake
+        shell: pwsh
+
+      - name: Build and Install libfive
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --target install
+        shell: pwsh
+
+      # --- Package Addon ---
+      - name: Checkout Addon Repository Code
+        uses: actions/checkout@v4
+        with:
+          path: addon_code # Checkout your addon code to a separate directory
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Create staging directory structure
+        run: |
+          mkdir -p staging/FieldForge
+          mkdir -p staging/FieldForge/libfive/src
+          mkdir -p staging/FieldForge/libfive/stdlib
+        shell: bash
+
+      - name: Copy Addon Python files
+        run: |
+          cp addon_code/__init__.py staging/FieldForge/
+          cp addon_code/libfive/*.py staging/FieldForge/libfive/
+          cp addon_code/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
+        shell: bash
+
+      - name: Copy Compiled Windows Libraries from Build
+        # Copy directly from the install directory created earlier in THIS job
+        run: |
+          cp install/bin/libfive.dll staging/FieldForge/libfive/src/
+          cp install/bin/libfive-stdlib.dll staging/FieldForge/libfive/stdlib/
+          cp install/bin/libpng16.dll staging/FieldForge/libfive/src/
+          cp install/bin/zlib1.dll staging/FieldForge/libfive/src/
+        shell: bash # Use bash for cross-platform compatible cp
+
+      - name: Create Windows zip file
+        run: |
+          cd staging
+          zip -r ../FieldForge-win-${{ env.VERSION }}.zip FieldForge/
+          cd ..
+        shell: bash
+
+      # --- Create/Update GitHub Release ---
+      - name: Create Release and Upload Windows Asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }} (libfive ${{ env.LIBFIVE_VERSION_TAG }})
+          draft: false
+          prerelease: contains(github.ref_name, '-')
+          # Upload ONLY the windows zip file from this job
+          files: FieldForge-win-${{ env.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
