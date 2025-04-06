@@ -13,7 +13,7 @@ env:
 jobs:
   build_and_package_linux:
     name: Build libfive and Package Addon (Linux)
-    runs-on: [self-hosted, linux, x64] # <-- ADJUST TO YOUR LINUX RUNNER LABELS
+    runs-on: [self-hosted, linux, x64, local-run] # <-- ADJUST TO YOUR LINUX RUNNER LABELS
 
     steps:
       # --- Build libfive ---
@@ -24,10 +24,11 @@ jobs:
           ref: ${{ env.LIBFIVE_COMMIT_SHA }}
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
 
-      - name: Install libfive dependencies via apt # Ensure apt/sudo works OR pre-install
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libeigen3-dev libpng-dev zlib1g-dev
+      # - name: Install libfive dependencies via apt # Ensure apt/sudo works OR pre-install
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y build-essential cmake libeigen3-dev libpng-dev zlib1g-dev
+      # === END OF COMMENTED STEP ===
 
       - name: Configure CMake for libfive
         run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
