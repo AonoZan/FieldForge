@@ -89,7 +89,7 @@ jobs:
       - name: Copy Compiled Linux Libraries from Build
         run: |
           cp build/libfive/src/libfive.so staging/FieldForge/libfive/src/
-          cp build/libfive/stdlib/libfive-stdlib.so staging/FieldForge/libfive/stdlib/
+          cp build/libfive/stdlib/libfive-stdlib.so staging/FieldForge/libfive/src/
 
       - name: Create Linux zip file
         run: |
