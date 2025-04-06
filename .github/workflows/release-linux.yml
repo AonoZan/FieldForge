@@ -1,0 +1,84 @@
+name: Build Linux Addon Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v1.0.0
+
+env:
+  LIBFIVE_CHECKOUT_DIR: libfive_src
+  CMAKE_BUILD_TYPE: Release
+  LIBFIVE_VERSION_TAG: 'main' # IMPORTANT: Set to a specific tag like 'v0.17.0'
+
+jobs:
+  build_and_package_linux:
+    name: Build libfive and Package Addon (Linux)
+    runs-on: [self-hosted, linux, x64] # <-- ADJUST TO YOUR LINUX RUNNER LABELS
+
+    steps:
+      # --- Build libfive ---
+      - name: Checkout libfive Source Code
+        uses: actions/checkout@v4
+        with:
+          repository: libfive/libfive
+          ref: ${{ env.LIBFIVE_VERSION_TAG }}
+          path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
+
+      - name: Install libfive dependencies via apt # Ensure apt/sudo works OR pre-install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libeigen3-dev libpng-dev zlib1g-dev
+
+      - name: Configure CMake for libfive
+        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+
+      - name: Build and Install libfive
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --target install
+
+      # --- Package Addon ---
+      - name: Checkout Addon Repository Code
+        uses: actions/checkout@v4
+        with:
+          path: addon_code
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Create staging directory structure
+        run: |
+          mkdir -p staging/FieldForge
+          mkdir -p staging/FieldForge/libfive/src
+          mkdir -p staging/FieldForge/libfive/stdlib
+
+      - name: Copy Addon Python files
+        run: |
+          cp addon_code/__init__.py staging/FieldForge/
+          cp addon_code/libfive/*.py staging/FieldForge/libfive/
+          cp addon_code/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
+
+      - name: Copy Compiled Linux Libraries from Build
+        # Copy directly from the install directory created earlier in THIS job
+        run: |
+          cp install/lib/libfive.so staging/FieldForge/libfive/src/
+          cp install/lib/libfive-stdlib.so staging/FieldForge/libfive/stdlib/
+
+      - name: Create Linux zip file
+        run: |
+          cd staging
+          zip -r ../FieldForge-lin-${{ env.VERSION }}.zip FieldForge/
+          cd ..
+
+      # --- Create/Update GitHub Release ---
+      - name: Create Release and Upload Linux Asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }} (libfive ${{ env.LIBFIVE_VERSION_TAG }})
+          draft: false
+          prerelease: contains(github.ref_name, '-')
+          # Upload ONLY the linux zip file from this job
+          files: FieldForge-lin-${{ env.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
