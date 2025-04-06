@@ -39,9 +39,9 @@ jobs:
       # If vcpkg isn't setup globally on the runner, uncomment and adjust this
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
-      #  with:
-      #    vcpkgDirectory: ${{ env.VCPKG_ROOT }} # Optional: If VCPKG_ROOT env var is set globally, this might not be needed
-      #    vcpkgGitCommitId: 'a5e9e37f8a7e105e00367117d64fd96d14e369f9'
+        with:
+          # Define a path within the workflow's workspace for vcpkg
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
   
       # Make sure dependencies are installed on the runner OR run this step
       - name: Install libfive dependencies via vcpkg
@@ -49,15 +49,14 @@ jobs:
         shell: pwsh # vcpkg command usually works best in pwsh/cmd
 
       - name: Configure CMake for libfive
-        # NOTE: Removed -DCMAKE_INSTALL_PREFIX
-        # NOTE: Assumes VCPKG_ROOT env var is set correctly for the toolchain file path
         run: >
           cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build
           -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }}
           -DBUILD_SHARED_LIBS=ON
           -DLIBFIVE_BUILD_STUDIO=OFF
-          -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake
-        shell: pwsh # CMake configure often works better in pwsh/cmd on Windows
+          # Use the explicitly defined vcpkg path here
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake
+        shell: pwsh
 
       # === CHANGE: Build only, NO install ===
       - name: Build libfive
