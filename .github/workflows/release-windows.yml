@@ -41,7 +41,7 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: ${{ env.VCPKG_ROOT }} # Optional: If VCPKG_ROOT env var is set globally, this might not be needed
-          vcpkgGitCommitId: 'a5e9e37f8a7e105e00367117d64fd96d14e369f9'
+     #     vcpkgGitCommitId: 'a5e9e37f8a7e105e00367117d64fd96d14e369f9'
   
       # Make sure dependencies are installed on the runner OR run this step
       - name: Install libfive dependencies via vcpkg
