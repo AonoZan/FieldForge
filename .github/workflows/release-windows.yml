@@ -39,6 +39,7 @@ jobs:
       # If vcpkg isn't setup globally on the runner, uncomment and adjust this
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11 # Or @v12
+        id: runvcpkg
         with:
           # Define a path within the workflow's workspace for vcpkg
           vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
