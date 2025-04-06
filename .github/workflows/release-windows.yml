@@ -37,13 +37,13 @@ jobs:
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
 
       # If vcpkg isn't setup globally on the runner, uncomment and adjust this
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11 # Or @v12
-        id: runvcpkg
-        with:
+     # - name: Setup vcpkg
+    #    uses: lukka/run-vcpkg@v11 # Or @v12
+    #    id: runvcpkg
+    #    with:
           # Define a path within the workflow's workspace for vcpkg
-          vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f'
-          vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
+   #       vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f'
+    #      vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
   
       # Make sure dependencies are installed on the runner OR run this step
       - name: Install libfive dependencies via vcpkg
