@@ -48,7 +48,7 @@ jobs:
       # Make sure dependencies are installed on the runner OR run this step
       - name: Install libfive dependencies via vcpkg
         run: vcpkg install eigen3 libpng zlib --triplet x64-windows
-        shell: pwsh # vcpkg command usually works best in pwsh/cmd
+        shell: powershell  # vcpkg command usually works best in pwsh/cmd
 
       - name: Configure CMake for libfive
         run: >
@@ -58,12 +58,12 @@ jobs:
           -DLIBFIVE_BUILD_STUDIO=OFF
           # Use the explicitly defined vcpkg path here
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake
-        shell: pwsh
+        shell: powershell 
 
       # === CHANGE: Build only, NO install ===
       - name: Build libfive
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
-        shell: pwsh # CMake build often works better in pwsh/cmd on Windows
+        shell: powershell  # CMake build often works better in pwsh/cmd on Windows
 
       # --- Package Addon ---
       - name: Checkout Addon Repository Code
