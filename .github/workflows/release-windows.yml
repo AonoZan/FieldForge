@@ -58,6 +58,7 @@ jobs:
           -DLIBFIVE_BUILD_STUDIO=OFF
           # Use the explicitly defined vcpkg path here
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake
+          -Deigen3_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/eigen3"
         shell: powershell 
 
       # === CHANGE: Build only, NO install ===
