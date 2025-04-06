@@ -57,7 +57,7 @@ jobs:
           -DBUILD_SHARED_LIBS=ON `
           -DLIBFIVE_BUILD_STUDIO=OFF `
           -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake" `
-          -Deigen3_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/eigen3"
+          -eigen3_DIR="${{ github.workspace }}/vcpkg_root/installed/x64-windows/share/eigen3"
         shell: powershell 
 
       # === CHANGE: Build only, NO install ===
