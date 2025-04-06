@@ -93,7 +93,7 @@ jobs:
 
       # --- Create/Update GitHub Release ---
       - name: Create Release and Upload Linux Asset
-        uses: softprops/action-gh-release@v0
+        uses: softprops/action-gh-release@v1
         # NOTE: This will try to create/update a release named after the INPUT tag
         # Be careful when running manually - ensure the input tag matches an intended release
         with:
