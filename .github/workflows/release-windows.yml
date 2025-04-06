@@ -42,6 +42,7 @@ jobs:
         id: runvcpkg
         with:
           # Define a path within the workflow's workspace for vcpkg
+          vcpkgGitCommitId: '856505bb767458c99d8e3c3ed441f59a058d3687'
           vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
   
       # Make sure dependencies are installed on the runner OR run this step
