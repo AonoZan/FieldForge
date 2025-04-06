@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*' # Trigger on tags like v1.0.0
+  workflow_dispatch:
+    inputs:
+      # Define an input for the version/tag name when run manually
+      version_tag:
+        description: 'Version tag to build (e.g., v1.0.0 or v1.1.0-beta)'
+        required: true
+        type: string
 
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
@@ -43,9 +50,16 @@ jobs:
         with:
           path: addon_code
 
-      - name: Get version from tag
+      - name: Determine Version
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        # If triggered manually, use the input. If triggered by tag, use the tag name.
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version_tag }}" >> $GITHUB_ENV
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          fi
+        shell: bash
 
       - name: Create staging directory structure
         run: |
@@ -71,17 +85,21 @@ jobs:
           cd staging
           zip -r ../FieldForge-lin-${{ env.VERSION }}.zip FieldForge/
           cd ..
+        shell: bash
 
       # --- Create/Update GitHub Release ---
       - name: Create Release and Upload Linux Asset
         uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+        # NOTE: This will try to create/update a release named after the INPUT tag
+        # Be careful when running manually - ensure the input tag matches an intended release
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }} (libfive ${{ env.LIBFIVE_VERSION_TAG }})
+          # Use the input tag name when run manually, otherwise the pushed tag
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_tag || github.ref_name }}
+          name: Release ${{ env.VERSION }} (libfive @${{ env.LIBFIVE_COMMIT_SHA }})
           draft: false
-          prerelease: contains(github.ref_name, '-')
-          # Upload ONLY the linux zip file from this job
+          # Prerelease check now uses the determined version string
+          prerelease: contains(env.VERSION, '-')
+          # Use determined version in the filename
           files: FieldForge-lin-${{ env.VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
