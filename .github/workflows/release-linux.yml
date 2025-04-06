@@ -80,17 +80,23 @@ jobs:
       - name: Copy Addon Python files
         run: |
           cp addon_code/__init__.py staging/FieldForge/
+          
+      - name: Fix RPATH for libfive-stdlib.so
+        run: |
+          # Set the RPATH of stdlib to look in its own directory for libfive.so
+          chrpath --replace '$ORIGIN' build/libfive/stdlib/libfive-stdlib.so
+          
       - name: Copy Python Bindings
         run: |
           cp build/libfive/bind/python/libfive/*.py staging/FieldForge/libfive/
           cp build/libfive/bind/python/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
         shell: bash
-
+        
       - name: Copy Compiled Linux Libraries from Build
         run: |
           cp build/libfive/src/libfive.so staging/FieldForge/libfive/src/
           cp build/libfive/stdlib/libfive-stdlib.so staging/FieldForge/libfive/src/
-
+          
       - name: Create Linux zip file
         run: |
           cd staging
