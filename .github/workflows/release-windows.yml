@@ -129,11 +129,10 @@ jobs:
         shell: bash # Use bash for cross-platform compatible cp
 
       - name: Create Windows zip file
+        # Change shell to powershell for this step
+        shell: powershell
         run: |
-          cd staging
-          zip -r ../FieldForge-win-${{ env.VERSION }}.zip FieldForge/
-          cd ..
-        shell: bash # zip command needs to be available (e.g., via Git Bash)
+          Compress-Archive -Path staging/FieldForge -DestinationPath "../FieldForge-win-${{ env.VERSION }}.zip" -Force
 
       # --- Create/Update GitHub Release ---
       - name: Create Release and Upload Windows Asset
