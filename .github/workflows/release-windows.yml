@@ -59,7 +59,6 @@ jobs:
           boost-algorithm
           boost-math
           libpng
-          qt5-base
           python3
         shell: powershell  # vcpkg command usually works best in pwsh/cmd
 
