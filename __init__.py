@@ -1,16 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-FieldForge Addon for Blender: Create and manage dynamic Signed Distance Function
-(SDF) shapes using libfive, featuring hierarchical blending and per-system controls.
-"""
-
 bl_info = {
     "name": "FieldForge",
     "author": "Your Name & libfive Team",
-    "version": (0, 5, 2),
+    "version": (0, 5, 3),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N-Panel) > FieldForge Tab | Add > Mesh > Field Forge SDF",
-    "description": "Adds and manages dynamic SDF shapes using libfive with hierarchical blending and custom visuals", # Updated description
+    "description": "Adds and manages dynamic SDF shapes using libfive with hierarchical blending, extrusion, and custom visuals", # Updated description
     "warning": "Requires compiled libfive libraries.",
     "doc_url": "",
     "category": "Add Mesh",
@@ -21,7 +15,6 @@ import os
 import sys
 import time
 from mathutils import Vector, Matrix
-import mathutils # Already imported, but good practice
 import math
 
 # --- NEW: GPU Drawing Imports ---
@@ -38,10 +31,7 @@ from bpy.props import (
 from bpy.app.handlers import persistent
 
 # --- Start: Existing Libfive Loading and Setup Code ---
-# (Keep all the libfive import logic, constants, global state,
-# helper functions, state gathering, debounce/throttle logic,
-# update functions, scene handler exactly as they were before)
-# ... (omitted for brevity - assume it's identical up to Operators) ...
+
 addon_dir = os.path.dirname(os.path.realpath(__file__))
 libfive_python_dir = os.path.join(addon_dir) # This seems redundant if addon_dir is already correct
 
@@ -139,8 +129,7 @@ DEFAULT_SETTINGS = {
 # --- Helper Functions ---
 # (Keep existing helper functions: get_all_bounds_objects, find_result_object,
 # find_parent_bounds, is_sdf_source, update_empty_visibility, get_bounds_setting,
-# compare_matrices, compare_dicts, reconstruct_shape, apply_blender_transform_to_sdf,
-# combine_shapes, process_sdf_hierarchy)
+# compare_matrices, compare_dicts)
 # ... (omitted for brevity) ...
 def get_all_bounds_objects(context):
     """ Generator yielding all SDF Bounds objects in the current scene """
@@ -167,6 +156,12 @@ def find_parent_bounds(start_obj):
 def is_sdf_source(obj):
     """ Checks if an object is configured as an SDF source Empty """
     return obj and obj.type == 'EMPTY' and obj.get(SDF_PROPERTY_MARKER, False)
+def is_valid_2d_loft_source(obj):
+    """Checks if an object is an SDF source and is a 2D type eligible for lofting."""
+    if not is_sdf_source(obj):
+        return False
+    sdf_type = obj.get("sdf_type", "")
+    return sdf_type in {"circle", "ring", "polygon"} # Add other 2D types here later
 
 def update_empty_visibility(scene):
     """ Hides or shows source empties based on their root Bounds setting """
@@ -256,12 +251,13 @@ def reconstruct_shape(obj):
     """
     Reconstructs a UNIT libfive shape based on the object's 'sdf_type' property.
     Scaling and transformation are handled separately via the object's matrix.
+    Extrusion for 2D shapes is handled later in process_sdf_hierarchy.
     """
     if not libfive_available or not obj: return None
 
     sdf_type = obj.get("sdf_type", "")
     shape = None
-    unit_radius = 0.5 # Standard radius for shapes like cylinder/cone base
+    unit_radius = 0.5 # Standard radius for shapes like cylinder/cone base/sphere/circle
     unit_height = 1.0 # Standard height for shapes like cylinder/cone
 
     try:
@@ -270,39 +266,52 @@ def reconstruct_shape(obj):
             shape = lf.cube_centered((1.0, 1.0, 1.0))
         elif sdf_type == "sphere":
             # Unit sphere centered at origin (radius 0.5 after transform scaling)
-            shape = lf.sphere(0.5)
+            shape = lf.sphere(unit_radius)
         elif sdf_type == "cylinder":
             # Unit cylinder along Z, radius 0.5, height 1.0, centered at origin
             shape = lf.cylinder_z(unit_radius, unit_height, base=(0, 0, -unit_height / 2.0))
         elif sdf_type == "cone":
-             # --- Single Scaling Factor for Cone Mesh ---
-             # Adjust this factor to change the mesh size relative to the visual guide.
-             # 1.0 = mesh matches visual guide size (radius 0.5, height 1.0)
-             # 0.5 = mesh is half size (radius 0.25, height 0.5) - PREVIOUS STATE
-             # 0.7 = mesh is 70% size, etc.
-             CONE_MESH_SCALE_FACTOR = 0.449 # <<< TWEAK THIS VALUE
-             # -----------------------------------------
-
-             # Calculate mesh dimensions based on unit size and the factor
+             CONE_MESH_SCALE_FACTOR = 0.449
              mesh_radius = unit_radius * CONE_MESH_SCALE_FACTOR
              mesh_height = unit_height * CONE_MESH_SCALE_FACTOR
-
-             # Base position remains at Z=0 (object origin)
-             base_z = 0.0
+             base_z = 0.0 # Base at Z=0 (object origin)
              shape = lf.cone_z(mesh_radius, mesh_height, base=(0, 0, base_z))
         elif sdf_type == "torus":
-            # Unit torus, example: Major Radius 0.35, Minor Radius 0.15
-            major_r = 0.35
-            minor_r = 0.15
+            default_major = 0.35; default_minor = 0.15
+            major_r_prop = obj.get("sdf_torus_major_radius", default_major)
+            minor_r_prop = obj.get("sdf_torus_minor_radius", default_minor)
+
+            major_r = max(0.01, major_r_prop); minor_r = max(0.005, minor_r_prop)
+            minor_r = min(minor_r, major_r - 1e-5)
+
             shape = lf.torus_z(major_r, minor_r, center=(0,0,0))
         elif sdf_type == "rounded_box":
             # Base shape is a 1x1x1 cube centered at origin
-            # Rounding radius is an absolute value read from the object property
             round_radius = obj.get("sdf_round_radius", 0.1)
             half_size = 0.5
             corner_a = (-half_size, -half_size, -half_size)
             corner_b = ( half_size,  half_size,  half_size)
             shape = lf.rounded_box(corner_a, corner_b, round_radius)
+        elif sdf_type == "circle":
+            # Unit circle (2D) centered at origin (radius 0.5)
+            shape = lf.circle(unit_radius, center=(0, 0)) # Use 2D center
+        elif sdf_type == "ring":
+            # Inner radius is stored directly in unit space (intended range 0.0 to < 0.5)
+            inner_r = obj.get("sdf_inner_radius", 0.25)
+            # Ensure inner radius is not >= outer radius to avoid issues
+            # unit_radius is 0.5 here
+            safe_inner_r = max(0.0, min(inner_r, unit_radius - 1e-5))
+            shape = lf.ring(unit_radius, safe_inner_r, center=(0, 0)) # Use 2D center
+        elif sdf_type == "polygon":
+            sides = obj.get("sdf_sides", 6)
+            # Ensure at least 3 sides
+            safe_n = max(3, sides)
+            # unit_radius is 0.5 (center-to-vertex distance)
+            shape = lf.polygon(unit_radius, safe_n, center=(0, 0)) # Use 2D center
+        elif sdf_type == "half_space":
+            # Unit half_space: Plane at Z=0, normal pointing along +Z before transform
+            # The Empty's transform will orient/position this.
+            shape = lf.half_space((0.0, 0.0, 1.0), (0.0, 0.0, 0.0))
         else:
             # Return emptiness for unknown types to avoid errors down the line
             return lf.emptiness()
@@ -365,84 +374,209 @@ def combine_shapes(shape_a, shape_b, blend_factor):
 
 def process_sdf_hierarchy(obj, settings):
     """
-    Recursively processes an object and its SDF children, returning the combined libfive shape.
-    Applies operations sequentially, skipping invisible objects. Reads blend factors.
-    'settings' dict contains settings read from the root Bounds object.
+    Recursively processes hierarchy. Handles loft between parent/child
+    in parent's local space before standard processing and combination.
     """
-    if not libfive_available or not obj: return lf.emptiness() # Return empty for invalid input
-
-    # Skip processing if the object is hidden in the viewport (unless it's the Bounds root itself)
+    if not libfive_available or not obj: return lf.emptiness()
     if not obj.visible_get() and not obj.get(SDF_BOUNDS_MARKER, False):
-        return lf.emptiness() # Return empty shape for hidden objects
+        return lf.emptiness()
 
     obj_name = obj.name
-    shape_so_far = None
-    is_bounds_root = obj.get(SDF_BOUNDS_MARKER, False)
+    processed_children = set() # Keep track of children handled by loft
 
-    # 1. Get Base Shape (if the current object is an SDF source)
+    # --- Shape Generation for 'obj' ---
+    # This variable holds the shape definition *before* arraying and transformation
+    current_shape = lf.emptiness()
+    # This variable holds the final transformed shape for this object
+    processed_shape_for_this_obj = lf.emptiness()
+
     if is_sdf_source(obj):
-        base_shape = reconstruct_shape(obj) # Returns lf.emptiness() on failure or unknown type
-        # Check if reconstruct_shape returned *something* (even emptiness initially)
-        if base_shape is not None:
+        # --- Stage 1: Check for Loft and Generate Base Shape ---
+        loft_child_found = None
+        shape_a = None # Base shape for parent (obj)
+
+        # Check if 'obj' can be a loft parent
+        if is_valid_2d_loft_source(obj):
+            # Look for the first valid lofting child
+            for child in obj.children:
+                if child.name in processed_children: continue # Skip already processed (redundant here, but safe)
+                if is_valid_2d_loft_source(child) and child.get("sdf_use_loft", False):
+                    loft_child_found = child
+                    break # Process only the first
+
+            if loft_child_found:
+                print(f"--- Found Loft pair: Parent={obj_name}, Child={loft_child_found.name} ---") # Debug
+                try:
+                    # Get BASE 2D shapes
+                    shape_a = reconstruct_shape(obj)
+                    shape_b = reconstruct_shape(loft_child_found)
+
+                    if shape_a is not None and shape_b is not None:
+                        # Determine Z bounds in PARENT'S LOCAL SPACE
+                        zmin = 0.0 # Parent's local Z
+                        zmax = loft_child_found.location.z # Child's local Z relative to parent
+
+                        if abs(zmax - zmin) < 1e-5:
+                            print(f"FieldForge Warning: Loft child {loft_child_found.name} has same local Z as parent {obj_name}. Loft requires height. Using parent shape.")
+                            current_shape = shape_a # Fallback to parent's base shape
+                        else:
+                            if zmin > zmax: zmin, zmax = zmax, zmin # Ensure zmin < zmax
+                            print(f"    Loft zmin (local): {zmin}, zmax (local): {zmax}") # Debug
+                            print(f"    Loft Shape A: {shape_a}, Shape B: {shape_b}") # Debug
+
+                            # Perform the loft - result becomes current_shape for obj
+                            current_shape = lf.loft(shape_a, shape_b, zmin, zmax)
+                            processed_children.add(loft_child_found.name) # Mark child as handled
+                            print(f"    Loft Result Shape: {current_shape}") # Debug
+                    else:
+                        print(f"FieldForge Warning: Could not reconstruct base shapes for loft between {obj_name} and {loft_child_found.name}")
+                        current_shape = reconstruct_shape(obj) or lf.emptiness() # Fallback
+
+                except Exception as e:
+                    print(f"FieldForge Error: Loft operation failed between {obj_name} and {loft_child_found.name}: {e}")
+                    current_shape = reconstruct_shape(obj) or lf.emptiness() # Fallback
+                    if loft_child_found: processed_children.add(loft_child_found.name) # Mark child processed on error
+
+        # --- Stage 1b: If NOT lofting, get base shape and extrude ---
+        if loft_child_found is None: # Only run if not part of a loft pair
+            current_shape = reconstruct_shape(obj) # Get base shape normally
+            if current_shape is not None:
+                # Apply Extrusion if it's a 2D type
+                sdf_type = obj.get("sdf_type", "")
+                if sdf_type in {"circle", "ring", "polygon"}:
+                    try:
+                        extrusion_depth = obj.get("sdf_extrusion_depth", 0.1); safe_depth = max(1e-6, extrusion_depth)
+                        zmin_ex = -safe_depth / 2.0; zmax_ex = safe_depth / 2.0 # Use different var names
+                        current_shape = lf.extrude_z(current_shape, zmin_ex, zmax_ex)
+                    except Exception as e: print(f"FF Error Extruding {obj_name}: {e}"); current_shape = lf.emptiness()
+            else:
+                 current_shape = lf.emptiness() # If reconstruct failed
+
+
+        # --- Stage 2: Apply Shell (to lofted or extruded/base shape) ---
+        # This runs regardless of whether lofting happened, applies to the result (current_shape)
+        if obj.get("sdf_use_shell", False):
             try:
-                # Attempt transformation. apply_blender_transform_to_sdf will handle
-                # base_shape == lf.emptiness() or return lf.emptiness() on matrix error.
-                obj_matrix_inv = obj.matrix_world.inverted()
-                shape_so_far = apply_blender_transform_to_sdf(base_shape, obj_matrix_inv)
-            except ValueError: # Matrix inversion failed (e.g., scale is zero)
-                print(f"FieldForge Warning: Could not invert matrix for {obj_name}. Skipping object shape.")
-                # shape_so_far remains None here
-            except Exception as e:
-                 print(f"FieldForge Error: Transform application failed for {obj_name}: {e}")
-                 # shape_so_far remains None here
+                shell_offset = obj.get("sdf_shell_offset", 0.1); safe_shell_offset = float(shell_offset)
+                if abs(safe_shell_offset) > 1e-6: # Only apply if offset is non-zero
+                     print(f"--- Applying Shell to {obj_name} (Offset: {safe_shell_offset}) ---") # Debug
+                     current_shape = lf.shell(current_shape, safe_shell_offset)
+            except Exception as e: print(f"FF Error Shelling {obj_name}: {e}"); current_shape = lf.emptiness()
 
-    # Initialize with emptiness if no base shape was generated (e.g., it's just a parent/group or shape failed)
-    if shape_so_far is None:
-        shape_so_far = lf.emptiness()
 
-    # 2. Determine blend factor for combining CHILDREN of this object
-    # The blend factor is defined by the PARENT object (or Bounds global)
+        # --- Stage 3: Apply Array (to potentially lofted/shelled shape) ---
+        # This also runs regardless of lofting, applies to current_shape
+        main_mode = obj.get("sdf_main_array_mode", 'NONE')
+        if main_mode != 'NONE':
+            active_x = obj.get("sdf_array_active_x", False)
+            active_y = obj.get("sdf_array_active_y", False)
+            active_z = obj.get("sdf_array_active_z", False)
+            array_func = None; args = None; array_type_str = "None"
+
+            # Determine which array function and arguments to use
+            if main_mode == 'LINEAR':
+                if active_x and active_y and active_z:
+                    nx=max(1, obj.get("sdf_array_count_x", 1)); ny=max(1, obj.get("sdf_array_count_y", 1)); nz=max(1, obj.get("sdf_array_count_z", 1))
+                    if nx > 1 or ny > 1 or nz > 1:
+                        dx=obj.get("sdf_array_delta_x",1.0); dy=obj.get("sdf_array_delta_y",1.0); dz=obj.get("sdf_array_delta_z",1.0)
+                        args = (current_shape, nx, ny, nz, (float(dx), float(dy), float(dz))); array_func = lf.array_xyz; array_type_str = "Linear:XYZ"
+                elif active_x and active_y:
+                    nx=max(1, obj.get("sdf_array_count_x", 1)); ny=max(1, obj.get("sdf_array_count_y", 1))
+                    if nx > 1 or ny > 1:
+                         dx=obj.get("sdf_array_delta_x",1.0); dy=obj.get("sdf_array_delta_y",1.0)
+                         args = (current_shape, nx, ny, (float(dx), float(dy))); array_func = lf.array_xy; array_type_str = "Linear:XY"
+                elif active_x:
+                    nx=max(1, obj.get("sdf_array_count_x", 1))
+                    if nx > 1:
+                        dx=obj.get("sdf_array_delta_x",1.0)
+                        args = (current_shape, nx, float(dx)); array_func = lf.array_x; array_type_str = "Linear:X"
+            elif main_mode == 'RADIAL':
+                count = max(1, obj.get("sdf_radial_count", 1))
+                if count > 1:
+                     center_prop = obj.get("sdf_radial_center", (0.0, 0.0)); center_xy = (0.0, 0.0)
+                     if center_prop and len(center_prop) == 2:
+                         try: center_xy = (float(center_prop[0]), float(center_prop[1]))
+                         except (TypeError, ValueError, IndexError): print(f"FF Warning: Invalid radial_center on {obj_name}.")
+                     else: print(f"FF Warning: Missing/invalid radial_center on {obj_name}.")
+                     args = (current_shape, count, center_xy); array_func = lf.array_polar_z; array_type_str = "Radial"
+
+            # Apply the selected array function
+            if array_func and args:
+                 try:
+                     print(f"--- Applying Array {array_type_str} to {obj_name} ---") # Debug
+                     # print(f"    Args: {args[1:]}") # Optional detailed debug
+                     current_shape = array_func(*args)
+                 except Exception as e: print(f"FF Error Arraying {obj_name}: {e}"); current_shape = lf.emptiness()
+            # elif main_mode != 'NONE' and not (array_func and args): # Optional Debug
+            #      print(f"--- Array mode '{main_mode}' active for {obj_name}, but counts <= 1 or flags inactive. ---")
+
+
+        # --- Stage 4: Apply Transform ---
+        # Transform the final shape resulting from loft/extrude/shell/array
+        try:
+            obj_matrix_inv = obj.matrix_world.inverted()
+            processed_shape_for_this_obj = apply_blender_transform_to_sdf(current_shape, obj_matrix_inv)
+        except Exception as e:
+            print(f"FF Error Transforming {obj_name}: {e}")
+            processed_shape_for_this_obj = lf.emptiness()
+
+    # else: Not an SDF source, processed_shape_for_this_obj remains lf.emptiness()
+
+    # --- Stage 5: Combine with Remaining (Non-Lofting) Children ---
+    shape_so_far = processed_shape_for_this_obj # Start with shape from obj (loft/processed)
+
+    # Determine blend factor for combining children TO obj
     interaction_blend_factor = 0.0
+    is_bounds_root = obj.get(SDF_BOUNDS_MARKER, False)
     if is_bounds_root:
         interaction_blend_factor = settings.get("sdf_global_blend_factor", 0.1)
     elif is_sdf_source(obj):
         interaction_blend_factor = obj.get("sdf_child_blend_factor", 0.0)
-    # Else (if obj is just a regular Empty used for grouping), blend factor remains 0 (sharp union)
 
-    # 3. Process Children Recursively
+    # Iterate through children again
     for child in obj.children:
-        # Process the child hierarchy recursively
-        child_shape = process_sdf_hierarchy(child, settings) # Pass root settings down
+        # Skip children already handled by loft
+        if child.name in processed_children:
+            # print(f"--- Skipping already lofted child: {child.name} ---") # Debug
+            continue
 
-        # Combine the child shape if it's valid and not empty
-        if child_shape is not None:
-            # Check if child is marked as negative (subtractive)
+        # Process the child recursively
+        child_processed_shape = process_sdf_hierarchy(child, settings)
+
+        # Combine using standard interaction modes
+        if child_processed_shape is not None:
+            use_morph_on_child = child.get("sdf_use_morph", False)
+            use_clearance_on_child = child.get("sdf_use_clearance", False)
             is_child_negative = child.get("sdf_is_negative", False)
 
-            if is_child_negative:
-                # Apply difference operation (potentially blended)
+            # Priority: Morph > Clearance > Negative > Additive
+            if use_morph_on_child:
                 try:
-                    # Ensure blend factor is non-negative for difference blending
-                    safe_blend = max(0.0, interaction_blend_factor)
-                    if safe_blend > CACHE_PRECISION:
-                         # Clamp upper bound for blend_difference too? Usually 0-1 range makes sense.
-                         clamped_blend = min(1.0, safe_blend)
-                         shape_so_far = lf.blend_difference(shape_so_far, child_shape, clamped_blend)
-                    else:
-                        shape_so_far = lf.difference(shape_so_far, child_shape) # Sharp difference
-
-                except Exception as e:
-                    print(f"FieldForge Error: Difference operation failed for parent {obj_name}, child {child.name}: {e}")
-                    # Continue with the next child if difference fails
-                    continue
-            else:
-                # Apply union or blend operation
-                shape_so_far = combine_shapes(shape_so_far, child_shape, interaction_blend_factor)
+                    factor = child.get("sdf_morph_factor", 0.5); safe_factor = max(0.0, min(1.0, float(factor)))
+                    shape_so_far = lf.morph(shape_so_far, child_processed_shape, safe_factor)
+                except Exception as e: print(f"FF Error Morphing child {child.name}: {e}")
+            elif use_clearance_on_child:
+                try:
+                    offset_val = child.get("sdf_clearance_offset", 0.05); keep_original = child.get("sdf_clearance_keep_original", True)
+                    safe_offset = max(0.0, offset_val); offset_child_shape = lf.offset(child_processed_shape, safe_offset)
+                    shape_after_cut = lf.difference(shape_so_far, offset_child_shape)
+                    if keep_original: shape_so_far = combine_shapes(shape_after_cut, child_processed_shape, interaction_blend_factor)
+                    else: shape_so_far = shape_after_cut
+                except Exception as e: print(f"FF Error Clearing child {child.name}: {e}")
+            elif is_child_negative:
+                try:
+                     safe_blend = max(0.0, interaction_blend_factor)
+                     if safe_blend <= CACHE_PRECISION: shape_so_far = lf.difference(shape_so_far, child_processed_shape)
+                     else: clamped_blend = min(1.0, safe_blend); shape_so_far = lf.blend_difference(shape_so_far, child_processed_shape, clamped_blend)
+                except Exception as e: print(f"FF Error Differencing child {child.name}: {e}")
+            else: # Additive mode
+                shape_so_far = combine_shapes(shape_so_far, child_processed_shape, interaction_blend_factor)
 
     return shape_so_far
 
+
 # --- State Gathering and Caching ---
-# (Keep get_current_sdf_state, has_state_changed, update_sdf_cache as they were)
+# (Keep has_state_changed, update_sdf_cache as they were)
 # ... (omitted for brevity) ...
 def get_current_sdf_state(context, bounds_obj):
     """ Gathers the current relevant state for a specific Bounds hierarchy. """
@@ -454,8 +588,6 @@ def get_current_sdf_state(context, bounds_obj):
         'scene_settings': {}, # Settings specific to this bounds object
         'bounds_matrix': bounds_obj.matrix_world.copy(),
         'source_objects': {}, # Dictionary: {obj_name: {matrix: ..., props: {...}}}
-        # Hierarchy structure isn't strictly needed for state comparison if we compare
-        # the set of objects and their individual properties/transforms.
     }
 
     # Read settings from the bounds object itself into the state dictionary
@@ -485,17 +617,54 @@ def get_current_sdf_state(context, bounds_obj):
                 obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),
                     'props': {
+                        # Core props
                         'sdf_type': sdf_type,
                         'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", 0.0),
                         'sdf_is_negative': actual_child_obj.get("sdf_is_negative", False),
-                        # Include visibility in state? Not strictly needed if we only gather visible,
-                        # but might be useful if visibility itself should trigger an update.
-                        # Let's omit for now, as visible_get() check handles entering the block.
+
+                        'sdf_use_clearance': actual_child_obj.get("sdf_use_clearance", False),
+                        'sdf_clearance_offset': actual_child_obj.get("sdf_clearance_offset", 0.05),
+                        'sdf_clearance_keep_original': actual_child_obj.get("sdf_clearance_keep_original", True),
+
+                        'sdf_use_shell': actual_child_obj.get("sdf_use_shell", False),
+                        'sdf_shell_offset': actual_child_obj.get("sdf_shell_offset", 0.1),
+
+                        'sdf_use_morph': actual_child_obj.get("sdf_use_morph", False),
+                        'sdf_morph_factor': actual_child_obj.get("sdf_morph_factor", 0.5),
+
+                        'sdf_use_loft': actual_child_obj.get("sdf_use_loft", False),
+
+                        # Main mode
+                        'sdf_main_array_mode': actual_child_obj.get("sdf_main_array_mode", 'NONE'),
+                        # Linear props (still needed when mode is LINEAR)
+                        'sdf_array_active_x': actual_child_obj.get("sdf_array_active_x", False),
+                        'sdf_array_active_y': actual_child_obj.get("sdf_array_active_y", False),
+                        'sdf_array_active_z': actual_child_obj.get("sdf_array_active_z", False),
+                        'sdf_array_delta_x': actual_child_obj.get("sdf_array_delta_x", 1.0),
+                        'sdf_array_delta_y': actual_child_obj.get("sdf_array_delta_y", 1.0),
+                        'sdf_array_delta_z': actual_child_obj.get("sdf_array_delta_z", 1.0),
+                        'sdf_array_count_x': actual_child_obj.get("sdf_array_count_x", 2),
+                        'sdf_array_count_y': actual_child_obj.get("sdf_array_count_y", 2),
+                        'sdf_array_count_z': actual_child_obj.get("sdf_array_count_z", 2),
+                        # Radial props
+                        'sdf_radial_count': actual_child_obj.get("sdf_radial_count", 6),
+                        # Read radial center prop (will be bpy_prop_array)
+                        'sdf_radial_center': actual_child_obj.get("sdf_radial_center", (0.0, 0.0)),
+
+                        # --- Shape-specific props ---
+                        # Added conditional gathering to avoid adding None for irrelevant types
+                        'sdf_round_radius': actual_child_obj.get("sdf_round_radius", 0.1) if sdf_type == "rounded_box" else None,
+                        'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth", 0.1) if sdf_type in {"circle", "ring", "polygon"} else None,
+                        'sdf_inner_radius': actual_child_obj.get("sdf_inner_radius", 0.25) if sdf_type == "ring" else None,
+                        'sdf_sides': actual_child_obj.get("sdf_sides", 6) if sdf_type == "polygon" else None,
+                        # --- MISSING TORUS PROPS ADDED HERE ---
+                        'sdf_torus_major_radius': actual_child_obj.get("sdf_torus_major_radius", 0.35) if sdf_type == "torus" else None,
+                        'sdf_torus_minor_radius': actual_child_obj.get("sdf_torus_minor_radius", 0.15) if sdf_type == "torus" else None,
+                        # --- END MISSING TORUS PROPS ---
                     }
                 }
-                # Add type-specific properties that affect the shape
-                if sdf_type == "rounded_box":
-                    obj_state['props']['sdf_round_radius'] = actual_child_obj.get("sdf_round_radius", 0.1)
+                # Clean up None values from props if desired (optional, compare_dicts handles None)
+                obj_state['props'] = {k: v for k, v in obj_state['props'].items() if v is not None}
 
                 current_state['source_objects'][child_name] = obj_state
                 # Add to queue to check its children
@@ -583,13 +752,29 @@ def check_and_trigger_update(scene, bounds_name, reason="unknown"):
 
     # Get the current state ONLY if necessary checks pass
     current_state = get_current_sdf_state(context, bounds_obj)
+    if not current_state: # Handle case where state gathering fails
+        print(f"FieldForge WARN: Could not get current state for {bounds_name} during check.")
+        return
 
-    if has_state_changed(current_state, bounds_name):
+    # Use the bounds_name from the state dict for consistency if needed,
+    # but the passed bounds_name should be correct.
+
+    #print(f"\n--- State Check for: {bounds_name} (Reason: {reason}) ---")
+    cached_state_exists = bounds_name in _sdf_update_caches
+    #print(f"    Cached state exists: {cached_state_exists}")
+    # Optionally print specific array props from current state:
+    if current_state.get('source_objects'):
+        for obj_name, obj_data in current_state['source_objects'].items():
+            props = obj_data.get('props', {})
+
+    state_has_changed_result = has_state_changed(current_state, bounds_name)
+
+
+    if state_has_changed_result:
         # State has changed, schedule a new debounce timer
         schedule_new_debounce_timer(scene, bounds_name, current_state)
         # Trigger redraw for custom visuals too, as state impacting SDF likely impacts visuals
         tag_redraw_all_view3d()
-    # else: State hasn't changed, do nothing
 
 
 def cancel_debounce_timer(bounds_name):
@@ -752,7 +937,6 @@ def run_sdf_update(scene, bounds_name, trigger_state, is_viewport_update=False):
         sdf_settings_state = trigger_state.get('scene_settings')
         bounds_matrix = trigger_state.get('bounds_matrix')
         # Read the *current* result object name property from the *current* bounds object.
-        # It's less likely to change than transforms, but safer to read current value.
         result_name = bounds_obj.get(SDF_RESULT_OBJ_NAME_PROP)
 
         # Validate necessary state components
@@ -767,15 +951,12 @@ def run_sdf_update(scene, bounds_name, trigger_state, is_viewport_update=False):
         if final_combined_shape is None: # Should return lf.emptiness() on error now
             final_combined_shape = lf.emptiness()
             print(f"FieldForge WARN: SDF hierarchy processing returned None for {bounds_name}, using empty.")
-            # raise ValueError("SDF hierarchy processing failed to return a shape.")
-
+            mesh_generation_error = True # Treat this as an error upstream
 
         # 2. Define Meshing Region based on the Bounds object's state at trigger time
         # Use the bounds_matrix from the trigger_state for consistency
         b_loc = bounds_matrix.translation
-        # Use average scale from matrix; assumes uniform scaling is intended for bounds visual
         b_sca_vec = bounds_matrix.to_scale()
-        # Ensure scale components are positive for average calculation
         avg_scale = max(1e-6, (abs(b_sca_vec.x) + abs(b_sca_vec.y) + abs(b_sca_vec.z)) / 3.0)
         b_half_extent = avg_scale # Use full scale as extent from center? Or half? Half seems right.
         xyz_min = [b_loc[i] - b_half_extent for i in range(3)]
@@ -793,45 +974,41 @@ def run_sdf_update(scene, bounds_name, trigger_state, is_viewport_update=False):
         mesh_data = None
         gen_start_time = time.time()
         # Let get_mesh handle emptiness; it should return None or empty data.
-        try:
-            mesh_data = final_combined_shape.get_mesh(xyz_min=xyz_min, xyz_max=xyz_max, resolution=resolution)
-        except Exception as e:
-            # Log error only if the shape wasn't expected to be empty
-            # Let's log always for now, but be aware it might log for intentional emptiness.
-            print(f"FieldForge Error: libfive mesh generation failed for {bounds_name}: {e}")
-            mesh_generation_error = True
+        # Only attempt generation if hierarchy processing didn't already error out
+        if not mesh_generation_error:
+            try:
+                mesh_data = final_combined_shape.get_mesh(xyz_min=xyz_min, xyz_max=xyz_max, resolution=resolution)
+            except Exception as e:
+                print(f"FieldForge Error: libfive mesh generation failed for {bounds_name}: {e}")
+                mesh_generation_error = True
         gen_duration = time.time() - gen_start_time
         # print(f"FieldForge: Mesh gen took {gen_duration:.3f}s for {bounds_name} (Res: {resolution})")
 
         # 5. Find or Create Result Object
         result_obj = find_result_object(context, result_name)
         if not result_obj:
-            # Use get_bounds_setting to read the setting from the *current* bounds obj
             if get_bounds_setting(bounds_obj, "sdf_create_result_object"):
                 try:
-                    # Create new mesh data and object
                     mesh_data_new = bpy.data.meshes.new(name=result_name + "_Mesh") # Unique mesh data name
                     result_obj = bpy.data.objects.new(result_name, mesh_data_new)
                     context.collection.objects.link(result_obj)
-                    # Reset transform and make unselectable by default
                     result_obj.matrix_world = Matrix.Identity(4)
                     result_obj.hide_select = True
                 except Exception as e:
-                    # If creation fails, we cannot proceed with mesh update
+                    mesh_generation_error = True # Cannot proceed if creation fails
                     raise ValueError(f"Failed to create result object {result_name}: {e}") from e
             else:
                 # Result object doesn't exist and creation is disabled
-                # Only raise error if we actually had a shape to mesh
-                if final_combined_shape != lf.emptiness():
-                    raise ValueError(f"Result object '{result_name}' not found, and auto-creation is disabled for {bounds_name}.")
+                if not mesh_generation_error and final_combined_shape != lf.emptiness():
+                     mesh_generation_error = True # Consider it an error if we expected a mesh
+                     raise ValueError(f"Result object '{result_name}' not found, and auto-creation is disabled for {bounds_name}.")
                 else:
-                    # No result obj, no shape, nothing to do. Not an error.
+                     # No result obj, no shape/error, nothing to do. Not an error.
                      mesh_update_successful = True # Considered success (empty result expected)
 
 
-        # 6. Update Mesh Data (only if result object exists and mesh gen didn't error)
+        # 6. Update Mesh Data (only if result object exists and no error occurred)
         if result_obj and not mesh_generation_error:
-            # Ensure the target object is actually a mesh
             if result_obj.type != 'MESH':
                 raise TypeError(f"Target object '{result_name}' for SDF result is not a Mesh (type: {result_obj.type}).")
 
@@ -844,7 +1021,6 @@ def run_sdf_update(scene, bounds_name, trigger_state, is_viewport_update=False):
             else: # Valid mesh data received
                 if mesh.vertices: mesh.clear_geometry() # Clear previous geometry first
                 try:
-                    # Assign new geometry
                     mesh.from_pydata(mesh_data[0], [], mesh_data[1]) # Vertices, Edges (empty), Faces
                     mesh.update() # Recalculate normals and bounding box
                     mesh_update_successful = True
@@ -938,12 +1114,10 @@ def ff_depsgraph_handler(scene, depsgraph):
                 # If the updated object *is* the bounds object, check its transform too
                 elif target_obj == root_bounds and update.is_updated_transform:
                      updated_bounds_names.add(root_bounds.name)
-                     needs_redraw = True # Bounds transform change needs redraw for children? No, only SDF recalc.
+                     # needs_redraw = True # Bounds transform change doesn't directly need redraw, only SDF recalc.
 
-            # Trigger REDRAW only if a source object's visibility or custom props potentially changed
-            # Note: Custom props don't trigger depsgraph, this happens via UI updates or check_and_trigger
-            #if is_source and update.is_updated_visible: # Visibility change needs redraw
-             #   needs_redraw = True
+            # Visibility changes are handled by the visibility update function/UI
+            # Custom property changes need manual triggering (UI or check_and_trigger)
 
 
     # Trigger the check function for each affected bounds hierarchy for SDF RECOMPUTE
@@ -964,9 +1138,6 @@ def ff_depsgraph_handler(scene, depsgraph):
 
 
 # --- Operators ---
-# (Keep existing operators: OBJECT_OT_add_sdf_bounds, AddSdfSourceBase,
-# concrete source adders, OBJECT_OT_sdf_manual_update)
-# ... (omitted for brevity) ...
 class OBJECT_OT_add_sdf_bounds(Operator):
     """Adds a new SDF Bounds controller Empty and prepares its result mesh setup"""
     bl_idname = "object.add_sdf_bounds"
@@ -1054,18 +1225,34 @@ class AddSdfSourceBase(Operator):
         description="Make this shape subtract from its parent/siblings",
         default=False
     )
+    use_clearance: BoolProperty(
+        name="Use Clearance",
+        description="Make this shape subtract an offset version of itself (Mutually exclusive with Negative)",
+        default=False
+    )
+    initial_clearance_offset: FloatProperty(
+        name="Clearance Offset",
+        description="Initial clearance distance (offset applied before subtraction)",
+        default=0.05, min=0.0, # Allow zero offset? Libfive might handle it.
+        subtype='DISTANCE', unit='LENGTH'
+    )
+    use_morph: BoolProperty(
+        name="Use Morph",
+        description="Morph from parent/siblings towards this shape (Mutually exclusive with Negative/Clearance)",
+        default=False
+    )
+    initial_morph_factor: FloatProperty(
+        name="Morph Factor",
+        description="Morph amount (0 = parent/siblings, 1 = this shape)",
+        default=0.5, min=0.0, max=1.0,
+        subtype='FACTOR'
+    )
 
     @classmethod
     def poll(cls, context):
-        # Allow adding if libfive is available and the active object can be part of an SDF hierarchy
-        # (i.e., it is a bounds object or has a bounds object as an ancestor)
         return libfive_available and context.active_object is not None and (context.active_object.get(SDF_BOUNDS_MARKER, False) or find_parent_bounds(context.active_object) is not None)
 
     def invoke(self, context, event):
-         # Set initial location to the 3D cursor
-         # World location is fine, parenting will handle relative position
-         # self.location = context.scene.cursor.location
-         # Or maybe better to place relative to parent? Let's use cursor for now.
          wm = context.window_manager
          return wm.invoke_props_dialog(self) # Show options dialog
 
@@ -1078,6 +1265,7 @@ class AddSdfSourceBase(Operator):
             i += 1
         return f"{base_name}.{i:03d}"
 
+       # In AddSdfSourceBase class:
     def add_sdf_empty(self, context, sdf_type, display_type, name_prefix, props_to_set=None):
         """ Helper method to create and configure the SDF source Empty """
         target_parent = context.active_object
@@ -1110,26 +1298,81 @@ class AddSdfSourceBase(Operator):
              obj.matrix_parent_inverse.identity() # Set to identity as fallback
 
 
-        # Assign standard SDF properties
-        obj[SDF_PROPERTY_MARKER] = True # Mark as an SDF object
+        # --- Assign Standard SDF & Interaction Properties ---
+        obj[SDF_PROPERTY_MARKER] = True
         obj["sdf_type"] = sdf_type
-        obj["sdf_child_blend_factor"] = self.initial_child_blend # Blend factor for ITS children
-        obj["sdf_is_negative"] = self.is_negative # Subtractive flag
+        obj["sdf_child_blend_factor"] = self.initial_child_blend # For ITS children
 
-        # Assign any type-specific properties passed in
+        # Determine initial interaction mode based on operator inputs (Morph > Clearance > Negative)
+        use_clearance_init = self.use_clearance
+        use_morph_init = self.use_morph
+        use_negative_init = self.is_negative
+        use_loft_init = False
+
+        final_is_negative = False
+        final_use_clearance = False
+        final_use_morph = False
+        final_use_loft = False
+
+        if use_morph_init:
+            final_use_morph = True
+        elif use_clearance_init:
+            final_use_clearance = True
+        elif use_negative_init:
+            final_is_negative = True
+        # If none are checked, all remain False (standard additive/blend mode)
+
+        obj["sdf_is_negative"] = final_is_negative
+        obj["sdf_use_clearance"] = final_use_clearance
+        obj["sdf_use_morph"] = final_use_morph
+
+        # Set parameters related to interaction modes
+        obj["sdf_clearance_offset"] = self.initial_clearance_offset
+        obj["sdf_clearance_keep_original"] = True # Always default Keep Original to True for now
+        obj["sdf_morph_factor"] = self.initial_morph_factor
+        obj["sdf_use_loft"] = False
+
+
+        # --- Assign Shell Properties ---
+        obj["sdf_use_shell"] = False # Shell is independent of interaction mode
+        obj["sdf_shell_offset"] = 0.1
+        # --- End Shell Properties ---
+
+
+        # --- Assign Array Properties ---
+        obj["sdf_main_array_mode"] = 'NONE'
+        obj["sdf_array_active_x"] = False
+        obj["sdf_array_active_y"] = False
+        obj["sdf_array_active_z"] = False
+        obj["sdf_array_delta_x"] = 1.0
+        obj["sdf_array_delta_y"] = 1.0
+        obj["sdf_array_delta_z"] = 1.0
+        obj["sdf_array_count_x"] = 2
+        obj["sdf_array_count_y"] = 2
+        obj["sdf_array_count_z"] = 2
+        obj["sdf_radial_count"] = 6
+        obj["sdf_radial_center"] = (0.0, 0.0)
+        # --- End Array Properties ---
+
+
+        # --- Assign Type-Specific Properties (Passed via props_to_set) ---
         if props_to_set:
             for key, value in props_to_set.items():
                 try:
                     obj[key] = value
                 except TypeError as e:
                      print(f"FieldForge WARN: Could not set property '{key}' on {obj.name}: {e}. Value: {value} (Type: {type(value)})")
+        # --- End Type-Specific Properties ---
 
 
-        # Set color based on negative flag for visual distinction IN THE OUTLINER/PROPS
-        if self.is_negative:
-            obj.color = (1.0, 0.3, 0.3, 1.0) # Reddish tint for negative
+        # Set color based on PRIMARY interaction mode for visual distinction in outliner/props
+        # Note: Morph isn't strictly subtractive, maybe use a different color? Blue?
+        if final_use_morph:
+            obj.color = (0.3, 0.5, 1.0, 1.0) # Bluish tint for morph
+        elif final_use_clearance or final_is_negative:
+            obj.color = (1.0, 0.3, 0.3, 1.0) # Reddish tint for negative/clearance
         else:
-            # Default color (can be customized further per type if desired)
+            # Default color (additive/blend)
             obj.color = (0.5, 0.5, 0.5, 1.0) # Neutral grey
 
         # Set initial STANDARD visibility based on the PARENT BOUNDS setting
@@ -1144,7 +1387,9 @@ class AddSdfSourceBase(Operator):
 
         # Report success
         report_msg = f"Added SDF Source: {obj.name} ({sdf_type}) under {target_parent.name}"
-        if self.is_negative: report_msg += " [Negative]"
+        if final_use_morph: report_msg += " [Morph]"
+        elif final_use_clearance: report_msg += " [Clearance]"
+        elif final_is_negative: report_msg += " [Negative]"
         self.report({'INFO'}, report_msg)
 
         # Trigger an update check for the PARENT BOUNDS hierarchy this object was added to
@@ -1152,7 +1397,6 @@ class AddSdfSourceBase(Operator):
         # Also trigger redraw for custom visuals
         tag_redraw_all_view3d()
         return {'FINISHED'}
-
 
 # --- Concrete Operator Classes for Adding Each Source Type ---
 
@@ -1162,7 +1406,7 @@ class OBJECT_OT_add_sdf_cube_source(AddSdfSourceBase):
     bl_label = "SDF Cube Source"
 
     def execute(self, context):
-        return self.add_sdf_empty( context, "cube", 'PLAIN_AXES', "FF_Cube" ) # Keep axes for manipulator
+        return self.add_sdf_empty( context, "cube", 'PLAIN_AXES', "FF_Cube" )
 
 class OBJECT_OT_add_sdf_sphere_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Sphere"""
@@ -1170,7 +1414,7 @@ class OBJECT_OT_add_sdf_sphere_source(AddSdfSourceBase):
     bl_label = "SDF Sphere Source"
 
     def execute(self, context):
-         return self.add_sdf_empty( context, "sphere", 'PLAIN_AXES', "FF_Sphere" ) # Keep axes
+         return self.add_sdf_empty( context, "sphere", 'PLAIN_AXES', "FF_Sphere" )
 
 class OBJECT_OT_add_sdf_cylinder_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Cylinder"""
@@ -1178,7 +1422,7 @@ class OBJECT_OT_add_sdf_cylinder_source(AddSdfSourceBase):
     bl_label = "SDF Cylinder Source"
 
     def execute(self, context):
-         return self.add_sdf_empty( context, "cylinder", 'PLAIN_AXES', "FF_Cylinder" ) # Keep axes
+         return self.add_sdf_empty( context, "cylinder", 'PLAIN_AXES', "FF_Cylinder" )
 
 class OBJECT_OT_add_sdf_cone_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Cone"""
@@ -1186,34 +1430,132 @@ class OBJECT_OT_add_sdf_cone_source(AddSdfSourceBase):
     bl_label = "SDF Cone Source"
 
     def execute(self, context):
-         return self.add_sdf_empty( context, "cone", 'PLAIN_AXES', "FF_Cone" ) # Keep axes
+         return self.add_sdf_empty( context, "cone", 'PLAIN_AXES', "FF_Cone" )
 
 class OBJECT_OT_add_sdf_torus_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Torus"""
     bl_idname = "object.add_sdf_torus_source"
     bl_label = "SDF Torus Source"
 
+    initial_major_radius: FloatProperty(
+        name="Major Radius (Unit)",
+        description="Initial major radius (center of tube to center of torus) in unit space",
+        default=0.35, min=0.01, max=1.0, # Example range, adjust as needed
+        subtype='DISTANCE', unit='LENGTH'
+    )
+    initial_minor_radius: FloatProperty(
+        name="Minor Radius (Unit)",
+        description="Initial minor radius (radius of the tube) in unit space",
+        default=0.15, min=0.005, max=0.5, # Example range
+        subtype='DISTANCE', unit='LENGTH'
+    )
+
     def execute(self, context):
-         return self.add_sdf_empty( context, "torus", 'PLAIN_AXES', "FF_Torus" ) # Keep axes
+         # Basic validation: ensure minor <= major initially
+         major_r = self.initial_major_radius
+         minor_r = min(self.initial_minor_radius, major_r - 0.001) # Ensure minor is slightly smaller
+
+         props = {
+             "sdf_torus_major_radius": major_r,
+             "sdf_torus_minor_radius": minor_r,
+         }
+         return self.add_sdf_empty( context, "torus", 'PLAIN_AXES', "FF_Torus", props_to_set=props )
 
 class OBJECT_OT_add_sdf_rounded_box_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Rounded Box"""
     bl_idname = "object.add_sdf_rounded_box_source"
     bl_label = "SDF Rounded Box Source"
 
-    # Add property specific to the rounded box type
     initial_round_radius: FloatProperty(
         name="Rounding Radius",
         description="Initial corner rounding radius (applied before scaling)",
-        default=0.1, min=0.0, max=1.0, # Max relative to unit cube size
-        subtype='DISTANCE' # Use DISTANCE for potentially better interaction with scale later
+        default=0.1, min=0.0, max=1.0,
+        subtype='DISTANCE'
     )
 
     def execute(self, context):
-         # Pass the initial radius to be stored as a custom property
          props = {"sdf_round_radius": self.initial_round_radius}
-         return self.add_sdf_empty( context, "rounded_box", 'PLAIN_AXES', "FF_RoundedBox", props_to_set=props ) # Keep axes
+         return self.add_sdf_empty( context, "rounded_box", 'PLAIN_AXES', "FF_RoundedBox", props_to_set=props )
 
+class OBJECT_OT_add_sdf_circle_source(AddSdfSourceBase):
+    """Adds an Empty controller for an SDF Circle (Extruded)"""
+    bl_idname = "object.add_sdf_circle_source"
+    bl_label = "SDF Circle Source"
+
+    initial_extrusion_depth: FloatProperty(
+        name="Extrusion Depth",
+        description="Initial extrusion depth along the local Z axis",
+        default=0.1, min=0.001, # Avoid zero depth
+        subtype='DISTANCE'
+    )
+
+    def execute(self, context):
+        # Pass the initial extrusion depth to be stored as a custom property
+        props = {"sdf_extrusion_depth": self.initial_extrusion_depth}
+        # Use PLAIN_AXES for the Empty visual for better manipulation
+        return self.add_sdf_empty( context, "circle", 'PLAIN_AXES', "FF_Circle", props_to_set=props )
+class OBJECT_OT_add_sdf_ring_source(AddSdfSourceBase):
+    """Adds an Empty controller for an SDF Ring (Extruded)"""
+    bl_idname = "object.add_sdf_ring_source"
+    bl_label = "SDF Ring Source"
+
+    initial_inner_radius: FloatProperty(
+        name="Inner Radius (Unit)",
+        description="Initial inner radius relative to the unit outer radius (0.5)",
+        default=0.25, min=0.0, max=0.499, # Max slightly less than outer unit radius 0.5ž
+        subtype='DISTANCE', # Keep consistency, even though range is fixed
+        unit='LENGTH'
+    )
+    initial_extrusion_depth: FloatProperty(
+        name="Extrusion Depth",
+        description="Initial extrusion depth along the local Z axis",
+        default=0.1, min=0.001, # Avoid zero depth
+        subtype='DISTANCE'
+    )
+
+    def execute(self, context):
+        # Pass the initial parameters to be stored as custom properties
+        props = {
+            "sdf_inner_radius": self.initial_inner_radius,
+            "sdf_extrusion_depth": self.initial_extrusion_depth
+            }
+        # Use PLAIN_AXES for the Empty visual for better manipulation
+        return self.add_sdf_empty( context, "ring", 'PLAIN_AXES', "FF_Ring", props_to_set=props )
+
+class OBJECT_OT_add_sdf_polygon_source(AddSdfSourceBase):
+    """Adds an Empty controller for an SDF Polygon (Extruded)"""
+    bl_idname = "object.add_sdf_polygon_source"
+    bl_label = "SDF Polygon Source"
+
+    initial_sides: IntProperty(
+        name="Number of Sides",
+        description="Initial number of sides for the polygon",
+        default=6, min=3, max=64 # Set a reasonable max?
+    )
+    initial_extrusion_depth: FloatProperty(
+        name="Extrusion Depth",
+        description="Initial extrusion depth along the local Z axis",
+        default=0.1, min=0.001,
+        subtype='DISTANCE'
+    )
+
+    def execute(self, context):
+        # Pass the initial parameters to be stored as custom properties
+        props = {
+            "sdf_sides": self.initial_sides,
+            "sdf_extrusion_depth": self.initial_extrusion_depth
+            }
+        return self.add_sdf_empty( context, "polygon", 'PLAIN_AXES', "FF_Polygon", props_to_set=props )
+
+class OBJECT_OT_add_sdf_half_space_source(AddSdfSourceBase):
+    """Adds an Empty controller for an SDF Half Space"""
+    bl_idname = "object.add_sdf_half_space_source"
+    bl_label = "SDF Half Space Source"
+    # No additional properties needed here, controlled by transform
+
+    def execute(self, context):
+        # No specific props needed for half_space itself
+        return self.add_sdf_empty( context, "half_space", 'PLAIN_AXES', "FF_HalfSpace" )
 
 class OBJECT_OT_sdf_manual_update(Operator):
     """Manually triggers a high-resolution FINAL update for the ACTIVE SDF Bounds hierarchy."""
@@ -1223,7 +1565,7 @@ class OBJECT_OT_sdf_manual_update(Operator):
 
     @classmethod
     def poll(cls, context):
-        # Enable only if libfive available and the active object IS an SDF Bounds object
+        # Enable only if libfive availaFFble and the active object IS an SDF Bounds object
         obj = context.active_object
         return libfive_available and obj and obj.get(SDF_BOUNDS_MARKER, False)
 
@@ -1268,18 +1610,13 @@ class OBJECT_OT_sdf_manual_update(Operator):
         self.report({'INFO'}, f"Scheduled final update for {bounds_name}.")
         return {'FINISHED'}
 
-# --- UI Panels ---
-# (Keep UI Helper Functions draw_sdf_bounds_settings, draw_sdf_source_info
-# and the main VIEW3D_PT_fieldforge_main Panel class as they were)
-# ... (omitted for brevity) ...
-# --- UI Helper Functions ---
 
+# --- UI Panels ---
+# (Keep UI Helper Function draw_sdf_bounds_settings as it was)
+# ... (omitted for brevity) ...
 def draw_sdf_bounds_settings(layout, context):
     """ Draws the UI elements for the Bounds object settings. """
     obj = context.object # Assumes the active object IS the Bounds object
-
-    # Access custom properties using dictionary syntax obj["prop_name"]
-    # or obj.get("prop_name")
 
     col = layout.column(align=True)
 
@@ -1337,50 +1674,230 @@ def draw_sdf_bounds_settings(layout, context):
     # Disable button if the name property is empty or object not found
     row_res_obj2.enabled = bool(result_name and result_name in context.scene.objects)
 
-
 def draw_sdf_source_info(layout, context):
     """ Draws the UI elements for the SDF Source object properties. """
-    obj = context.object # Assumes the active object is an SDF source
+    obj = context.object
     sdf_type = obj.get("sdf_type", "Unknown")
+    parent = obj.parent
 
     col = layout.column()
 
-    # Basic Info
+    # --- Basic Info & Interaction Mode ---
     col.label(text=f"SDF Type: {sdf_type.capitalize()}")
-    prop_row = col.row()
-    prop_row.prop(obj, '["sdf_is_negative"]', text="Negative (Subtractive)", toggle=True, icon='REMOVE')
-    # Add tooltip explaining color change for custom draw
-    prop_row.label(text="", icon='INFO')
-    prop_row.active = False # Make label non-interactive, purely informational
-    if obj.get("sdf_is_negative"):
-        prop_row.label(text=" (Draws Red)")
-    else:
-        prop_row.label(text=" (Draws White)")
 
+    # Get interaction mode states
+    use_loft = obj.get("sdf_use_loft", False) # Read loft state first
+    use_clearance = obj.get("sdf_use_clearance", False) and not use_loft # Inactive if loft active
+    use_morph = obj.get("sdf_use_morph", False) and not use_loft # Inactive if loft active
+    is_negative = obj.get("sdf_is_negative", False) and not use_loft and not use_clearance and not use_morph # Inactive if others active
+
+    # Box for interaction toggles
+    box_interact = col.box()
+    interact_col = box_interact.column(align=True)
+
+    # Check if this object AND its parent are valid 2D sources
+    can_loft = False
+    show_loft_ui = False
+    if parent and is_valid_2d_loft_source(obj) and is_valid_2d_loft_source(parent):
+        can_loft = True
+        show_loft_ui = True
+
+    if show_loft_ui:
+        row_loft = interact_col.row(align=True)
+        # Use alert=True maybe if it overrides others? Or just rely on active state.
+        row_loft.prop(obj, '["sdf_use_loft"]', text="Use Loft From Parent", toggle=True, icon='IPO_LINEAR') # Example icon
+        if use_loft:
+             row_loft.label(text="(Overrides other modes)")
+
+    # Morph Toggle & Factor
+    row_morph = interact_col.row(align=True)
+    row_morph.active = not use_loft # Disable if loft is active
+    row_morph.prop(obj, '["sdf_use_morph"]', text="Use Morph", toggle=True, icon='MOD_SIMPLEDEFORM')
+    sub_morph = row_morph.row(align=True)
+    sub_morph.active = use_morph and not use_loft
+    sub_morph.prop(obj, '["sdf_morph_factor"]', text="Factor")
+
+    # Clearance Toggle & Offset
+    row_clearance = interact_col.row(align=True)
+    row_clearance.active = not use_loft and not use_morph # Disable if loft or morph active
+    row_clearance.prop(obj, '["sdf_use_clearance"]', text="Use Clearance", toggle=True, icon='MOD_OFFSET')
+    sub_clearance = row_clearance.row(align=True)
+    sub_clearance.active = use_clearance and not use_loft and not use_morph
+    sub_clearance.prop(obj, '["sdf_clearance_offset"]', text="Offset")
+    # Keep Original Checkbox
+    if use_clearance and not use_loft and not use_morph:
+        row_clearance_keep = interact_col.row(align=True)
+        row_clearance_keep.prop(obj, '["sdf_clearance_keep_original"]', text="Keep Original Shape")
+
+    # Negative Toggle (Subtractive)
+    row_negative = interact_col.row(align=True)
+    row_negative.active = not use_clearance and not use_morph and not use_loft # Disable if any other mode active
+    row_negative.prop(obj, '["sdf_is_negative"]', text="Negative (Subtractive)", toggle=True, icon='REMOVE')
+
+    # Visual cue for draw color
+    draw_color_row = interact_col.row(align=True)
+    draw_color_row.active = False # Make non-interactive
+    draw_color_row.label(text="", icon='INFO')
+    if use_loft:
+         draw_color_row.label(text="(Lofting - Draws White/Grey)")
+    elif use_morph:
+        draw_color_row.label(text="(Morphing - Draws White/Grey)") # Morph isn't red
+    elif use_clearance:
+         draw_color_row.label(text="(Clearance is Subtractive - Draws Red)")
+    elif is_negative:
+        draw_color_row.label(text="(Negative is Subtractive - Draws Red)")
+    else:
+        draw_color_row.label(text="(Additive - Draws White)")
 
     col.separator()
 
-    # --- Type-Specific Properties ---
-    if sdf_type == "rounded_box":
-        box_params = col.box()
-        box_params.label(text="Shape Parameters:")
-        box_params.prop(obj, '["sdf_round_radius"]', text="Rounding Radius")
-        col.separator()
-    # Add sections for other types if they get specific parameters here
-    # Example:
-    # elif sdf_type == "some_other_type":
-    #     box_params = col.box()
-    #     box_params.label(text="Shape Parameters:")
-    #     box_params.prop(obj, '["some_param"]', text="Some Parameter")
-    #     col.separator()
+    # --- Type-Specific Parameters ---
+    param_box = col.box()
+    param_box.label(text="Shape Parameters:")
+    param_col = param_box.column(align=True)
+    has_params = False
 
-    # --- Blending Settings for Children of THIS object ---
+    if sdf_type == "rounded_box":
+        param_col.prop(obj, '["sdf_round_radius"]', text="Rounding Radius")
+        has_params = True
+    elif sdf_type == "torus":
+        param_col.prop(obj, f'["sdf_torus_major_radius"]', text="Major Radius (Unit)")
+        param_col.prop(obj, f'["sdf_torus_minor_radius"]', text="Minor Radius (Unit)")
+        if obj.get("sdf_torus_minor_radius", 0.15) >= obj.get("sdf_torus_major_radius", 0.35):
+             param_col.label(text="Warning: Minor radius should be less than Major radius", icon='ERROR')
+        has_params = True
+    elif sdf_type == "circle":
+        param_col.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+        has_params = True
+    elif sdf_type == "ring":
+        param_col.prop(obj, '["sdf_inner_radius"]', text="Inner Radius (Unit)")
+        param_col.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+        has_params = True
+    elif sdf_type == "polygon":
+        param_col.prop(obj, '["sdf_sides"]', text="Number of Sides")
+        param_col.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+        has_params = True
+    elif sdf_type == "half_space":
+        param_col.label(text="Plane defined by Empty's transform:")
+        param_col.label(text="- Location defines a point on the plane.")
+        param_col.label(text="- Local +Z axis defines the outward normal.")
+        param_col.separator()
+        param_col.label(text="Use 'Negative' or 'Clearance' toggle.")
+        has_params = True
+
+    # Display fallback text if no specific params were relevant
+    if not has_params:
+        param_col.label(text="None (Shape defined by transform)")
+    # Control box activity based on whether params were relevant
+    param_box.enabled = has_params
+    param_box.active = has_params
+
+    col.separator()
+
+    col.separator() # Separate from parameters
+    box_shell = col.box()
+    box_shell.label(text="Shell Modifier:")
+    shell_col = box_shell.column(align=True)
+
+    use_shell = obj.get("sdf_use_shell", False)
+
+    # Row 1: Toggle
+    row_shell_toggle = shell_col.row()
+    row_shell_toggle.prop(obj, '["sdf_use_shell"]', text="Use Shell", toggle=True, icon='MOD_SOLIDIFY') # Shell icon
+
+    # Row 2: Offset (only active if shell is used)
+    row_shell_offset = shell_col.row()
+    row_shell_offset.active = use_shell
+    row_shell_offset.prop(obj, '["sdf_shell_offset"]', text="Thickness")
+
+    col.separator()
+
+    # --- Child Object Blending ---
     box_child_blend = col.box()
     box_child_blend.label(text="Child Object Blending:")
-    sub_col = box_child_blend.column(align=True)
-    # Provide the blend factor property for ITS children
-    sub_col.prop(obj, '["sdf_child_blend_factor"]', text="Factor")
-    sub_col.label(text="(Smoothness for objects parented directly to this one)")
+    box_child_blend.enabled = not use_clearance # Disable if this object uses clearance
+    box_child_blend.active = not use_clearance
+    sub_col_blend = box_child_blend.column(align=True) # Renamed variable
+    sub_col_blend.prop(obj, '["sdf_child_blend_factor"]', text="Factor")
+    sub_col_blend.label(text="(Smoothness for objects parented TO this one)")
+    if use_clearance:
+        sub_col_blend.label(text="(Disabled when 'Use Clearance' is active)")
+
+    col.separator()
+
+    # --- Array Modifier Section (Modified UI) ---
+    box_array = col.box()
+    box_array.label(text="Array Modifier:")
+    main_arr_col = box_array.column() # Column for the entire array section
+
+    # --- Main Mode Buttons ---
+    main_mode_prop = "sdf_main_array_mode"
+    current_main_mode = obj.get(main_mode_prop, 'NONE')
+    row_mode = main_arr_col.row(align=True)
+
+    op_mode_none = row_mode.operator(OBJECT_OT_fieldforge_set_main_array_mode.bl_idname, text="None", depress=(current_main_mode == 'NONE'))
+    op_mode_none.main_mode = 'NONE'
+
+    op_mode_linear = row_mode.operator(OBJECT_OT_fieldforge_set_main_array_mode.bl_idname, text="Linear", depress=(current_main_mode == 'LINEAR'))
+    op_mode_linear.main_mode = 'LINEAR'
+
+    op_mode_radial = row_mode.operator(OBJECT_OT_fieldforge_set_main_array_mode.bl_idname, text="Radial", depress=(current_main_mode == 'RADIAL'))
+    op_mode_radial.main_mode = 'RADIAL'
+
+    main_arr_col.separator() # Separator after mode buttons
+
+    # --- Conditional UI based on Main Mode ---
+    if current_main_mode == 'LINEAR':
+        # --- Linear Array Progressive UI ---
+        linear_col = main_arr_col.column(align=False) # Sub-column for linear controls
+
+        active_prop_x = "sdf_array_active_x"; delta_prop_x = "sdf_array_delta_x"; count_prop_x = "sdf_array_count_x"
+        active_prop_y = "sdf_array_active_y"; delta_prop_y = "sdf_array_delta_y"; count_prop_y = "sdf_array_count_y"
+        active_prop_z = "sdf_array_active_z"; delta_prop_z = "sdf_array_delta_z"; count_prop_z = "sdf_array_count_z"
+
+        is_x_active = obj.get(active_prop_x, False)
+        is_y_active = obj.get(active_prop_y, False)
+        is_z_active = obj.get(active_prop_z, False)
+
+        # X Axis Row
+        row_x = linear_col.row(align=True)
+        op_x = row_x.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="X", depress=is_x_active)
+        op_x.axis = 'X'
+        sub_x = row_x.row(align=True); sub_x.active = is_x_active
+        sub_x.prop(obj, f'["{delta_prop_x}"]', text="Delta")
+        sub_x.prop(obj, f'["{count_prop_x}"]', text="Count")
+
+        # Y Axis Row
+        if is_x_active:
+            row_y = linear_col.row(align=True)
+            op_y = row_y.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="Y", depress=is_y_active)
+            op_y.axis = 'Y'
+            sub_y = row_y.row(align=True); sub_y.active = is_y_active
+            sub_y.prop(obj, f'["{delta_prop_y}"]', text="Delta")
+            sub_y.prop(obj, f'["{count_prop_y}"]', text="Count")
+
+        # Z Axis Row
+        if is_y_active:
+            row_z = linear_col.row(align=True)
+            op_z = row_z.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="Z", depress=is_z_active)
+            op_z.axis = 'Z'
+            sub_z = row_z.row(align=True); sub_z.active = is_z_active
+            sub_z.prop(obj, f'["{delta_prop_z}"]', text="Delta")
+            sub_z.prop(obj, f'["{count_prop_z}"]', text="Count")
+        # --- End Linear Array UI ---
+
+    elif current_main_mode == 'RADIAL':
+        # --- Radial Array UI ---
+        radial_col = main_arr_col.column(align=True) # Sub-column for radial controls
+        radial_prop_count = "sdf_radial_count"
+        radial_prop_center = "sdf_radial_center" # Vector (size 2)
+
+        radial_col.prop(obj, f'["{radial_prop_count}"]', text="Count")
+        # Ensure count is >= 1 (or maybe 2?)
+        if obj.get(radial_prop_count, 1) < 1: obj[radial_prop_count] = 1
+
+        # Input for 2D center vector
+        radial_col.prop(obj, f'["{radial_prop_center}"]', text="Center Offset")
 
     col.separator()
     # Info Text
@@ -1388,13 +1905,11 @@ def draw_sdf_source_info(layout, context):
     if obj.parent:
         row_parent = col.row()
         row_parent.label(text="Parent:")
-        # Show parent field, but maybe disable direct editing from here?
         row_parent.prop(obj, "parent", text="")
-        row_parent.enabled = False # Prevent reparenting from this panel
-
+        row_parent.enabled = False
 
 # --- Main Viewport Panel ---
-
+# (Keep VIEW3D_PT_fieldforge_main as it was)
 class VIEW3D_PT_fieldforge_main(Panel):
     """Main FieldForge Panel in the 3D Viewport Sidebar (N-Panel)"""
     bl_label = "FieldForge Controls" # Panel header label inside the tab
@@ -1403,14 +1918,7 @@ class VIEW3D_PT_fieldforge_main(Panel):
     bl_region_type = 'UI' # N-Panel Sidebar region
     bl_category = "FieldForge" # <--- This creates the Tab name
 
-    # No bl_context needed, we check the active object type manually
-
-    # Add an update function to redraw the view when panel properties change
-    # This is important for the Show Source Visuals toggle
     def check(self, context):
-        # Simple check: redraw if active object changes or libfive availability changes
-        # More complex checks could involve custom properties, but can be slow.
-        # Rely on operators/handlers to tag redraw for specific prop changes.
         return True
 
     def draw(self, context):
@@ -1431,14 +1939,12 @@ class VIEW3D_PT_fieldforge_main(Panel):
 
         # Check if the active object is a Bounds controller
         if obj.get(SDF_BOUNDS_MARKER, False):
-            # Draw the bounds settings using the helper function
             layout.label(text=f"Bounds: {obj.name}", icon='MOD_BUILD')
             layout.separator()
             draw_sdf_bounds_settings(layout, context)
 
         # Check if the active object is an SDF Source object
         elif is_sdf_source(obj):
-            # Draw the source object info using the helper function
             layout.label(text=f"Source: {obj.name}", icon='OBJECT_DATA')
             layout.separator()
             draw_sdf_source_info(layout, context)
@@ -1448,8 +1954,148 @@ class VIEW3D_PT_fieldforge_main(Panel):
             layout.label(text="Active object is not", icon='QUESTION')
             layout.label(text="a FieldForge Bounds or Source.")
 
+# --- Helper Operator for UI Buttons ---
+class OBJECT_OT_fieldforge_toggle_array_axis(Operator):
+    """Toggles the activation state of a specific FieldForge array axis."""
+    bl_idname = "object.fieldforge_toggle_array_axis"
+    bl_label = "Toggle FieldForge Array Axis"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis: EnumProperty(
+        name="Axis",
+        items=[('X', "X", "X Axis"), ('Y', "Y", "Y Axis"), ('Z', "Z", "Z Axis")],
+        default='X',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # Enable only if the active object is an SDF source
+        obj = context.active_object
+        return obj and is_sdf_source(obj)
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj:
+            return {'CANCELLED'}
+
+        # Use actual custom property names
+        active_prop_x = "sdf_array_active_x"
+        active_prop_y = "sdf_array_active_y"
+        active_prop_z = "sdf_array_active_z"
+
+        # Get current states
+        is_x = obj.get(active_prop_x, False)
+        is_y = obj.get(active_prop_y, False)
+        is_z = obj.get(active_prop_z, False)
+
+        property_changed = False # Flag to check if update is needed
+
+        # Toggle the target axis and enforce dependencies
+        if self.axis == 'X':
+            new_x = not is_x
+            if is_x != new_x: # Check if value actually changes
+                obj[active_prop_x] = new_x
+                property_changed = True
+                print(f"FF Set {active_prop_x} to: {new_x}")
+                # If deactivating X, deactivate Y and Z too
+                if not new_x:
+                    if is_y: obj[active_prop_y] = False; property_changed = True; print(f"FF Set {active_prop_y} to: False")
+                    if is_z: obj[active_prop_z] = False; property_changed = True; print(f"FF Set {active_prop_z} to: False")
+        elif self.axis == 'Y':
+            # Can only activate Y if X is already active
+            if not is_x and not is_y:
+                 self.report({'WARNING'}, "Activate X axis first")
+                 return {'CANCELLED'}
+            new_y = not is_y
+            if is_y != new_y: # Check change
+                obj[active_prop_y] = new_y
+                property_changed = True
+                print(f"FF Set {active_prop_y} to: {new_y}")
+                # If deactivating Y, deactivate Z too
+                if not new_y and is_z:
+                     obj[active_prop_z] = False; property_changed = True; print(f"FF Set {active_prop_z} to: False")
+        elif self.axis == 'Z':
+            # Can only activate Z if Y (and thus X) is already active
+            if not is_y and not is_z:
+                self.report({'WARNING'}, "Activate Y axis first")
+                return {'CANCELLED'}
+            new_z = not is_z
+            if is_z != new_z: # Check change
+                obj[active_prop_z] = new_z
+                property_changed = True
+                print(f"FF Set {active_prop_z} to: {new_z}")
+
+        # Trigger updates only if a property actually changed
+        if property_changed:
+            parent_bounds = find_parent_bounds(obj)
+            if parent_bounds:
+                 bpy.app.timers.register(
+                    lambda name=parent_bounds.name, scn=context.scene: check_and_trigger_update(scn, name, f"toggle_array_{obj.name}_{self.axis}"),
+                    first_interval=0.0
+                 )
+            # Force UI redraw
+            tag_redraw_all_view3d()
+            for area in context.screen.areas: area.tag_redraw() # Redraw all areas just in case
+        # else:
+            # print("FF Array axis state unchanged.") # Optional Debug
+
+        return {'FINISHED'}
+
+class OBJECT_OT_fieldforge_set_main_array_mode(Operator):
+    """Sets the main array mode custom property on the active FieldForge source object."""
+    bl_idname = "object.fieldforge_set_main_array_mode"
+    bl_label = "Set FieldForge Main Array Mode"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    # Property to receive the mode from the button
+    main_mode: EnumProperty(
+        name="Main Array Mode",
+        items=[
+            ('NONE', "None", "No array"),
+            ('LINEAR', "Linear", "Linear Array (X, XY, XYZ)"),
+            ('RADIAL', "Radial", "Radial Array (Polar Z)"),
+        ],
+        default='NONE',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and is_sdf_source(obj)
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj: return {'CANCELLED'}
+
+        prop_name = "sdf_main_array_mode"
+        current_mode = obj.get(prop_name, 'NONE')
+        property_changed = False
+
+        if current_mode != self.main_mode:
+            obj[prop_name] = self.main_mode
+            property_changed = True
+            print(f"FF Set {prop_name} to: {self.main_mode}")
+
+            # Reset linear active flags if switching *away* from LINEAR or to NONE
+            if current_mode == 'LINEAR' or self.main_mode == 'NONE':
+                 if obj.get("sdf_array_active_x", False): obj["sdf_array_active_x"] = False; property_changed = True
+                 if obj.get("sdf_array_active_y", False): obj["sdf_array_active_y"] = False; property_changed = True
+                 if obj.get("sdf_array_active_z", False): obj["sdf_array_active_z"] = False; property_changed = True
+
+        if property_changed:
+            parent_bounds = find_parent_bounds(obj)
+            if parent_bounds:
+                 bpy.app.timers.register(
+                    lambda name=parent_bounds.name, scn=context.scene: check_and_trigger_update(scn, name, f"set_main_array_{obj.name}_{self.main_mode}"),
+                    first_interval=0.0
+                 )
+            tag_redraw_all_view3d()
+            for area in context.screen.areas: area.tag_redraw()
+
+        return {'FINISHED'}
+
 # --- Menu Definition ---
-# (Keep VIEW3D_MT_add_sdf Menu class and menu_func as they were)
+# (Keep menu_func as it was)
 # ... (omitted for brevity) ...
 class VIEW3D_MT_add_sdf(Menu):
     """Add menu for FieldForge SDF objects"""
@@ -1459,7 +2105,6 @@ class VIEW3D_MT_add_sdf(Menu):
     def draw(self, context):
         layout = self.layout
 
-        # Check if libfive is available first
         if not libfive_available:
             layout.label(text="libfive library not found!", icon='ERROR')
             layout.label(text="Please check console for details.")
@@ -1470,7 +2115,6 @@ class VIEW3D_MT_add_sdf(Menu):
         layout.separator()
 
         # --- Source Shapes ---
-        # Enable adding sources only if the active object can be a parent within an SDF hierarchy
         active_obj = context.active_object
         can_add_source = active_obj is not None and (active_obj.get(SDF_BOUNDS_MARKER, False) or find_parent_bounds(active_obj) is not None)
 
@@ -1485,7 +2129,10 @@ class VIEW3D_MT_add_sdf(Menu):
         col.operator(OBJECT_OT_add_sdf_cone_source.bl_idname, text="Cone", icon='MESH_CONE')
         col.operator(OBJECT_OT_add_sdf_torus_source.bl_idname, text="Torus", icon='MESH_TORUS')
         col.operator(OBJECT_OT_add_sdf_rounded_box_source.bl_idname, text="Rounded Box", icon='MOD_BEVEL')
-        # Add other source types here when implemented
+        col.operator(OBJECT_OT_add_sdf_circle_source.bl_idname, text="Circle", icon='MESH_CIRCLE')
+        col.operator(OBJECT_OT_add_sdf_ring_source.bl_idname, text="Ring", icon='CURVE_NCIRCLE')
+        col.operator(OBJECT_OT_add_sdf_polygon_source.bl_idname, text="Polygon", icon='MESH_CIRCLE')
+        col.operator(OBJECT_OT_add_sdf_half_space_source.bl_idname, text="Half Space", icon='MESH_PLANE')
 
         # Add informational text if adding sources is disabled
         if not can_add_source:
@@ -1499,9 +2146,7 @@ def menu_func(self, context):
     self.layout.menu(VIEW3D_MT_add_sdf.bl_idname, icon='MOD_OPACITY')
 
 
-# --- NEW: Custom Draw Geometry Functions ---
 def create_circle_vertices(center, right, up, radius, segments):
-    """Generates vertices for a circle in world space."""
     if segments < 3: return []
     vertices = []
     for i in range(segments):
@@ -1581,8 +2226,6 @@ unit_cube_indices = [
     (0, 4), (1, 5), (2, 6), (3, 7)
 ]
 
-# Convert tuple list to flat list if needed by batch_for_shader with indices later
-# flat_cube_indices = [i for pair in unit_cube_indices for i in pair]
 
 # Generate vertices for a unit circle (radius 0.5) in the XY plane
 def create_unit_circle_vertices_xy(segments):
@@ -1598,7 +2241,6 @@ def create_unit_circle_vertices_xy(segments):
 def create_torus_visual_loops(major_radius, minor_radius, main_segments, minor_segments):
     """
     Generates lists of local vertices for the torus visualization.
-    Minor loops are now oriented correctly as cross-sections.
     Returns a list containing 5 lists of vertices:
     [main_loop_verts, top_minor_loop_verts, bottom_minor_loop_verts, right_minor_loop_verts, left_minor_loop_verts]
     """
@@ -1610,114 +2252,37 @@ def create_torus_visual_loops(major_radius, minor_radius, main_segments, minor_s
         for i in range(main_segments): # Generate N points
             angle = (i / main_segments) * 2 * math.pi
             main_loop_verts.append( (math.cos(angle) * major_radius, math.sin(angle) * major_radius, 0.0) )
-        main_loop_verts.append(main_loop_verts[0]) # <<< Add first point again at the end
+        main_loop_verts.append(main_loop_verts[0])
     loops_verts.append(main_loop_verts)
 
     # 2. Minor Loops (Minor Radius)
     if minor_segments >= 3 and minor_radius > 1e-5:
-        # Centers for the minor loops (Unchanged)
-        center_top    = mathutils.Vector((0, major_radius, 0))
-        center_bottom = mathutils.Vector((0, -major_radius, 0))
-        center_right  = mathutils.Vector((major_radius, 0, 0))
-        center_left   = mathutils.Vector((-major_radius, 0, 0))
+        center_top    = Vector((0, major_radius, 0))
+        center_bottom = Vector((0, -major_radius, 0))
+        center_right  = Vector((major_radius, 0, 0))
+        center_left   = Vector((-major_radius, 0, 0))
 
-        # --- Revised Minor Loop Generation ---
         def generate_cross_section_loop(center, tangent_to_main_loop):
             verts = []
-            # ... (calculate n, t1, t2 basis vectors) ...
             n = tangent_to_main_loop.normalized(); t1 = Vector((0.0, 0.0, 1.0)); t2 = n.cross(t1).normalized();
-            # --- Check for t2 validity ---
-            if t2.length < 0.1: # If n was parallel to t1 (world Z)
-                # Use a different 'up' vector for cross product if tangent is Z-aligned (shouldn't happen for XY main loop)
-                t2 = n.cross(Vector((0.0, 1.0, 0.0))).normalized() # Use World Y as temp 'up'
-            t1 = t2.cross(n).normalized() # Recalculate t1
-            # --------------------------
-
-            for i in range(minor_segments): # Generate N points
+            if t2.length < 0.1:
+                t2 = n.cross(Vector((0.0, 1.0, 0.0))).normalized()
+            t1 = t2.cross(n).normalized()
+            for i in range(minor_segments):
                 angle = (i / minor_segments) * 2 * math.pi
                 offset = (t1 * math.cos(angle) + t2 * math.sin(angle)) * minor_radius
                 verts.append( center + offset )
             verts.append(verts[0])
             return verts
 
-        # Calculate tangents at the cardinal points of the main XY loop
-        # Top: Tangent is along +X direction
-        tangent_top = Vector((1.0, 0.0, 0.0))
-        loops_verts.append(generate_cross_section_loop(center_top, tangent_top))
+        tangent_top = Vector((1.0, 0.0, 0.0)); loops_verts.append(generate_cross_section_loop(center_top, tangent_top))
+        tangent_bottom = Vector((-1.0, 0.0, 0.0)); loops_verts.append(generate_cross_section_loop(center_bottom, tangent_bottom))
+        tangent_right = Vector((0.0, 1.0, 0.0)); loops_verts.append(generate_cross_section_loop(center_right, tangent_right))
+        tangent_left = Vector((0.0, -1.0, 0.0)); loops_verts.append(generate_cross_section_loop(center_left, tangent_left))
 
-        # Bottom: Tangent is along -X direction
-        tangent_bottom = Vector((-1.0, 0.0, 0.0))
-        loops_verts.append(generate_cross_section_loop(center_bottom, tangent_bottom))
-
-        # Right: Tangent is along +Y direction
-        tangent_right = Vector((0.0, 1.0, 0.0))
-        loops_verts.append(generate_cross_section_loop(center_right, tangent_right))
-
-        # Left: Tangent is along -Y direction
-        tangent_left = Vector((0.0, -1.0, 0.0))
-        loops_verts.append(generate_cross_section_loop(center_left, tangent_left))
-        # --- End Revised Minor Loop Generation ---
-
-    else: # Add placeholders if no minor loops generated
-         loops_verts.extend([[], [], [], []])
-
+    else: loops_verts.extend([[], [], [], []]) # Placeholders
     return loops_verts
 
-def create_corner_arc_verts(corner_point, axis1_offset, axis2_offset, axis3_offset, radius, segments):
-    """
-    Generates local vertices for one rounded corner arc.
-    - corner_point: The original sharp corner vertex (e.g., (-0.5, -0.5, -0.5))
-    - axis1/2/3_offset: Vectors pointing AWAY from the corner along the cube edges,
-                       magnitude equal to the radius.
-                       (e.g., for (-0.5,-0.5,-0.5) corner, offsets are (+R,0,0), (0,+R,0), (0,0,+R))
-    - radius: The rounding radius.
-    - segments: Number of vertices for the 90-degree arc.
-    Returns a list of vertices for the arc.
-    """
-    if segments < 1: segments = 1
-    verts = []
-    # Center of the arc's circle, offset from the corner along all three axes
-    arc_center = corner_point + axis1_offset + axis2_offset + axis3_offset
-    # Start and end points of the arc (relative to the center)
-    start_vec = -axis1_offset # Vector from center to point on edge 1
-    end_vec = -axis2_offset   # Vector from center to point on edge 2
-    # Need a third vector to define the plane if axis3 is involved? Let's simplify.
-
-    # --- Alternative: Calculate points on the arc directly ---
-    # Points where the rounding meets the straight edges
-    p1 = corner_point + axis1_offset
-    p2 = corner_point + axis2_offset
-    p3 = corner_point + axis3_offset
-
-    # We need arcs connecting p1-p2, p2-p3, p3-p1 effectively.
-    # Let's generate 3 arcs per corner.
-
-    arc_verts_12 = [] # Arc between edge 1 and edge 2
-    arc_verts_23 = [] # Arc between edge 2 and edge 3
-    arc_verts_31 = [] # Arc between edge 3 and edge 1
-
-    # Center of the arc on the face defined by axis1 and axis2
-    center_12 = corner_point + axis1_offset + axis2_offset
-    v1 = p1 - center_12 # Vector from center to p1 (-axis2_offset)
-    v2 = p2 - center_12 # Vector from center to p2 (-axis1_offset)
-    # Interpolate angle from v1 to v2
-    for i in range(segments + 1):
-        angle = (i / segments) * (math.pi / 2.0) # 90 degrees
-        # Simple lerp might not be circular, need proper rotation
-        # Rotate v1 towards v2 around the normal (axis3 direction)
-        # This gets complicated quickly.
-
-    # --- Simpler Visualization: Draw straight chamfers instead of arcs ---
-    # Connect p1, p2, p3 with lines to form a small triangle at the corner
-    # return [p1, p2, p3] # For LINE_LOOP triangle
-    # Or return lines: [p1, p2, p2, p3, p3, p1] # For LINES
-
-    # --- Even Simpler: Just draw the points where rounding starts ---
-    # return [p1, p2, p3] # Just the points (not visually connected)
-
-    # --- Let's stick to the chamfer idea for simplicity ---
-    chamfer_lines = [p1, p2, p2, p3, p3, p1]
-    return chamfer_lines
 
 def create_unit_rounded_rectangle_plane(local_right, local_up, radius, segments_per_corner):
     """
@@ -1725,49 +2290,34 @@ def create_unit_rounded_rectangle_plane(local_right, local_up, radius, segments_
     centered at the origin, lying in the plane defined by local_right and local_up.
     Radius is clamped between 0 and 0.5. Returns list of Vector objects.
     """
-    # Unit dimensions
-    width = 1.0
-    height = 1.0
     half_w, half_h = 0.5, 0.5
-    center = mathutils.Vector((0.0, 0.0, 0.0)) # Ensure Vector type
-
-    # Ensure inputs are Vectors
-    local_right = mathutils.Vector(local_right)
-    local_up = mathutils.Vector(local_up)
-
-    # Clamp radius (0 to 0.5 for unit square)
+    center = Vector((0.0, 0.0, 0.0)) # Ensure Vector type
+    local_right = Vector(local_right)
+    local_up = Vector(local_up)
     radius = max(0.0, min(radius, 0.5))
 
-    # --- Corrected simple rectangle vertex generation ---
     if radius <= 0.0001:
-        # Generate 4 corners directly in LINE_LOOP order
         tr = center + (local_right * half_w) + (local_up * half_h)
         tl = center + (-local_right * half_w) + (local_up * half_h)
         bl = center + (-local_right * half_w) - (local_up * half_h)
         br = center + (local_right * half_w) - (local_up * half_h)
-        # Return list of Vector objects in correct order
         return [tr, tl, bl, br]
-    # --- End Correction ---
 
-    # Rounded logic
     if segments_per_corner < 1: segments_per_corner = 1
     inner_w, inner_h = half_w - radius, half_h - radius
     center_tr = center + (local_right * inner_w) + (local_up * inner_h)
     center_tl = center + (-local_right * inner_w) + (local_up * inner_h)
     center_bl = center + (-local_right * inner_w) - (local_up * inner_h)
-    # --- FIX TYPO: Use local_right ---
     center_br = center + (local_right * inner_w) - (local_up * inner_h)
-    # --- END FIX ---
 
     vertices = []
     delta_angle = (math.pi / 2.0) / segments_per_corner
 
-    # Generate points for each corner arc, appending Vector objects
     # Top Right corner
     for i in range(segments_per_corner + 1):
         angle = i * delta_angle
         offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * radius
-        vertices.append(center_tr + offset) # Already Vector + Vector
+        vertices.append(center_tr + offset)
     # Top Left corner
     for i in range(1, segments_per_corner + 1):
         angle = (math.pi / 2.0) + (i * delta_angle)
@@ -1784,8 +2334,7 @@ def create_unit_rounded_rectangle_plane(local_right, local_up, radius, segments_
         offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * radius
         vertices.append(center_br + offset)
 
-    # Do NOT add duplicate vertex for LINE_LOOP, it closes automatically.
-    return vertices # Return list of Vector objects
+    return vertices
 
 
 def create_unit_cylinder_cap_vertices(segments):
@@ -1809,69 +2358,57 @@ def offset_vertices(vertices, camera_loc, offset_factor):
     if not vertices:
         return []
     for v in vertices:
-        # Ensure v is a Vector
-        v_vec = mathutils.Vector(v)
+        v_vec = Vector(v)
         view_dir_unnormalized = camera_loc - v_vec
-        # Avoid division by zero if camera is exactly at vertex
         if view_dir_unnormalized.length_squared > 1e-9:
              view_dir = view_dir_unnormalized.normalized()
              offset_v = v_vec + view_dir * offset_factor
              offset_verts.append(offset_v)
         else:
-             # Cannot calculate offset, just use original vertex
-             offset_verts.append(v_vec)
+             offset_verts.append(v_vec) # Use original vertex if too close
     return offset_verts
 
-def offset_vertices(vertices, camera_loc, offset_factor):
-    """Offsets a list of vertices slightly towards the camera."""
-    offset_verts = []
-    if not vertices:
-        return []
-    for v in vertices:
-        # Ensure v is a Vector
-        v_vec = mathutils.Vector(v)
-        view_dir_unnormalized = camera_loc - v_vec
-        # Avoid division by zero if camera is exactly at vertex
-        if view_dir_unnormalized.length_squared > 1e-9:
-             view_dir = view_dir_unnormalized.normalized()
-             offset_v = v_vec + view_dir * offset_factor
-             offset_verts.append(offset_v)
-        else:
-             # Cannot calculate offset, just use original vertex
-             offset_verts.append(v_vec)
-    return offset_verts
+def create_unit_polygon_vertices_xy(segments):
+    """Generates local vertices for a regular polygon with 'segments' sides,
+       inscribed in a circle of radius 0.5 in the XY plane.
+       Orientation matches libfive's likely convention (vertex down for odd n,
+       flat bottom edge for even n)."""
+    if segments < 3: return []
+    vertices = []
+    radius = 0.5
+
+    if segments % 2 == 1: # Odd number of sides
+        # A vertex should point down (-Y direction)
+        angle_offset = -math.pi / 2.0
+    else: # Even number of sides
+        # The midpoint of the bottom edge should point down (-Y direction).
+        # This requires shifting the vertex calculation by half the angle between vertices.
+        angle_offset = -math.pi / 2.0 + (math.pi / segments)
+
+    for i in range(segments):
+        angle = angle_offset + (i / segments) * 2 * math.pi
+        vertices.append( (math.cos(angle) * radius, math.sin(angle) * radius, 0.0) )
+    return vertices
 
 def ff_draw_callback():
     """Draw callback function - Iterates through scene objects using bpy.context"""
-    # print("--- FieldForge Draw Callback Running (using bpy.context) ---") # Optional
-
-    # --- Use bpy.context explicitly ---
     context = bpy.context
-    # ... (Keep the robust context checks for scene, space_data, region_3d) ...
     scene = getattr(context, 'scene', None)
     space_data = None
     area = context.area
-    # ... (logic to find space_data and region_3d) ...
     if area and area.type == 'VIEW_3D': space_data = area.spaces.active
     if not space_data: # Fallback
         for area_iter in context.screen.areas:
-             if area_iter.type == 'VIEW_3D':
-                 space_data = area_iter.spaces.active
-                 break
+             if area_iter.type == 'VIEW_3D': space_data = area_iter.spaces.active; break
     region_3d = getattr(space_data, 'region_3d', None) if space_data else None
 
-    if not scene or not region_3d: return # Exit if context is incomplete
+    if not scene or not region_3d: return
 
-    # --- Get Camera Location (Needed for Sphere) ---
     try:
         view_matrix_inv = region_3d.view_matrix.inverted()
         camera_location = view_matrix_inv.translation
-    except Exception:
-        # print("DBG Draw Skip: Cannot get camera location") # Optional
-        return
-    # ---------------------------
+    except Exception: return # Cannot get camera location
 
-    # --- GPU Setup ---
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     old_blend = gpu.state.blend_get()
     old_line_width = gpu.state.line_width_get()
@@ -1879,25 +2416,20 @@ def ff_draw_callback():
 
     gpu.state.blend_set('ALPHA')
     gpu.state.line_width_set(1.0)
-    gpu.state.depth_test_set('LESS_EQUAL') # Keep depth test enabled
-    #gpu.state.depth_test_set(old_depth_test)
+    gpu.state.depth_test_set('LESS_EQUAL')
     shader.bind()
-    # ---------------------------------------------
 
-    DEPTH_OFFSET_FACTOR = 0.1
+    DEPTH_OFFSET_FACTOR = 0.1 # Adjust as needed
 
-    # --- Iterate through scene objects ---
     for obj in scene.objects:
-        # --- Manual Visibility & Filtering (Keep checks) ---
-        # --- Filtering (Keep as is) ---
         try:
             if not obj or not obj.visible_get(): continue
         except ReferenceError: continue
         if not is_sdf_source(obj): continue
-        parent_bounds = find_parent_bounds(obj); # ... (check parent_bounds) ...
+        parent_bounds = find_parent_bounds(obj)
         if not parent_bounds: continue
         if not get_bounds_setting(parent_bounds, "sdf_show_source_empties"): continue
-        sdf_type_prop = obj.get("sdf_type", "NONE"); # ... (check sdf_type_prop) ...
+        sdf_type_prop = obj.get("sdf_type", "NONE")
         if sdf_type_prop == "NONE": continue
 
         is_negative = obj.get("sdf_is_negative", False)
@@ -1909,222 +2441,87 @@ def ff_draw_callback():
         avg_scale = max(1e-5, (abs(obj_scale_vec.x) + abs(obj_scale_vec.y) + abs(obj_scale_vec.z)) / 3.0)
 
         batches_to_draw = []
-        mat = obj_matrix
-
+        mat = obj_matrix # Alias for brevity
 
         if sdf_type_prop == "sphere":
-            primitive_type = 'LINE_LOOP'
-            world_verts = []
-            cam_right_vector = Vector((1.0, 0.0, 0.0)) # Initialize with defaults
-            cam_up_vector = Vector((0.0, 1.0, 0.0))    # In case try block fails
+            primitive_type = 'LINE_LOOP'; segments = 24; radius = 0.5 * avg_scale
+            world_verts = []; cam_right_vector = Vector((1.0, 0.0, 0.0)); cam_up_vector = Vector((0.0, 1.0, 0.0))
             try: # Cam vectors
                 direction = (camera_location - obj_location).normalized()
-                if direction.length < 0.0001: direction = mathutils.Vector((0.0, 0.0, 1.0))
-                world_up = mathutils.Vector((0.0, 0.0, 1.0))
-                if abs(direction.dot(world_up)) > 0.999: world_up = mathutils.Vector((0.0, 1.0, 0.0)).normalized()
+                if direction.length < 0.0001: direction = Vector((0.0, 0.0, 1.0))
+                world_up = Vector((0.0, 0.0, 1.0))
+                if abs(direction.dot(world_up)) > 0.999: world_up = Vector((0.0, 1.0, 0.0)).normalized()
                 cam_right_vector = direction.cross(world_up).normalized()
                 cam_up_vector = cam_right_vector.cross(direction).normalized()
-            except ValueError:
-                # Handle potential errors during vector calculation if needed
-                print(f"FF Draw Warn: Could not calculate camera vectors for sphere {obj.name}")
-                pass # Use default vectors initialized above
+            except ValueError: pass # Use default vectors
+            for i in range(segments): angle = (i / segments) * 2 * math.pi; offset = (cam_right_vector * math.cos(angle) + cam_up_vector * math.sin(angle)) * radius; world_verts.append(obj_location + offset)
+            if world_verts: offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}); batches_to_draw.append((batch, color))
 
-            radius = 0.5 * avg_scale
-            segments = 24
-
-            # Generate world verts directly using calculated vectors
-            for i in range(segments):
-                angle = (i / segments) * 2 * math.pi
-                # --- FIX: Replace ellipsis with actual vectors ---
-                offset = (cam_right_vector * math.cos(angle) + cam_up_vector * math.sin(angle)) * radius
-                # -------------------------------------------------
-                world_verts.append(obj_location + offset)
-
-            if world_verts:
-                # Offset Sphere Vertices
-                offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                try:
-                    batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}) # Use offset_verts
-                    batches_to_draw.append((batch, color))
-                except Exception as e: print(f"FF Draw Error: Sphere batch failed for {obj.name}: {e}")
         elif sdf_type_prop == "cube":
-            primitive_type = 'LINES'
-            indices = unit_cube_indices # Indices for drawing lines
+            primitive_type = 'LINES'; indices = unit_cube_indices
+            local_verts_vectors = [Vector(v) for v in unit_cube_verts]; world_verts = []
+            for v_local in local_verts_vectors: v4 = v_local.to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_verts.append(v_world_4d.xyz)
+            if world_verts: offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}, indices=indices); batches_to_draw.append((batch, color))
 
-            # 1. Generate local unit vertices as Vectors
-            local_verts_vectors = [mathutils.Vector(v) for v in unit_cube_verts]
-            world_verts = [] # To store transformed vertices
-
-            # 2. Transform local vertices to world space
-            for v_local in local_verts_vectors:
-                v4 = v_local.to_4d(); v4.w = 1.0 # Convert to 4D for matrix multiplication
-                v_world_4d = mat @ v4          # Apply object's world matrix
-                world_verts.append(v_world_4d.xyz) # Store 3D world coordinate
-
-            # 3. Check if transformation produced vertices
-            if world_verts:
-                # --- 4. Offset Vertices towards camera ---
-                offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                # ----------------------------------------
-
-                # 5. Create batch using OFFSETTED vertices
-                try:
-                    batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}, indices=indices) # Use offset_verts
-                    batches_to_draw.append((batch, color))
-                except Exception as e: print(f"FF Draw Error: Cube batch failed for {obj.name}: {e}")
         elif sdf_type_prop == "torus":
-            primitive_type = 'LINE_LOOP'
-            # --- FIX: Define Unit Radii Here ---
-            unit_major_r = 0.35 # Default major radius for unit torus visual
-            unit_minor_r = 0.15 # Default minor radius for unit torus visual
-            # ---------------------------------
-            main_segments = 32
-            minor_segments = 12
+            default_major = 0.35; default_minor = 0.15
+            unit_major_r_prop = obj.get("sdf_torus_major_radius", default_major)
+            unit_minor_r_prop = obj.get("sdf_torus_minor_radius", default_minor)
 
-            # Generate all local loops USING UNIT RADII
-            local_loops = create_torus_visual_loops(unit_major_r, unit_minor_r, main_segments, minor_segments)
-
-            # Transform and create batches (Logic Unchanged)
-            mat = obj_matrix
-            for local_verts in local_loops:
-                if not local_verts: continue
-                world_verts = []
-                for v_local in local_verts:
-                    v_vec = mathutils.Vector(v_local)
-                    v4 = v_vec.to_4d(); v4.w = 1.0
-                    v_world_4d = mat @ v4
-                    world_verts.append(v_world_4d.xyz)
-
-                if world_verts:
-                    # Offset Torus Loop Vertices
-                    offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                    try:
-                        batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}) # Use offset_verts
-                        batches_to_draw.append((batch, color))
-                    except Exception as e: print(f"FF Draw Error: Torus loop batch failed for {obj.name}: {e}")
-                    except Exception as e: print(f"FF Draw Error: Torus loop batch failed for {obj.name}: {e}")
-
+            unit_major_r = max(0.01, unit_major_r_prop)
+            unit_minor_r = max(0.005, unit_minor_r_prop)
+            unit_minor_r = min(unit_minor_r, unit_major_r - 1e-5)
         elif sdf_type_prop == "cylinder":
-            segments = 16
-            local_top_verts, local_bot_verts = create_unit_cylinder_cap_vertices(segments)
-            world_top_verts = []; world_bot_verts = []
-            # Transform top cap
+            segments = 16; local_top_verts, local_bot_verts = create_unit_cylinder_cap_vertices(segments); world_top_verts = []; world_bot_verts = []
             if local_top_verts:
-                for v_local in local_top_verts: v4 = mathutils.Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_top_verts.append(v_world_4d.xyz)
-                # --- Offset Top Cap Vertices ---
-                offset_top_verts = offset_vertices(world_top_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                # ------------------------------
-                try: batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_top_verts}); batches_to_draw.append((batch, color)) # Use offset
-                except Exception as e: print(f"FF Draw Error: Cyl Top Cap batch failed for {obj.name}: {e}")
-            # Transform bottom cap
+                # Initialize world_top_verts before the loop
+                world_top_verts = []
+                for v_local in local_top_verts: v4 = Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_top_verts.append(v_world_4d.xyz)
+                offset_top_verts = offset_vertices(world_top_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_top_verts}); batches_to_draw.append((batch, color))
             if local_bot_verts:
-                for v_local in local_bot_verts: v4 = mathutils.Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_bot_verts.append(v_world_4d.xyz)
-                # --- Offset Bottom Cap Vertices ---
-                offset_bot_verts = offset_vertices(world_bot_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                # -------------------------------
-                try: batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_bot_verts}); batches_to_draw.append((batch, color)) # Use offset
-                except Exception as e: print(f"FF Draw Error: Cyl Bot Cap batch failed for {obj.name}: {e}")
-            # Side lines
-            if world_top_verts and world_bot_verts: # Use original world verts for calculation
-                try: # Calculate side line endpoints using original world verts ...
-                    # ... (calculate side1_top, side1_bot, side2_top, side2_bot using non-offset cap centers etc.) ...
-                    world_x_axis = mat.col[0].xyz; world_y_axis = mat.col[1].xyz; world_z_axis = mat.col[2].xyz; world_location = mat.translation
-                    radius_x = world_x_axis.length * 0.5; radius_y = world_y_axis.length * 0.5; world_radius = (radius_x + radius_y) / 2.0
-                    view_vec = (camera_location - world_location); z_axis_norm = world_z_axis.normalized(); view_vec_norm = view_vec.normalized()
-                    side_vector = None; # ... calc side_vector ...
+                 # Initialize world_bot_verts before the loop
+                world_bot_verts = []
+                for v_local in local_bot_verts: v4 = Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_bot_verts.append(v_world_4d.xyz)
+                offset_bot_verts = offset_vertices(world_bot_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_bot_verts}); batches_to_draw.append((batch, color))
+            if world_top_verts and world_bot_verts:
+                try: # Side lines
+                    world_x_axis = mat.col[0].xyz; world_y_axis = mat.col[1].xyz; world_z_axis = mat.col[2].xyz; world_location = mat.translation; world_radius = (world_x_axis.length + world_y_axis.length) * 0.25 # Avg Radius = Avg Scale * 0.5
+                    view_vec = (camera_location - world_location); z_axis_norm = world_z_axis.normalized(); view_vec_norm = view_vec.normalized(); side_vector = None
                     if abs(z_axis_norm.dot(view_vec_norm)) > 0.999: side_vector = world_x_axis.normalized()
                     else: side_vector = world_z_axis.cross(view_vec).normalized()
                     center_top_world = world_location + world_z_axis * 0.5; center_bot_world = world_location - world_z_axis * 0.5
                     side_offset = side_vector * world_radius
                     side1_top = center_top_world + side_offset; side1_bot = center_bot_world + side_offset
                     side2_top = center_top_world - side_offset; side2_bot = center_bot_world - side_offset
-
                     side_lines_verts = [side1_top, side1_bot, side2_top, side2_bot]
-                    # --- Offset Side Line Vertices ---
-                    offset_side_verts = offset_vertices(side_lines_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                    # --------------------------------
-                    batch = batch_for_shader(shader, 'LINES', {"pos": offset_side_verts}); batches_to_draw.append((batch, color)) # Use offset
+                    offset_side_verts = offset_vertices(side_lines_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINES', {"pos": offset_side_verts}); batches_to_draw.append((batch, color))
                 except Exception as e: print(f"FF Draw Error: Calculating Cyl Side Lines failed for {obj.name}: {e}")
 
         elif sdf_type_prop == "cone":
-            segments = 16
-
-            # --- Use ORIGINAL Unit Dimensions for Visual Guide ---
-            local_radius = 0.5      # Unit Cone Radius
-            local_height = 1.0      # Unit Cone Height
-            local_apex_z = local_height # Apex Z coordinate (relative to base at 0)
-            local_base_z = 0.0      # Base circle at Z=0
-            # ----------------------------------------------------
-
-            # 1. Generate and transform base cap vertices (at Z=0, using local_radius)
-            local_bot_verts = []
+            segments = 16; local_radius = 0.5; local_height = 1.0; local_apex_z = local_height; local_base_z = 0.0; local_bot_verts = []
             if segments >= 3:
-                for i in range(segments):
-                    angle = (i / segments) * 2 * math.pi
-                    # Use local_radius (0.5) here
-                    x = math.cos(angle) * local_radius
-                    y = math.sin(angle) * local_radius
-                    local_bot_verts.append( (x, y, local_base_z) ) # Use Z=0
-
-            world_bot_verts = []
+                for i in range(segments): angle = (i / segments) * 2 * math.pi; x = math.cos(angle) * local_radius; y = math.sin(angle) * local_radius; local_bot_verts.append( (x, y, local_base_z) )
+            world_bot_verts = [] # Initialize before loop
             if local_bot_verts:
-                for v_local in local_bot_verts:
-                    v4 = mathutils.Vector(v_local).to_4d(); v4.w = 1.0
-                    v_world_4d = mat @ v4; world_bot_verts.append(v_world_4d.xyz)
-                # Draw Base Cap (Offset Vertices)
-                offset_bot_verts = offset_vertices(world_bot_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                try: batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_bot_verts}); batches_to_draw.append((batch, color))
-                except Exception as e: print(f"FF Draw Error: Cone Bot Cap batch failed for {obj.name}: {e}")
-
-            # 2. Transform Apex (using local_apex_z = local_height = 1.0)
-            local_apex = mathutils.Vector((0.0, 0.0, local_apex_z))
-            apex4 = local_apex.to_4d(); apex4.w = 1.0
-            world_apex = (mat @ apex4).xyz
-            # Offset the single apex point
+                for v_local in local_bot_verts: v4 = Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_bot_verts.append(v_world_4d.xyz)
+                offset_bot_verts = offset_vertices(world_bot_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_bot_verts}); batches_to_draw.append((batch, color))
+            local_apex = Vector((0.0, 0.0, local_apex_z)); apex4 = local_apex.to_4d(); apex4.w = 1.0; world_apex = (mat @ apex4).xyz
             offset_apex = offset_vertices([world_apex], camera_location, DEPTH_OFFSET_FACTOR)[0]
-
-
-            # 3. Calculate side line base points (Billboard effect)
             if world_bot_verts:
-                try:
-                    # Get World Space Axes, Radius, Base Center
-                    world_x_axis = mat.col[0].xyz; world_y_axis = mat.col[1].xyz; world_z_axis = mat.col[2].xyz; world_location = mat.translation
-
-                    # Calculate World radius based on transformed axes length * local_radius (0.5)
-                    radius_x = world_x_axis.length * local_radius # Use 0.5
-                    radius_y = world_y_axis.length * local_radius # Use 0.5
-                    world_radius = (radius_x + radius_y) / 2.0
-
-                    # World Base Cap Center IS the object location
-                    center_bot_world = world_location
-
-                    # Calculate Billboard Direction (Same logic)
-                    view_vec = (camera_location - world_location); # ... calc side_vector ...
-                    z_axis_norm = world_z_axis.normalized(); view_vec_norm = view_vec.normalized()
-                    side_vector = None
+                try: # Side lines
+                    world_x_axis = mat.col[0].xyz; world_y_axis = mat.col[1].xyz; world_z_axis = mat.col[2].xyz; world_location = mat.translation; world_radius = (world_x_axis.length + world_y_axis.length) * 0.25 # Avg Radius = Avg Scale * 0.5
+                    center_bot_world = world_location # Base is at origin
+                    view_vec = (camera_location - world_location); z_axis_norm = world_z_axis.normalized(); view_vec_norm = view_vec.normalized(); side_vector = None
                     if abs(z_axis_norm.dot(view_vec_norm)) > 0.999: side_vector = world_x_axis.normalized()
                     else: side_vector = world_z_axis.cross(view_vec).normalized()
-
-                    # Calculate offset and the two base points
                     side_offset = side_vector * world_radius
-                    side1_base = center_bot_world + side_offset
-                    side2_base = center_bot_world - side_offset
-
-                    # Offset the base points
-                    offset_side1_base = offset_vertices([side1_base], camera_location, DEPTH_OFFSET_FACTOR)[0]
-                    offset_side2_base = offset_vertices([side2_base], camera_location, DEPTH_OFFSET_FACTOR)[0]
-
-                    # Create batch using OFFSET apex and OFFSET base points
-                    side_lines_verts = [offset_apex, offset_side1_base, offset_apex, offset_side2_base]
-                    batch = batch_for_shader(shader, 'LINES', {"pos": side_lines_verts})
-                    batches_to_draw.append((batch, color))
-
-                except Exception as e:
-                     print(f"FF Draw Error: Calculating Cone Side Lines failed for {obj.name}: {e}")
-                     # import traceback; traceback.print_exc()
+                    side1_base = center_bot_world + side_offset; side2_base = center_bot_world - side_offset
+                    offset_side1_base = offset_vertices([side1_base], camera_location, DEPTH_OFFSET_FACTOR)[0]; offset_side2_base = offset_vertices([side2_base], camera_location, DEPTH_OFFSET_FACTOR)[0]
+                    side_lines_verts = [offset_apex, offset_side1_base, offset_apex, offset_side2_base]; batch = batch_for_shader(shader, 'LINES', {"pos": side_lines_verts}); batches_to_draw.append((batch, color))
+                except Exception as e: print(f"FF Draw Error: Calculating Cone Side Lines failed for {obj.name}: {e}")
 
         elif sdf_type_prop == "rounded_box":
-             primitive_type = 'LINE_LOOP'; corner_segments = 6; # ... get radius ...
+             primitive_type = 'LINE_LOOP'; corner_segments = 6
              ui_radius = obj.get("sdf_round_radius", 0.1); internal_draw_radius = max(0.0, min(ui_radius * 0.5, 0.5))
              local_x = Vector((1.0, 0.0, 0.0)); local_y = Vector((0.0, 1.0, 0.0)); local_z = Vector((0.0, 0.0, 1.0)); local_loops = []
              local_loops.append( create_unit_rounded_rectangle_plane(local_x, local_y, internal_draw_radius, corner_segments) ) # XY
@@ -2135,9 +2532,7 @@ def ff_draw_callback():
              for local_verts in local_loops: # Process each loop (XY, YZ, XZ)
                  if not local_verts: continue
 
-                 # --- FIX: Initialize world_verts for EACH loop ---
                  world_verts = []
-                 # -----------------------------------------------
 
                  # Transform this loop's unit vertices
                  for v_local in local_verts: # v_local is already a Vector
@@ -2153,24 +2548,163 @@ def ff_draw_callback():
                          batches_to_draw.append((batch, color))
                      except Exception as e: print(f"FF Draw Error: RndBox loop batch failed for {obj.name}: {e}")
 
+        elif sdf_type_prop == "circle":
+            primitive_type = 'LINE_LOOP'; segments = 24
+            local_verts = create_unit_circle_vertices_xy(segments)
+            world_verts = [] # Initialize before loop
+            if local_verts:
+                 for v_local in local_verts:
+                     v_vec = Vector(v_local)
+                     v4 = v_vec.to_4d(); v4.w = 1.0
+                     v_world_4d = mat @ v4
+                     world_verts.append(v_world_4d.xyz)
+                 if world_verts:
+                     offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                     batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts})
+                     batches_to_draw.append((batch, color))
+
+        elif sdf_type_prop == "ring":
+            primitive_type = 'LINE_LOOP'; segments = 24
+            unit_outer_r = 0.5
+            unit_inner_r = obj.get("sdf_inner_radius", 0.25)
+            unit_inner_r = max(0.0, min(unit_inner_r, unit_outer_r - 1e-5)) # Clamp inner radius
+
+            # Calculate world center and oriented axes based on matrix
+            world_center = mat.translation
+            # Get scaled axes which define orientation and scale
+            world_x_axis_scaled = mat.col[0].xyz
+            world_y_axis_scaled = mat.col[1].xyz
+            # Note: This assumes the XY plane of the empty defines the ring plane.
+            # We use the scaled axes vectors directly to define the circle plane.
+
+            # We need the radius in world units along these potentially scaled axes
+            # Transform unit vectors along X and Y to find world radius vectors
+            world_outer_radius_vec_x = (mat @ Vector((unit_outer_r, 0, 0)).to_4d()).xyz - world_center
+            world_outer_radius_vec_y = (mat @ Vector((0, unit_outer_r, 0)).to_4d()).xyz - world_center
+            world_inner_radius_vec_x = (mat @ Vector((unit_inner_r, 0, 0)).to_4d()).xyz - world_center
+            world_inner_radius_vec_y = (mat @ Vector((0, unit_inner_r, 0)).to_4d()).xyz - world_center
+
+            # Average the lengths for potentially non-uniform scaling cases (approximation)
+            world_outer_r = (world_outer_radius_vec_x.length + world_outer_radius_vec_y.length) / 2.0
+            world_inner_r = (world_inner_radius_vec_x.length + world_inner_radius_vec_y.length) / 2.0
+
+            # Use the scaled matrix axes directions for drawing the circles
+            draw_right = world_x_axis_scaled.normalized()
+            draw_up = world_y_axis_scaled.normalized()
+            # Simple check for collinearity (should be rare with standard transforms)
+            if draw_right.cross(draw_up).length_squared < 1e-6:
+                 # Fallback if axes are collinear (e.g., scale Z to 0) - use world XY
+                 draw_right = Vector((1.0,0.0,0.0))
+                 draw_up = Vector((0.0,1.0,0.0))
 
 
-        # --- Draw all batches accumulated for THIS object ---
+            # Generate world vertices directly using the calculated world radii and axes
+            outer_verts = create_circle_vertices(world_center, draw_right, draw_up, world_outer_r, segments)
+            inner_verts = create_circle_vertices(world_center, draw_right, draw_up, world_inner_r, segments)
+
+            # Create batches if vertices were generated
+            if outer_verts:
+                offset_outer = offset_vertices(outer_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                try:
+                    batch_outer = batch_for_shader(shader, primitive_type, {"pos": offset_outer})
+                    batches_to_draw.append((batch_outer, color))
+                except Exception as e: print(f"FF Draw Error: Ring Outer batch failed for {obj.name}: {e}")
+            if inner_verts:
+                offset_inner = offset_vertices(inner_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                try:
+                    batch_inner = batch_for_shader(shader, primitive_type, {"pos": offset_inner})
+                    batches_to_draw.append((batch_inner, color))
+                except Exception as e: print(f"FF Draw Error: Ring Inner batch failed for {obj.name}: {e}")
+
+        elif sdf_type_prop == "polygon":
+            primitive_type = 'LINE_LOOP'
+            sides = obj.get("sdf_sides", 6)
+            sides = max(3, sides) # Ensure at least 3 sides
+
+            # Generate local UNIT polygon vertices (radius 0.5 in XY plane)
+            local_verts = create_unit_polygon_vertices_xy(sides) # Use the new helper
+            world_verts = [] # Initialize before loop
+
+            if local_verts:
+                 # Transform local vertices to world space
+                 for v_local in local_verts:
+                     v_vec = Vector(v_local)
+                     v4 = v_vec.to_4d(); v4.w = 1.0
+                     v_world_4d = mat @ v4 # Apply object's world matrix
+                     world_verts.append(v_world_4d.xyz)
+
+                 if world_verts:
+                     # Offset vertices towards camera
+                     offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                     # Create batch
+                     try:
+                         batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts})
+                         batches_to_draw.append((batch, color))
+                     except Exception as e: print(f"FF Draw Error: Polygon batch failed for {obj.name}: {e}")
+
+        elif sdf_type_prop == "half_space":
+            plane_vis_size = 4.0 # Size of the visualization square
+            normal_vis_length = 0.5 # Length of the normal vector visualization
+
+            # Get transform components
+            world_center = mat.translation # Point on the plane
+            world_x_axis = mat.col[0].xyz.normalized() # Plane's X direction
+            world_y_axis = mat.col[1].xyz.normalized() # Plane's Y direction
+            world_z_axis = mat.col[2].xyz.normalized() # Plane's normal direction
+
+            # 1. Draw Plane Representation (a large square)
+            primitive_type_plane = 'LINE_LOOP'
+            # Use create_rectangle_vertices helper
+            plane_verts = create_rectangle_vertices(world_center, world_x_axis, world_y_axis, plane_vis_size, plane_vis_size)
+            if plane_verts:
+                offset_plane_verts = offset_vertices(plane_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                try:
+                    batch_plane = batch_for_shader(shader, primitive_type_plane, {"pos": offset_plane_verts})
+                    batches_to_draw.append((batch_plane, color))
+                except Exception as e: print(f"FF Draw Error: HalfSpace Plane batch failed for {obj.name}: {e}")
+
+            # 2. Draw Normal Vector
+            primitive_type_normal = 'LINES'
+            normal_start = world_center
+            normal_end = world_center + world_z_axis * normal_vis_length
+            # Draw arrow head lines (simple triangle)
+            arrow_size = normal_vis_length * 0.2
+            arrow_base = normal_end - world_z_axis * arrow_size # Move back along normal
+            arrow_p1 = arrow_base + world_x_axis * arrow_size * 0.5 # Offset along plane X
+            arrow_p2 = arrow_base - world_x_axis * arrow_size * 0.5 # Offset along plane X
+            arrow_p3 = arrow_base + world_y_axis * arrow_size * 0.5 # Offset along plane Y
+            arrow_p4 = arrow_base - world_y_axis * arrow_size * 0.5 # Offset along plane Y
+
+            normal_verts = [
+                normal_start, normal_end, # Main shaft
+                normal_end, arrow_p1,     # Arrow head lines
+                normal_end, arrow_p2,
+                normal_end, arrow_p3,
+                normal_end, arrow_p4
+            ]
+            if normal_verts:
+                offset_normal_verts = offset_vertices(normal_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                try:
+                    batch_normal = batch_for_shader(shader, primitive_type_normal, {"pos": offset_normal_verts})
+                    # Use a slightly different color for the normal? Maybe brighter?
+                    normal_color = (color[0]*1.2, color[1]*1.2, color[2]*1.2, color[3])
+                    batches_to_draw.append((batch_normal, normal_color))
+                except Exception as e: print(f"FF Draw Error: HalfSpace Normal batch failed for {obj.name}: {e}")
+
         for batch, batch_color in batches_to_draw:
             try:
                 shader.uniform_float("color", batch_color)
                 batch.draw(shader)
             except Exception as e:
-                 print(f"FieldForge Draw Error: Final Batch Draw failed for {obj.name}: {e}")
-
+                 print(f"FieldForge Draw Error: Final Batch Draw failed for {obj.name} ({sdf_type_prop}): {e}")
 
     # --- Restore GPU State ---
     gpu.state.line_width_set(old_line_width)
     gpu.state.blend_set(old_blend)
     gpu.state.depth_test_set(old_depth_test)
 
-
 # --- NEW: Helper to tag redraw ---
+# (Keep tag_redraw_all_view3d as it was)
 def tag_redraw_all_view3d():
     """Forces redraw of all 3D views."""
     if not bpy.context or not bpy.context.window_manager: return
@@ -2219,7 +2753,7 @@ def initial_update_check_all():
 # --- Registration ---
 
 classes = (
-    # Operators (Same as before)
+    # Operators
     OBJECT_OT_add_sdf_bounds,
     OBJECT_OT_add_sdf_cube_source,
     OBJECT_OT_add_sdf_sphere_source,
@@ -2227,10 +2761,16 @@ classes = (
     OBJECT_OT_add_sdf_cone_source,
     OBJECT_OT_add_sdf_torus_source,
     OBJECT_OT_add_sdf_rounded_box_source,
+    OBJECT_OT_add_sdf_circle_source,
+    OBJECT_OT_add_sdf_ring_source,
+    OBJECT_OT_add_sdf_polygon_source,
+    OBJECT_OT_add_sdf_half_space_source,
+    OBJECT_OT_fieldforge_toggle_array_axis,
+    OBJECT_OT_fieldforge_set_main_array_mode,
     OBJECT_OT_sdf_manual_update,
-    # Panels (Same as before)
+    # Panels
     VIEW3D_PT_fieldforge_main,
-    # Menus (Same as before)
+    # Menus
     VIEW3D_MT_add_sdf,
 )
 
