@@ -1,7 +1,7 @@
 bl_info = {
     "name": "FieldForge",
     "author": "Your Name & libfive Team",
-    "version": (0, 5, 3),
+    "version": (0, 5, 4),
     "blender": (4, 4, 0),
     "location": "View3D > Sidebar (N-Panel) > FieldForge Tab | Add > Mesh > Field Forge SDF",
     "description": "Adds and manages dynamic SDF shapes using libfive with hierarchical blending, extrusion, and custom visuals", # Updated description
@@ -16,6 +16,8 @@ import sys
 import time
 from mathutils import Vector, Matrix
 import math
+import bpy_extras
+from bpy_extras import view3d_utils
 
 # --- NEW: GPU Drawing Imports ---
 import gpu
@@ -41,17 +43,17 @@ if libfive_python_dir not in sys.path:
 
 libfive_base_dir = os.path.join(addon_dir, 'libfive', 'src')
 
-print(f"FieldForge: Attempting to set LIBFIVE_FRAMEWORK_DIR to: {libfive_base_dir}")
+# print("FieldForge: Attempting to set LIBFIVE_FRAMEWORK_DIR to: {libfive_base_dir}")
 
 # Check if the directory actually exists before setting the env var
 if os.path.isdir(libfive_base_dir):
     # Set the environment variable *before* ffi.py is imported.
     # This tells ffi.py's paths_for() function where to look first.
     os.environ['LIBFIVE_FRAMEWORK_DIR'] = libfive_base_dir
-    print(f"FieldForge: Set LIBFIVE_FRAMEWORK_DIR environment variable.")
-else:
-    print(f"FieldForge: Warning - Calculated libfive base directory does not exist: {libfive_base_dir}")
-    print(f"FieldForge: Library loading might still fail if libraries are not found elsewhere.")
+    # print("FieldForge: Set LIBFIVE_FRAMEWORK_DIR environment variable.")
+# else:
+    # print("FieldForge: Warning - Calculated libfive base directory does not exist: {libfive_base_dir}")
+    # print("FieldForge: Library loading might still fail if libraries are not found elsewhere.")
 
 
 libfive_available = False
@@ -73,27 +75,26 @@ try:
          raise ImportError("Core or stdlib function check failed")
 
 except ImportError as e:
-    print(f"FieldForge: Error importing libfive: {e}")
+    # print("FieldForge: Error importing libfive: {e}")
     # Provide guidance on library paths - Adjust paths based on libfive_base_dir
     core_lib_path = os.path.join(libfive_base_dir, "src", f"libfive.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
     stdlib_lib_path = os.path.join(libfive_base_dir, "stdlib", f"libfive-stdlib.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
-    print(f"FieldForge: Ensure compiled libfive libraries exist, e.g.:")
-    print(f"  - Core: {core_lib_path}")
-    print(f"  - Stdlib: {stdlib_lib_path}")
+    # print("FieldForge: Ensure compiled libfive libraries exist, e.g.:")
+    # print("  - Core: {core_lib_path}")
+    # print("  - Stdlib: {stdlib_lib_path}")
     # Check the environment variable again if it failed
     current_env_var = os.environ.get('LIBFIVE_FRAMEWORK_DIR', '<Not Set>')
-    print(f"FieldForge: Current LIBFIVE_FRAMEWORK_DIR='{current_env_var}'")
-    print(f"FieldForge: Addon requires libfive. Dynamic functionality disabled.")
+    # print("FieldForge: Current LIBFIVE_FRAMEWORK_DIR='{current_env_var}'")
+    # print("FieldForge: Addon requires libfive. Dynamic functionality disabled.")
 except Exception as e:
     # Catch potential ctypes loading errors more specifically if possible
     if isinstance(e, OSError) and "cannot open shared object file" in str(e).lower():
-         print(f"FieldForge: OSError during libfive import (likely library load failure): {e}")
+        print("FieldForge: OSError during libfive import (likely library load failure): {e}")
     else:
-        print(f"FieldForge: An unexpected error occurred during libfive import: {type(e).__name__}: {e}")
-    # Print traceback for unexpected errors
+        print("FieldForge: An unexpected error occurred during libfive import: {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
-    print(f"FieldForge: Dynamic functionality disabled.")
+    # print("FieldForge: Dynamic functionality disabled.")
 
 __all__ = ["libfive_available", "lf", "ffi"]
 
@@ -111,7 +112,8 @@ _updates_pending = {}           # Flags indicating an update is scheduled or run
 _last_update_finish_times = {}  # Stores the time the last update finished (for throttling)
 _sdf_update_caches = {}         # Caches the last known state used for a successful update
 _draw_handle = None             # <<< NEW: Handle for the custom draw callback
-
+_draw_line_data = {}            # <<< NEW: Stores {obj_name: [(v1, v2), (v3, v4), ...]} world coords
+_selection_handler_running = False # <<< NEW: Flag to prevent multiple modal operators
 
 # --- Default Settings (Applied to new Bounds objects) ---
 DEFAULT_SETTINGS = {
@@ -317,7 +319,7 @@ def reconstruct_shape(obj):
             return lf.emptiness()
 
     except Exception as e:
-        print(f"FieldForge: Error reconstructing unit shape for {obj.name} ({sdf_type}): {e}")
+        # print("FieldForge: Error reconstructing unit shape for {obj.name} ({sdf_type}): {e}")
         return lf.emptiness() # Return empty on error
 
     return shape
@@ -345,7 +347,7 @@ def apply_blender_transform_to_sdf(shape, obj_matrix_world_inv):
         # Apply the coordinate remapping to the shape definition
         transformed_shape = shape.remap(x_p, y_p, z_p)
     except Exception as e:
-        print(f"FieldForge: Error during libfive remap for shape: {e}")
+        # print("FieldForge: Error during libfive remap for shape: {e}")
         return lf.emptiness() # Return empty on error
 
     return transformed_shape
@@ -368,7 +370,7 @@ def combine_shapes(shape_a, shape_b, blend_factor):
             # Use sharp union if blend factor is effectively zero
             return lf.union(shape_a, shape_b)
     except Exception as e:
-        print(f"FieldForge: Error combining shapes: {e}")
+        # print("FieldForge: Error combining shapes: {e}")
         # Fallback strategy: return the first shape? Or None? Returning first is safer.
         return shape_a
 
@@ -405,7 +407,7 @@ def process_sdf_hierarchy(obj, settings):
                     break # Process only the first
 
             if loft_child_found:
-                print(f"--- Found Loft pair: Parent={obj_name}, Child={loft_child_found.name} ---") # Debug
+                # print("--- Found Loft pair: Parent={obj_name}, Child={loft_child_found.name} ---") # Debug
                 try:
                     # Get BASE 2D shapes
                     shape_a = reconstruct_shape(obj)
@@ -417,23 +419,23 @@ def process_sdf_hierarchy(obj, settings):
                         zmax = loft_child_found.location.z # Child's local Z relative to parent
 
                         if abs(zmax - zmin) < 1e-5:
-                            print(f"FieldForge Warning: Loft child {loft_child_found.name} has same local Z as parent {obj_name}. Loft requires height. Using parent shape.")
+                            # print("FieldForge Warning: Loft child {loft_child_found.name} has same local Z as parent {obj_name}. Loft requires height. Using parent shape.")
                             current_shape = shape_a # Fallback to parent's base shape
                         else:
                             if zmin > zmax: zmin, zmax = zmax, zmin # Ensure zmin < zmax
-                            print(f"    Loft zmin (local): {zmin}, zmax (local): {zmax}") # Debug
-                            print(f"    Loft Shape A: {shape_a}, Shape B: {shape_b}") # Debug
+                            # print("    Loft zmin (local): {zmin}, zmax (local): {zmax}") # Debug
+                            # print("    Loft Shape A: {shape_a}, Shape B: {shape_b}") # Debug
 
                             # Perform the loft - result becomes current_shape for obj
                             current_shape = lf.loft(shape_a, shape_b, zmin, zmax)
                             processed_children.add(loft_child_found.name) # Mark child as handled
-                            print(f"    Loft Result Shape: {current_shape}") # Debug
+                            # print("    Loft Result Shape: {current_shape}") # Debug
                     else:
-                        print(f"FieldForge Warning: Could not reconstruct base shapes for loft between {obj_name} and {loft_child_found.name}")
+                        # print("FieldForge Warning: Could not reconstruct base shapes for loft between {obj_name} and {loft_child_found.name}")
                         current_shape = reconstruct_shape(obj) or lf.emptiness() # Fallback
 
                 except Exception as e:
-                    print(f"FieldForge Error: Loft operation failed between {obj_name} and {loft_child_found.name}: {e}")
+                    # print("FieldForge Error: Loft operation failed between {obj_name} and {loft_child_found.name}: {e}")
                     current_shape = reconstruct_shape(obj) or lf.emptiness() # Fallback
                     if loft_child_found: processed_children.add(loft_child_found.name) # Mark child processed on error
 
@@ -459,7 +461,7 @@ def process_sdf_hierarchy(obj, settings):
             try:
                 shell_offset = obj.get("sdf_shell_offset", 0.1); safe_shell_offset = float(shell_offset)
                 if abs(safe_shell_offset) > 1e-6: # Only apply if offset is non-zero
-                     print(f"--- Applying Shell to {obj_name} (Offset: {safe_shell_offset}) ---") # Debug
+                     # print("--- Applying Shell to {obj_name} (Offset: {safe_shell_offset}) ---") # Debug
                      current_shape = lf.shell(current_shape, safe_shell_offset)
             except Exception as e: print(f"FF Error Shelling {obj_name}: {e}"); current_shape = lf.emptiness()
 
@@ -503,8 +505,8 @@ def process_sdf_hierarchy(obj, settings):
             # Apply the selected array function
             if array_func and args:
                  try:
-                     print(f"--- Applying Array {array_type_str} to {obj_name} ---") # Debug
-                     # print(f"    Args: {args[1:]}") # Optional detailed debug
+                     # print("--- Applying Array {array_type_str} to {obj_name} ---") # Debug
+                     # print("    Args: {args[1:]}") # Optional detailed debug
                      current_shape = array_func(*args)
                  except Exception as e: print(f"FF Error Arraying {obj_name}: {e}"); current_shape = lf.emptiness()
             # elif main_mode != 'NONE' and not (array_func and args): # Optional Debug
@@ -517,7 +519,7 @@ def process_sdf_hierarchy(obj, settings):
             obj_matrix_inv = obj.matrix_world.inverted()
             processed_shape_for_this_obj = apply_blender_transform_to_sdf(current_shape, obj_matrix_inv)
         except Exception as e:
-            print(f"FF Error Transforming {obj_name}: {e}")
+            # print("FF Error Transforming {obj_name}: {e}")
             processed_shape_for_this_obj = lf.emptiness()
 
     # else: Not an SDF source, processed_shape_for_this_obj remains lf.emptiness()
@@ -537,7 +539,7 @@ def process_sdf_hierarchy(obj, settings):
     for child in obj.children:
         # Skip children already handled by loft
         if child.name in processed_children:
-            # print(f"--- Skipping already lofted child: {child.name} ---") # Debug
+            # print("--- Skipping already lofted child: {child.name} ---") # Debug
             continue
 
         # Process the child recursively
@@ -574,6 +576,88 @@ def process_sdf_hierarchy(obj, settings):
 
     return shape_so_far
 
+def get_blender_select_mouse() -> str:
+    """
+    Checks the user's keymap for the primary 3D View object selection button (simple click).
+    Prioritizes exact property matches, falls back to simple modifier checks.
+    Returns 'LEFTMOUSE' or 'RIGHTMOUSE', defaulting to 'LEFTMOUSE' only if search fails.
+    """
+    default_button = 'LEFTMOUSE' # Default ONLY if search logic fails completely
+    found_button = None
+
+    try:
+        if not bpy.context or not bpy.context.window_manager:
+            # print("FF Keymap WARN: No bpy.context or window_manager available.")
+            return default_button
+
+        wm = bpy.context.window_manager
+        # Ensure we get the active config, falling back correctly
+        kc = wm.keyconfigs.user or wm.keyconfigs.addon or wm.keyconfigs.default
+        if not kc: # Should not happen, but safeguard
+             # print("FF Keymap ERROR: Could not determine keyconfig.")
+             return default_button
+        km = kc.keymaps.get('3D View')
+        if not km:
+            # print("FF Keymap WARN: '3D View' keymap not found.")
+            return default_button
+
+        # --- First Pass: Look for the STRICT match based on properties ---
+        # This prioritizes the keymap item that exactly matches the behavior
+        # of a default single-click select (no toggling, extending, etc.)
+        for kmi in km.keymap_items:
+            # Filter early for relevant types
+            if kmi.idname == 'view3d.select' and kmi.value == 'PRESS' and kmi.type in {'LEFTMOUSE', 'RIGHTMOUSE'}:
+                props = kmi.properties
+                # Check properties typical of a basic, non-modifier click
+                is_primary_select_strict = (
+                    getattr(props, 'extend', False) == False and
+                    getattr(props, 'deselect_all', False) == False and # Relax this one slightly? No, basic click usually doesn't deselect all.
+                    getattr(props, 'toggle', False) == False and
+                    getattr(props, 'center', False) == False and
+                    getattr(props, 'enumerate', False) == False and
+                    # Check modifiers on the keymap item itself are OFF
+                    not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey
+                )
+
+                if is_primary_select_strict:
+                    # Store the first strict match found and stop this pass
+                    found_button = kmi.type
+                    # print(f"FF Keymap DBG: Found STRICT match: {found_button}") # DEBUG
+                    break
+
+        # --- Second Pass: If no strict match, find ANY mouse click without modifiers ---
+        # This catches cases where properties might be slightly different (like deselect_all=True)
+        # but the user interaction (simple click, no Shift/Ctrl/Alt) is correct.
+        if not found_button:
+            for kmi in km.keymap_items:
+                 if kmi.idname == 'view3d.select' and \
+                    kmi.value == 'PRESS' and \
+                    kmi.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and \
+                    not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey: # Check modifiers are off
+
+                     # Take the first one found in this relaxed pass
+                     found_button = kmi.type
+                     # print(f"FF Keymap DBG: Found RELAXED match: {found_button}") # DEBUG
+                     break # Stop after finding the first relaxed match
+
+        # --- Final Decision ---
+        if found_button:
+            # print(f"FF Keymap INFO: Using detected select button: {found_button}") # INFO
+            return found_button
+        else:
+            # This case means even the relaxed search failed.
+            print(f"FF Keymap WARN: Could not detect primary select mouse button ('view3d.select' without modifiers). Using default: {default_button}")
+
+    except AttributeError as ae:
+         # print(f"FieldForge WARN: Couldn't fully inspect keymaps (AttributeError): {ae}")
+         traceback.print_exc() # Optional: Print stack trace for attribute errors
+    except Exception as e:
+        # print(f"FieldForge WARN: Error querying keymap: {type(e).__name__}: {e}")
+        traceback.print_exc() # Print stack trace for unexpected errors
+
+    # Return default ONLY if search failed or exception occurred
+    # print(f"FF Keymap INFO: Returning default select button due to fallback: {default_button}") # DEBUG
+    return default_button
 
 # --- State Gathering and Caching ---
 # (Keep has_state_changed, update_sdf_cache as they were)
@@ -1033,7 +1117,7 @@ def run_sdf_update(scene, bounds_name, trigger_state, is_viewport_update=False):
          # Catch errors during state validation, hierarchy processing, object finding/creation, etc.
          print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {e}")
          import traceback
-         traceback.print_exc() # Print stack trace for better debugging
+         traceback.print_exc()# print stack trace for better debugging
          mesh_generation_error = True # Mark as failed if any error occurred before/during mesh update
          mesh_update_successful = False
          # Attempt to clear result mesh geometry if an object was found/created
@@ -1058,7 +1142,7 @@ def run_sdf_update(scene, bounds_name, trigger_state, is_viewport_update=False):
             _updates_pending[bounds_name] = False
 
         end_time = time.time()
-        # print(f"FieldForge: Finished {update_type} update for {bounds_name} in {end_time - start_time:.3f}s (Success: {mesh_update_successful})")
+        print(f"FieldForge: Finished {update_type} update for {bounds_name} in {end_time - start_time:.3f}s (Success: {mesh_update_successful})")
 
 # --- Scene Update Handler (Monitors Changes) ---
 # (Keep ff_depsgraph_handler as it was)
@@ -1135,9 +1219,338 @@ def ff_depsgraph_handler(scene, depsgraph):
     # Trigger redraw if needed for custom visuals
     if needs_redraw:
         tag_redraw_all_view3d()
+def dist_point_to_segment_2d(p, a, b):
+    """Calculate the min distance between a 2D point p and a 2D line segment (a, b)."""
+    # Uses Vector math for convenience
+    p = Vector(p); a = Vector(a); b = Vector(b)
+    ab = b - a
+    ap = p - a
+    ab_mag_sq = ab.length_squared
 
+    if ab_mag_sq < 1e-9: # Segment is a point
+        return ap.length
+
+    # Project p onto the line containing the segment ab
+    t = ap.dot(ab) / ab_mag_sq
+
+    if t < 0.0: # Closest point is a
+        proj = a
+    elif t > 1.0: # Closest point is b
+        proj = b
+    else: # Closest point is along the segment
+        proj = a + t * ab
+
+    return (p - proj).length
+
+def find_object_under_cursor(context, event, threshold=10.0):
+    """Finds the FieldForge source object whose custom line is nearest the mouse cursor."""
+    global _draw_line_data
+    mx, my = event.mouse_region_x, event.mouse_region_y
+    region = context.region
+    region_data = context.space_data.region_3d
+
+    # >>> ADDED PRINT <<<
+    # print(f"FIND DBG: Checking click at ({mx},{my}). Threshold: {threshold}, PixelSize: {context.preferences.system.pixel_size}")
+
+    if not region or not region_data:
+        # print("FIND DBG: No region/region_data") # Optional detail
+        return None
+
+    min_dist_sq = (threshold * context.preferences.system.pixel_size)**2
+    closest_obj_name = None
+    effective_threshold = threshold * context.preferences.system.pixel_size
+
+    obj_names = list(_draw_line_data.keys())
+    # print(f"FIND DBG: Checking objects: {obj_names}") # Optional detail
+
+    for obj_name in obj_names:
+        # Check if object still exists and is visible
+        obj = context.scene.objects.get(obj_name)
+        if not obj or not obj.visible_get() or not is_sdf_source(obj):
+            continue
+
+        # Check if parent bounds wants visuals shown
+        parent_bounds = find_parent_bounds(obj)
+        if not parent_bounds or not get_bounds_setting(parent_bounds, "sdf_show_source_empties"):
+             continue
+
+        # print(f"  FIND DBG: Checking object '{obj_name}'") # Optional detail
+
+        lines = _draw_line_data.get(obj_name, [])
+        if not lines:
+            # print(f"    FIND DBG: No line data for {obj_name}") # Optional detail
+            continue
+
+        for p1_world, p2_world in lines:
+            # Ensure they are Vector types for math ops
+            p1_world_v = Vector(p1_world)
+            p2_world_v = Vector(p2_world)
+
+            p1_screen = view3d_utils.location_3d_to_region_2d(region, region_data, p1_world_v)
+            p2_screen = view3d_utils.location_3d_to_region_2d(region, region_data, p2_world_v)
+
+            # >>> ADDED PRINT <<<
+            # print(f"    FIND DBG: Proj {p1_world_v.to_tuple(2)}->{p1_screen}, {p2_world_v.to_tuple(2)}->{p2_screen}")
+
+            if p1_screen and p2_screen:
+                dist = dist_point_to_segment_2d((mx, my), p1_screen, p2_screen)
+                # >>> ADDED PRINT <<<
+                # print(f"      FIND DBG: Dist: {dist:.2f} vs Threshold: {effective_threshold:.2f}")
+
+                # Compare distance directly with the effective threshold
+                if dist < effective_threshold and dist*dist < min_dist_sq:
+                    # >>> ADDED PRINT <<<
+                    # print(f"        FIND DBG: New candidate! Obj: {obj_name}, Dist: {dist:.2f}")
+                    min_dist_sq = dist*dist
+                    closest_obj_name = obj_name
+            #else:
+                # print("      FIND DBG: Point(s) projected outside region") # Optional detail
+
+    # >>> ADDED PRINT <<<
+    # print(f"FIND DBG: Returning: {closest_obj_name}")
+    return closest_obj_name
+def find_object_under_cursor_v2(context, region, region_data, mouse_region_x, mouse_region_y, threshold=10.0):
+    """Finds the FieldForge source object whose custom line is nearest the mouse cursor,
+       using specific region and region_data."""
+    global _draw_line_data
+    mx, my = mouse_region_x, mouse_region_y # Use passed-in region coordinates
+
+    # print(f"FIND_V2 DBG: Checking click at REGION ({mx},{my}). Threshold: {threshold}, PixelSize: {context.preferences.system.pixel_size}") # DEBUG
+
+    # Basic check if passed-in values are valid
+    if not region or not region_data:
+        # print("FIND_V2 DBG: Invalid region/region_data passed in.") # DEBUG
+        return None
+
+    min_dist_sq = (threshold * context.preferences.system.pixel_size)**2
+    closest_obj_name = None
+    effective_threshold = threshold * context.preferences.system.pixel_size
+
+    # Access scene via the original context
+    scene = context.scene
+    if not scene:
+        # print("FIND_V2 DBG: No scene in context.") # DEBUG
+        return None
+
+    obj_names = list(_draw_line_data.keys())
+    # print(f"FIND_V2 DBG: Checking objects: {obj_names}") # DEBUG
+
+    for obj_name in obj_names:
+        # Check if object still exists and is visible in the scene
+        obj = scene.objects.get(obj_name) # Use scene from context
+        if not obj or not obj.visible_get() or not is_sdf_source(obj):
+            # print(f"  FIND_V2 DBG: Skipping {obj_name} (non-existent, hidden, or not source)") # DEBUG
+            continue
+
+        # Check if parent bounds wants visuals shown
+        parent_bounds = find_parent_bounds(obj)
+        if not parent_bounds or not get_bounds_setting(parent_bounds, "sdf_show_source_empties"):
+             # print(f"  FIND_V2 DBG: Skipping {obj_name} (visuals hidden by bounds)") # DEBUG
+             continue
+
+        lines = _draw_line_data.get(obj_name, [])
+        if not lines:
+            # print(f"  FIND_V2 DBG: No line data for {obj_name}") # DEBUG
+            continue
+
+        # print(f"  FIND_V2 DBG: Processing {len(lines)} lines for {obj_name}") # DEBUG
+        for p1_world, p2_world in lines:
+            # Use the PASSED-IN region and region_data for projection
+            p1_screen = view3d_utils.location_3d_to_region_2d(region, region_data, p1_world)
+            p2_screen = view3d_utils.location_3d_to_region_2d(region, region_data, p2_world)
+
+            # print(f"    FIND_V2 DBG: Proj {p1_world.to_tuple(2)}->{p1_screen}, {p2_world.to_tuple(2)}->{p2_screen}") # DEBUG
+
+            if p1_screen and p2_screen:
+                dist = dist_point_to_segment_2d((mx, my), p1_screen, p2_screen)
+                # print(f"      FIND_V2 DBG: Dist: {dist:.2f} vs Threshold: {effective_threshold:.2f}") # DEBUG
+
+                if dist < effective_threshold and dist*dist < min_dist_sq:
+                    # print(f"        FIND_V2 DBG: New candidate! Obj: {obj_name}, Dist: {dist:.2f}") # DEBUG
+                    min_dist_sq = dist*dist
+                    closest_obj_name = obj_name
+            # else:
+                # print("      FIND_V2 DBG: Point(s) projected outside region") # DEBUG
+
+
+    # print(f"FIND_V2 DBG: Returning: {closest_obj_name}") # DEBUG
+    return closest_obj_name
 
 # --- Operators ---
+class VIEW3D_OT_fieldforge_select_handler(Operator):
+    """Modal operator to handle selection of FieldForge custom visuals."""
+    bl_idname = "view3d.fieldforge_select_handler"
+    bl_label = "FieldForge Select Handler"
+    bl_options = {'REGISTER', 'INTERNAL'} # Internal avoids showing in menus/search
+
+    _timer = None # Store timer reference
+
+    def modal(self, context, event):
+        # print(f"FF Modal Tick: Event {event.type} {event.value}") # DEBUG - Keep minimal
+
+        # --- Check Addon Status & Global Flag (Keep these) ---
+        if "FieldForge" not in context.preferences.addons:
+             # print("FF Modal: Addon seems disabled, cancelling.") # DEBUG
+             return self.cancel_modal(context)
+        if not _selection_handler_running:
+             # print("FF Modal: Global flag is False, cancelling.") # DEBUG
+             return self.cancel_modal(context) # Use the cleanup method
+
+        # --- Handle Selection ---
+        select_mouse_event = get_blender_select_mouse()
+        if event.type == select_mouse_event and event.value == 'PRESS':
+            # Use SCREEN coordinates for finding area/region
+            screen_x, screen_y = event.mouse_x, event.mouse_y
+            # print(f"MODAL DBG: Left Click Press detected at screen coords ({screen_x}, {screen_y})") # DEBUG
+
+            area_under_mouse = None
+            region_under_mouse = None
+            region_data_under_mouse = None
+            space_data = None # Define space_data here
+            # Store CALCULATED region coords separately
+            click_region_x = -1
+            click_region_y = -1
+
+            # --- Find the 3D View Area and Region under the SCREEN coordinates ---
+            for area_iter in context.window.screen.areas:
+                # Check if mouse SCREEN coordinates are within the area's boundaries
+                if (area_iter.x <= screen_x < area_iter.x + area_iter.width and
+                    area_iter.y <= screen_y < area_iter.y + area_iter.height):
+                    if area_iter.type == 'VIEW_3D':
+                        area_under_mouse = area_iter
+                        space_data = area_under_mouse.spaces.active # Get space_data here
+                        # print(f"  MODAL DBG: Found potential 3D View Area") # DEBUG
+
+                        # Now find the main 'WINDOW' region within this area
+                        for region_iter in area_iter.regions:
+                            if region_iter.type == 'WINDOW':
+                                # Check if SCREEN coordinates are within this region's screen bounds
+                                if (region_iter.x <= screen_x < region_iter.x + region_iter.width and
+                                    region_iter.y <= screen_y < region_iter.y + region_iter.height):
+                                    region_under_mouse = region_iter
+                                    # print(f"    MODAL DBG: Found potential WINDOW Region") # DEBUG
+                                    # --- >>> Calculate the region-relative coordinates <<< ---
+                                    click_region_x = screen_x - region_iter.x
+                                    click_region_y = screen_y - region_iter.y
+                                    # print(f"    MODAL DBG: Calculated region coords: ({click_region_x}, {click_region_y})") # DEBUG
+                                    break # Found the main window region
+
+                        if region_under_mouse and space_data and hasattr(space_data, 'region_3d'):
+                             region_data_under_mouse = space_data.region_3d
+                              #print(f"    MODAL DBG: Found region_3d data.") # DEBUG
+                        break # Found the 3D view area
+
+            # --- Proceed only if we successfully identified area, region, region_data, AND calculated valid region coords ---
+            if area_under_mouse and region_under_mouse and region_data_under_mouse and click_region_x >= 0 and click_region_y >= 0:
+                # print(f"MODAL DBG: Proceeding with selection check using calculated region coords ({click_region_x}, {click_region_y})") # DEBUG
+
+                found_obj_name = find_object_under_cursor_v2(
+                    context, # Pass original context for scene access etc.
+                    region_under_mouse,
+                    region_data_under_mouse,
+                    click_region_x, # <<< Use CALCULATED region coords
+                    click_region_y  # <<< Use CALCULATED region coords
+                )
+                # print(f"MODAL DBG: find_object_under_cursor_v2 returned: {found_obj_name}") # Keep this debug
+
+                if found_obj_name:
+                    # --- Selection Logic (same as before) ---
+                    # print(f"MODAL DBG: Attempting to select '{found_obj_name}'") # DEBUG
+                    target_obj = context.scene.objects.get(found_obj_name)
+                    if target_obj:
+                        # print(f"  MODAL DBG: Found target object {target_obj.name}") # DEBUG
+                        extend = event.shift
+                        deselect = event.ctrl
+                        if extend:
+                            target_obj.select_set(not target_obj.select_get())
+                        elif deselect:
+                            target_obj.select_set(False)
+                        else:
+                            is_already_active = context.view_layer.objects.active == target_obj
+                            if not is_already_active:
+                                bpy.ops.object.select_all(action='DESELECT')
+                            target_obj.select_set(True)
+                            context.view_layer.objects.active = target_obj
+                         #print("  MODAL DBG: Selection logic finished, consuming click.") # DEBUG
+                        tag_redraw_all_view3d() # Force redraw after selection change
+                        return {'RUNNING_MODAL'} # Consume the click
+                    # lse:
+                         # print(f"  MODAL DBG: ERROR - Target object '{found_obj_name}' not found in scene!") # DEBUG
+                else:
+                    # print("MODAL DBG: No object found by find_object_under_cursor_v2, passing through.") # DEBUG
+                    return {'PASS_THROUGH'} # Let Blender handle the click if nothing found
+            else:
+                 # Provide more detailed failure reason if needed
+                 # if not area_under_mouse: print("MODAL DBG: Failed - No 3D View area under mouse screen coords.") # DEBUG
+                 # elif not region_under_mouse: print("MODAL DBG: Failed - No WINDOW region under mouse screen coords.") # DEBUG
+                 # elif not region_data_under_mouse: print("MODAL DBG: Failed - No region_3d data found for area.") # DEBUG
+                 # elif click_region_x < 0 or click_region_y < 0: print("MODAL DBG: Failed - Calculated invalid region coords from screen coords.") # DEBUG
+
+                 # print("MODAL DBG: Click conditions not met (area/region/coords invalid), passing through.") # DEBUG
+                 return {'PASS_THROUGH'} # Click not in a valid 3D view region context
+
+        # --- Handle Exit ---
+        #if event.type == 'ESC':
+            # print("FF Modal: ESC pressed, cancelling.") # DEBUG
+        #    return self.cancel_modal(context)
+
+        # --- Pass through navigation/other ---
+        # Allow other events to pass through by default
+        return {'PASS_THROUGH'}
+
+    def invoke(self, context, event):
+        global _selection_handler_running
+        # print("INVOKE DBG: Handler invoke called.") # DEBUG
+        if _selection_handler_running:
+             # print("INVOKE DBG: Already running, cancelling.") # DEBUG
+             return {'CANCELLED'}
+
+        if context.window is None:
+            # print("INVOKE DBG: No window context, cancelling.") # DEBUG
+            return {'CANCELLED'}
+
+        try:
+            # Timer checks addon status and global flag periodically
+            self._timer = context.window_manager.event_timer_add(0.5, window=context.window)
+            context.window_manager.modal_handler_add(self)
+            _selection_handler_running = True
+            # print(f"INVOKE DBG: Timer ({self._timer}) and modal handler added for instance {self}. Flag set TRUE.") # DEBUG
+            return {'RUNNING_MODAL'}
+        except Exception as e:
+            # print(f"INVOKE DBG: ERROR adding timer/modal handler: {e}")
+            if self._timer and context.window_manager:
+                try: context.window_manager.event_timer_remove(self._timer)
+                except: pass
+                self._timer = None
+            _selection_handler_running = False
+            return {'CANCELLED'}
+
+    def cancel_modal(self, context):
+        global _selection_handler_running
+        # print(f"CANCEL DBG: Cancelling modal for instance {self}.") # DEBUG
+        if self._timer and context.window_manager:
+            try:
+                # print(f"  CANCEL DBG: Removing timer {self._timer}") # DEBUG
+                context.window_manager.event_timer_remove(self._timer)
+            except ValueError:
+                # print("  CANCEL DBG: Timer already removed?") # DEBUG
+                pass # Timer might already be gone
+            # except Exception as e:
+                # print(f"  CANCEL DBG: Error removing timer: {e}")
+            self._timer = None
+        # else:
+            # print("  CANCEL DBG: No timer found to remove.") # DEBUG
+
+        if _selection_handler_running:
+            _selection_handler_running = False
+            # print("  CANCEL DBG: Global flag set FALSE.") # DEBUG
+        # else:
+            # print("  CANCEL DBG: Global flag was already FALSE.") # DEBUG
+
+        tag_redraw_all_view3d()
+        return {'CANCELLED'}
+
+
 class OBJECT_OT_add_sdf_bounds(Operator):
     """Adds a new SDF Bounds controller Empty and prepares its result mesh setup"""
     bl_idname = "object.add_sdf_bounds"
@@ -2037,7 +2450,7 @@ class OBJECT_OT_fieldforge_toggle_array_axis(Operator):
             tag_redraw_all_view3d()
             for area in context.screen.areas: area.tag_redraw() # Redraw all areas just in case
         # else:
-            # print("FF Array axis state unchanged.") # Optional Debug
+            print("FF Array axis state unchanged.") # Optional Debug
 
         return {'FINISHED'}
 
@@ -2392,14 +2805,15 @@ def create_unit_polygon_vertices_xy(segments):
 
 def ff_draw_callback():
     """Draw callback function - Iterates through scene objects using bpy.context"""
+    global _draw_line_data # Make global accessible
     context = bpy.context
     scene = getattr(context, 'scene', None)
     space_data = None
     area = context.area
     if area and area.type == 'VIEW_3D': space_data = area.spaces.active
-    if not space_data: # Fallback
+    if not space_data:
         for area_iter in context.screen.areas:
-             if area_iter.type == 'VIEW_3D': space_data = area_iter.spaces.active; break
+            if area_iter.type == 'VIEW_3D': space_data = area_iter.spaces.active; break
     region_3d = getattr(space_data, 'region_3d', None) if space_data else None
 
     if not scene or not region_3d: return
@@ -2409,17 +2823,23 @@ def ff_draw_callback():
         camera_location = view_matrix_inv.translation
     except Exception: return # Cannot get camera location
 
-    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    # --- >>> Clear line data at the start of each draw pass <<< ---
+    _draw_line_data.clear()
+
+    shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
     old_blend = gpu.state.blend_get()
     old_line_width = gpu.state.line_width_get()
     old_depth_test = gpu.state.depth_test_get()
 
     gpu.state.blend_set('ALPHA')
-    gpu.state.line_width_set(1.0)
-    gpu.state.depth_test_set('LESS_EQUAL')
-    shader.bind()
+    gpu.state.depth_test_set('LESS_EQUAL') # Use LESS_EQUAL for depth test
+    window_size = (context.window.width, context.window.height)
 
-    DEPTH_OFFSET_FACTOR = 0.1 # Adjust as needed
+    shader.bind()
+    shader.uniform_float("viewportSize", window_size)
+    shader.uniform_float("lineWidth", 2.0)
+
+    DEPTH_OFFSET_FACTOR = 0.01 # Keep small offset
 
     for obj in scene.objects:
         try:
@@ -2432,21 +2852,66 @@ def ff_draw_callback():
         sdf_type_prop = obj.get("sdf_type", "NONE")
         if sdf_type_prop == "NONE": continue
 
-        is_negative = obj.get("sdf_is_negative", False)
-        color = (1.0, 0.2, 0.2, 0.8) if is_negative else (0.9, 0.9, 0.9, 0.8)
+        obj_name = obj.name # Get obj_name early
+        _draw_line_data[obj_name] = [] # Initialize entry for this object
+
+        use_clearance = obj.get("sdf_use_clearance", False)
+        use_morph = obj.get("sdf_use_morph", False)
+        is_negative = obj.get("sdf_is_negative", False) and not use_clearance and not use_morph
+
+        # Determine color based on interaction mode (subtractive = red, else white/grey)
+        color = (1.0, 0.2, 0.2, 0.8) if is_negative or use_clearance else (0.9, 0.9, 0.9, 0.8)
+        # Loft/Morph might override - make them greyish?
+        if obj.get("sdf_use_loft", False) or use_morph:
+             color = (0.7, 0.7, 0.9, 0.8) # Slightly blue/grey for loft/morph
+
 
         obj_matrix = obj.matrix_world
         obj_location = obj_matrix.translation
         obj_scale_vec = obj_matrix.to_scale()
+        # Use max scale component for radius calculation? Or average? Avg seems safer.
         avg_scale = max(1e-5, (abs(obj_scale_vec.x) + abs(obj_scale_vec.y) + abs(obj_scale_vec.z)) / 3.0)
 
         batches_to_draw = []
-        mat = obj_matrix # Alias for brevity
+        line_segments_for_picking = [] # Temp list for this object's segments
+        mat = obj_matrix
 
-        if sdf_type_prop == "sphere":
-            primitive_type = 'LINE_LOOP'; segments = 24; radius = 0.5 * avg_scale
-            world_verts = []; cam_right_vector = Vector((1.0, 0.0, 0.0)); cam_up_vector = Vector((0.0, 1.0, 0.0))
-            try: # Cam vectors
+        # --- Populate line_segments_for_picking for EACH shape type ---
+        # (Cube Example - MAKE SURE ALL TYPES ARE IMPLEMENTED)
+        if sdf_type_prop == "cube":
+            primitive_type = 'LINES'
+            indices = unit_cube_indices # Indices for drawing pairs
+            local_verts_vectors = [Vector(v) for v in unit_cube_verts]
+            world_verts = [] # List of Vector objects
+            for v_local in local_verts_vectors:
+                v4 = v_local.to_4d(); v4.w = 1.0
+                v_world_4d = mat @ v4
+                world_verts.append(v_world_4d.xyz)
+
+            # Generate line segments for picking from indices
+            if world_verts:
+                for i, j in indices:
+                    if i < len(world_verts) and j < len(world_verts):
+                        # Use Vector copies for safety
+                        line_segments_for_picking.append( (world_verts[i].copy(), world_verts[j].copy()) )
+
+                # Use the *original* world_verts for batch creation with indices
+                # Apply offset *only* for drawing batch, not picking data
+                offset_verts_draw = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts_draw}, indices=indices)
+                batches_to_draw.append((batch, color))
+
+        # ---Sphere Example ---
+        elif sdf_type_prop == "sphere":
+            primitive_type = 'LINES' # POLYLINE_UNIFORM_COLOR uses LINES
+            segments = 24
+            # Calculate radius based on average scale
+            radius = 0.5 * avg_scale # Sphere unit radius is 0.5
+            world_verts = []
+            cam_right_vector = Vector((1.0, 0.0, 0.0))
+            cam_up_vector = Vector((0.0, 1.0, 0.0))
+            # Camera vector calculation (same as before)
+            try:
                 direction = (camera_location - obj_location).normalized()
                 if direction.length < 0.0001: direction = Vector((0.0, 0.0, 1.0))
                 world_up = Vector((0.0, 0.0, 1.0))
@@ -2454,251 +2919,493 @@ def ff_draw_callback():
                 cam_right_vector = direction.cross(world_up).normalized()
                 cam_up_vector = cam_right_vector.cross(direction).normalized()
             except ValueError: pass # Use default vectors
-            for i in range(segments): angle = (i / segments) * 2 * math.pi; offset = (cam_right_vector * math.cos(angle) + cam_up_vector * math.sin(angle)) * radius; world_verts.append(obj_location + offset)
-            if world_verts: offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}); batches_to_draw.append((batch, color))
 
-        elif sdf_type_prop == "cube":
-            primitive_type = 'LINES'; indices = unit_cube_indices
-            local_verts_vectors = [Vector(v) for v in unit_cube_verts]; world_verts = []
-            for v_local in local_verts_vectors: v4 = v_local.to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_verts.append(v_world_4d.xyz)
-            if world_verts: offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}, indices=indices); batches_to_draw.append((batch, color))
+            # Create outline circle vertices facing camera
+            outline_verts = []
+            for i in range(segments):
+                angle = (i / segments) * 2 * math.pi
+                offset = (cam_right_vector * math.cos(angle) + cam_up_vector * math.sin(angle)) * radius
+                outline_verts.append(obj_location + offset)
 
-        elif sdf_type_prop == "torus":
-            default_major = 0.35; default_minor = 0.15
-            unit_major_r_prop = obj.get("sdf_torus_major_radius", default_major)
-            unit_minor_r_prop = obj.get("sdf_torus_minor_radius", default_minor)
+            # Generate line segments from the outline for both drawing and picking
+            if outline_verts:
+                circle_verts_draw = []
+                for i in range(segments):
+                    v1 = outline_verts[i].copy() # Use copies
+                    v2 = outline_verts[(i + 1) % segments].copy()
+                    circle_verts_draw.extend([v1, v2]) # For batch_for_shader
+                    line_segments_for_picking.append( (v1, v2) ) # For selection
 
-            unit_major_r = max(0.01, unit_major_r_prop)
-            unit_minor_r = max(0.005, unit_minor_r_prop)
-            unit_minor_r = min(unit_minor_r, unit_major_r - 1e-5)
+                if circle_verts_draw:
+                    # Offset only drawing verts
+                    offset_verts_draw = offset_vertices(circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                    batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts_draw})
+                    batches_to_draw.append((batch, color))
+
+        # --- Cylinder Example ---
         elif sdf_type_prop == "cylinder":
-            segments = 16; local_top_verts, local_bot_verts = create_unit_cylinder_cap_vertices(segments); world_top_verts = []; world_bot_verts = []
-            if local_top_verts:
-                # Initialize world_top_verts before the loop
-                world_top_verts = []
-                for v_local in local_top_verts: v4 = Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_top_verts.append(v_world_4d.xyz)
-                offset_top_verts = offset_vertices(world_top_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_top_verts}); batches_to_draw.append((batch, color))
-            if local_bot_verts:
-                 # Initialize world_bot_verts before the loop
-                world_bot_verts = []
-                for v_local in local_bot_verts: v4 = Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_bot_verts.append(v_world_4d.xyz)
-                offset_bot_verts = offset_vertices(world_bot_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_bot_verts}); batches_to_draw.append((batch, color))
-            if world_top_verts and world_bot_verts:
-                try: # Side lines
-                    world_x_axis = mat.col[0].xyz; world_y_axis = mat.col[1].xyz; world_z_axis = mat.col[2].xyz; world_location = mat.translation; world_radius = (world_x_axis.length + world_y_axis.length) * 0.25 # Avg Radius = Avg Scale * 0.5
-                    view_vec = (camera_location - world_location); z_axis_norm = world_z_axis.normalized(); view_vec_norm = view_vec.normalized(); side_vector = None
-                    if abs(z_axis_norm.dot(view_vec_norm)) > 0.999: side_vector = world_x_axis.normalized()
-                    else: side_vector = world_z_axis.cross(view_vec).normalized()
-                    center_top_world = world_location + world_z_axis * 0.5; center_bot_world = world_location - world_z_axis * 0.5
-                    side_offset = side_vector * world_radius
-                    side1_top = center_top_world + side_offset; side1_bot = center_bot_world + side_offset
-                    side2_top = center_top_world - side_offset; side2_bot = center_bot_world - side_offset
-                    side_lines_verts = [side1_top, side1_bot, side2_top, side2_bot]
-                    offset_side_verts = offset_vertices(side_lines_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINES', {"pos": offset_side_verts}); batches_to_draw.append((batch, color))
-                except Exception as e: print(f"FF Draw Error: Calculating Cyl Side Lines failed for {obj.name}: {e}")
+            primitive_type = 'LINES'
+            segments = 16
+            local_top_verts_raw, local_bot_verts_raw = create_unit_cylinder_cap_vertices(segments)
 
+            # Top Cap
+            world_top_outline = []
+            if local_top_verts_raw:
+                for v_local in local_top_verts_raw:
+                    v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                    v_world_4d = mat @ v4
+                    world_top_outline.append(v_world_4d.xyz.copy()) # Use copy
+
+            if world_top_outline:
+                top_circle_verts_draw = []
+                for i in range(len(world_top_outline)):
+                    v1 = world_top_outline[i] # Already copied
+                    v2 = world_top_outline[(i + 1) % len(world_top_outline)]
+                    top_circle_verts_draw.extend([v1, v2])
+                    line_segments_for_picking.append( (v1.copy(), v2.copy()) ) # Store copies
+                offset_top_verts = offset_vertices(top_circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                batch_top = batch_for_shader(shader, primitive_type, {"pos": offset_top_verts})
+                batches_to_draw.append((batch_top, color))
+
+            # Bottom Cap
+            world_bot_outline = []
+            if local_bot_verts_raw:
+                 for v_local in local_bot_verts_raw:
+                     v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                     v_world_4d = mat @ v4
+                     world_bot_outline.append(v_world_4d.xyz.copy())
+
+            if world_bot_outline:
+                bot_circle_verts_draw = []
+                for i in range(len(world_bot_outline)):
+                    v1 = world_bot_outline[i]
+                    v2 = world_bot_outline[(i + 1) % len(world_bot_outline)]
+                    bot_circle_verts_draw.extend([v1, v2])
+                    line_segments_for_picking.append( (v1.copy(), v2.copy()) )
+                offset_bot_verts = offset_vertices(bot_circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                batch_bot = batch_for_shader(shader, primitive_type, {"pos": offset_bot_verts})
+                batches_to_draw.append((batch_bot, color))
+
+            # Side Lines (Visible Silhouette Lines)
+            if world_top_outline and world_bot_outline:
+                try:
+                    # Use object's local Z axis transformed to world space
+                    world_z_axis = mat.col[2].xyz.normalized()
+                    # Simple silhouette approximation: find points furthest left/right from view
+                    view_dir_plane = (obj_location - camera_location)
+                    view_dir_plane.z = 0 # Project view direction onto XY plane (approximation)
+                    if view_dir_plane.length_squared < 1e-6: view_dir_plane = Vector((1,0,0))
+                    else: view_dir_plane.normalize()
+
+                    right_dir = world_z_axis.cross(view_dir_plane).normalized()
+
+                    # Find furthest points on top/bottom caps along 'right_dir'
+                    top_max_dot = -float('inf'); bot_max_dot = -float('inf')
+                    top_min_dot = float('inf'); bot_min_dot = float('inf')
+                    top_p_right = world_top_outline[0]; top_p_left = world_top_outline[0]
+                    bot_p_right = world_bot_outline[0]; bot_p_left = world_bot_outline[0]
+
+                    for i in range(len(world_top_outline)):
+                        dot_top = world_top_outline[i].dot(right_dir)
+                        dot_bot = world_bot_outline[i].dot(right_dir)
+                        if dot_top > top_max_dot: top_max_dot = dot_top; top_p_right = world_top_outline[i]
+                        if dot_top < top_min_dot: top_min_dot = dot_top; top_p_left = world_top_outline[i]
+                        if dot_bot > bot_max_dot: bot_max_dot = dot_bot; bot_p_right = world_bot_outline[i]
+                        if dot_bot < bot_min_dot: bot_min_dot = dot_bot; bot_p_left = world_bot_outline[i]
+
+                    # Define the two side silhouette lines
+                    side1_top = top_p_right; side1_bot = bot_p_right
+                    side2_top = top_p_left;  side2_bot = bot_p_left
+
+                    side_lines_verts_draw = [side1_top, side1_bot, side2_top, side2_bot]
+                    line_segments_for_picking.append( (side1_top.copy(), side1_bot.copy()) )
+                    line_segments_for_picking.append( (side2_top.copy(), side2_bot.copy()) )
+
+                    offset_side_verts = offset_vertices(side_lines_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                    batch_side = batch_for_shader(shader, primitive_type, {"pos": offset_side_verts})
+                    batches_to_draw.append((batch_side, color))
+                except Exception as e:
+                    print(f"FF Draw Error: Calculating Cyl Side Lines failed for {obj_name}: {e}")
+
+        # --- Cone Example ---
         elif sdf_type_prop == "cone":
-            segments = 16; local_radius = 0.5; local_height = 1.0; local_apex_z = local_height; local_base_z = 0.0; local_bot_verts = []
+            primitive_type = 'LINES'
+            segments = 16
+            # Unit cone: radius 0.5, height 1.0, base at z=0, apex at z=1.0
+            local_radius = 0.5
+            local_height = 1.0
+            local_apex_z = local_height # Apex at top of unit height
+            local_base_z = 0.0        # Base at origin
+
+            # Base circle
+            local_bot_verts_raw = []
             if segments >= 3:
-                for i in range(segments): angle = (i / segments) * 2 * math.pi; x = math.cos(angle) * local_radius; y = math.sin(angle) * local_radius; local_bot_verts.append( (x, y, local_base_z) )
-            world_bot_verts = [] # Initialize before loop
-            if local_bot_verts:
-                for v_local in local_bot_verts: v4 = Vector(v_local).to_4d(); v4.w = 1.0; v_world_4d = mat @ v4; world_bot_verts.append(v_world_4d.xyz)
-                offset_bot_verts = offset_vertices(world_bot_verts, camera_location, DEPTH_OFFSET_FACTOR); batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": offset_bot_verts}); batches_to_draw.append((batch, color))
-            local_apex = Vector((0.0, 0.0, local_apex_z)); apex4 = local_apex.to_4d(); apex4.w = 1.0; world_apex = (mat @ apex4).xyz
-            offset_apex = offset_vertices([world_apex], camera_location, DEPTH_OFFSET_FACTOR)[0]
-            if world_bot_verts:
-                try: # Side lines
-                    world_x_axis = mat.col[0].xyz; world_y_axis = mat.col[1].xyz; world_z_axis = mat.col[2].xyz; world_location = mat.translation; world_radius = (world_x_axis.length + world_y_axis.length) * 0.25 # Avg Radius = Avg Scale * 0.5
-                    center_bot_world = world_location # Base is at origin
-                    view_vec = (camera_location - world_location); z_axis_norm = world_z_axis.normalized(); view_vec_norm = view_vec.normalized(); side_vector = None
-                    if abs(z_axis_norm.dot(view_vec_norm)) > 0.999: side_vector = world_x_axis.normalized()
-                    else: side_vector = world_z_axis.cross(view_vec).normalized()
-                    side_offset = side_vector * world_radius
-                    side1_base = center_bot_world + side_offset; side2_base = center_bot_world - side_offset
-                    offset_side1_base = offset_vertices([side1_base], camera_location, DEPTH_OFFSET_FACTOR)[0]; offset_side2_base = offset_vertices([side2_base], camera_location, DEPTH_OFFSET_FACTOR)[0]
-                    side_lines_verts = [offset_apex, offset_side1_base, offset_apex, offset_side2_base]; batch = batch_for_shader(shader, 'LINES', {"pos": side_lines_verts}); batches_to_draw.append((batch, color))
-                except Exception as e: print(f"FF Draw Error: Calculating Cone Side Lines failed for {obj.name}: {e}")
+                for i in range(segments):
+                    angle = (i / segments) * 2 * math.pi
+                    x = math.cos(angle) * local_radius
+                    y = math.sin(angle) * local_radius
+                    local_bot_verts_raw.append((x, y, local_base_z))
 
+            world_bot_outline = []
+            if local_bot_verts_raw:
+                for v_local in local_bot_verts_raw:
+                    v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                    v_world_4d = mat @ v4
+                    world_bot_outline.append(v_world_4d.xyz.copy())
+
+            if world_bot_outline:
+                bot_circle_verts_draw = []
+                for i in range(len(world_bot_outline)):
+                    v1 = world_bot_outline[i]
+                    v2 = world_bot_outline[(i + 1) % len(world_bot_outline)]
+                    bot_circle_verts_draw.extend([v1, v2])
+                    line_segments_for_picking.append( (v1.copy(), v2.copy()) )
+                offset_bot_verts = offset_vertices(bot_circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                batch_bot = batch_for_shader(shader, primitive_type, {"pos": offset_bot_verts})
+                batches_to_draw.append((batch_bot, color))
+
+            # Apex
+            local_apex = Vector((0.0, 0.0, local_apex_z))
+            apex4 = local_apex.to_4d(); apex4.w = 1.0
+            world_apex = (mat @ apex4).xyz.copy()
+
+            # Side Lines (Silhouette)
+            if world_bot_outline:
+                try:
+                    # Simplified silhouette using points furthest L/R on base circle from view
+                    world_center_base = (mat @ Vector((0,0,local_base_z)).to_4d()).xyz # Base center in world
+                    view_dir_plane = (world_center_base - camera_location)
+                    view_dir_plane.z = 0 # Approx projection
+                    if view_dir_plane.length_squared < 1e-6: view_dir_plane = Vector((1,0,0))
+                    else: view_dir_plane.normalize()
+
+                    world_z_axis = mat.col[2].xyz.normalized()
+                    right_dir = world_z_axis.cross(view_dir_plane).normalized()
+
+                    bot_max_dot = -float('inf'); bot_min_dot = float('inf')
+                    bot_p_right = world_bot_outline[0]; bot_p_left = world_bot_outline[0]
+
+                    for v_base in world_bot_outline:
+                         dot_bot = v_base.dot(right_dir)
+                         if dot_bot > bot_max_dot: bot_max_dot = dot_bot; bot_p_right = v_base
+                         if dot_bot < bot_min_dot: bot_min_dot = dot_bot; bot_p_left = v_base
+
+                    # Define the two side silhouette lines connecting apex to base extremes
+                    side1_base = bot_p_right
+                    side2_base = bot_p_left
+
+                    side_lines_verts_draw = [world_apex, side1_base, world_apex, side2_base]
+                    line_segments_for_picking.append( (world_apex.copy(), side1_base.copy()) )
+                    line_segments_for_picking.append( (world_apex.copy(), side2_base.copy()) )
+
+                    offset_side_verts = offset_vertices(side_lines_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                    batch_side = batch_for_shader(shader, primitive_type, {"pos": offset_side_verts})
+                    batches_to_draw.append((batch_side, color))
+                except Exception as e:
+                    print(f"FF Draw Error: Calculating Cone Side Lines failed for {obj_name}: {e}")
+
+        # --- Rounded Box Example ---
         elif sdf_type_prop == "rounded_box":
-             primitive_type = 'LINE_LOOP'; corner_segments = 6
-             ui_radius = obj.get("sdf_round_radius", 0.1); internal_draw_radius = max(0.0, min(ui_radius * 0.5, 0.5))
-             local_x = Vector((1.0, 0.0, 0.0)); local_y = Vector((0.0, 1.0, 0.0)); local_z = Vector((0.0, 0.0, 1.0)); local_loops = []
-             local_loops.append( create_unit_rounded_rectangle_plane(local_x, local_y, internal_draw_radius, corner_segments) ) # XY
-             local_loops.append( create_unit_rounded_rectangle_plane(local_y, local_z, internal_draw_radius, corner_segments) ) # YZ
-             local_loops.append( create_unit_rounded_rectangle_plane(local_x, local_z, internal_draw_radius, corner_segments) ) # XZ
+            primitive_type = 'LINES'
+            corner_segments = 4 # Fewer segments for performance
+            ui_radius = obj.get("sdf_round_radius", 0.1)
+            # Internal radius for unit box (-0.5 to 0.5)
+            internal_draw_radius = max(0.0, min(ui_radius * 0.5, 0.5)) # Clamp radius between 0 and 0.5
 
-             # --- Transform and create batches ---
-             for local_verts in local_loops: # Process each loop (XY, YZ, XZ)
+            # Define local axes for creating planes
+            local_x = Vector((1.0, 0.0, 0.0))
+            local_y = Vector((0.0, 1.0, 0.0))
+            local_z = Vector((0.0, 0.0, 1.0))
+
+            # Create vertices for the 3 principal rounded rectangles in local space
+            local_loops = []
+             # XY plane at Z = +0.5 and Z = -0.5
+            verts_xy_pos = create_unit_rounded_rectangle_plane(local_x, local_y, internal_draw_radius, corner_segments)
+            verts_xy_neg = verts_xy_pos[:] # Copy structure
+            for i in range(len(verts_xy_pos)):
+                verts_xy_pos[i] = verts_xy_pos[i] + local_z * 0.5
+                verts_xy_neg[i] = verts_xy_neg[i] - local_z * 0.5
+            local_loops.append(verts_xy_pos)
+            local_loops.append(verts_xy_neg)
+
+            # YZ plane at X = +0.5 and X = -0.5
+            verts_yz_pos = create_unit_rounded_rectangle_plane(local_y, local_z, internal_draw_radius, corner_segments)
+            verts_yz_neg = verts_yz_pos[:]
+            for i in range(len(verts_yz_pos)):
+                verts_yz_pos[i] = verts_yz_pos[i] + local_x * 0.5
+                verts_yz_neg[i] = verts_yz_neg[i] - local_x * 0.5
+            # Don't add all loops directly, only draw necessary edges for cube outline
+
+            # XZ plane at Y = +0.5 and Y = -0.5
+            verts_xz_pos = create_unit_rounded_rectangle_plane(local_x, local_z, internal_draw_radius, corner_segments)
+            verts_xz_neg = verts_xz_pos[:]
+            for i in range(len(verts_xz_pos)):
+                 verts_xz_pos[i] = verts_xz_pos[i] + local_y * 0.5
+                 verts_xz_neg[i] = verts_xz_neg[i] - local_y * 0.5
+            # Don't add all loops directly
+
+            # --- Draw 12 edges connecting corners ---
+            # This is tricky with rounded corners. Let's draw the two main XY loops
+            # and connecting lines at the corners as an approximation.
+            loops_to_draw = [verts_xy_pos, verts_xy_neg]
+            for local_verts in loops_to_draw:
                  if not local_verts: continue
-
-                 world_verts = []
-
-                 # Transform this loop's unit vertices
-                 for v_local in local_verts: # v_local is already a Vector
+                 world_verts_loop = []
+                 for v_local in local_verts:
                      v4 = v_local.to_4d(); v4.w = 1.0
                      v_world_4d = mat @ v4
-                     world_verts.append(v_world_4d.xyz) # Append to the list for this loop
+                     world_verts_loop.append(v_world_4d.xyz.copy())
 
-                 if world_verts:
-                     # Offset Rounded Box Loop Vertices
-                     offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                     try: # Create batch for this specific loop
-                         batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts}) # Use offset
-                         batches_to_draw.append((batch, color))
-                     except Exception as e: print(f"FF Draw Error: RndBox loop batch failed for {obj.name}: {e}")
+                 if world_verts_loop:
+                    loop_verts_draw = []
+                    for i in range(len(world_verts_loop)):
+                        v1 = world_verts_loop[i]
+                        v2 = world_verts_loop[(i + 1) % len(world_verts_loop)]
+                        loop_verts_draw.extend([v1, v2])
+                        line_segments_for_picking.append((v1.copy(), v2.copy())) # Add loop segments
 
-        elif sdf_type_prop == "circle":
-            primitive_type = 'LINE_LOOP'; segments = 24
-            local_verts = create_unit_circle_vertices_xy(segments)
-            world_verts = [] # Initialize before loop
-            if local_verts:
-                 for v_local in local_verts:
-                     v_vec = Vector(v_local)
-                     v4 = v_vec.to_4d(); v4.w = 1.0
-                     v_world_4d = mat @ v4
-                     world_verts.append(v_world_4d.xyz)
-                 if world_verts:
-                     offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
+                    offset_verts = offset_vertices(loop_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                    batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts})
+                    batches_to_draw.append((batch, color))
+
+            # Draw connecting lines between the two loops at 4 "corners"
+            if verts_xy_pos and verts_xy_neg and len(verts_xy_pos) == len(verts_xy_neg):
+                 # Determine approximate corner indices based on segments
+                 num_verts_per_loop = len(verts_xy_pos)
+                 indices_per_corner = corner_segments + 1
+                 # Example indices (might need adjustment based on vertex order)
+                 corner_indices = [
+                     0, # Start of TR corner
+                     indices_per_corner, # Start of TL corner
+                     indices_per_corner * 2, # Start of BL corner
+                     indices_per_corner * 3, # Start of BR corner
+                 ]
+
+                 connecting_verts_draw = []
+                 for idx in corner_indices:
+                     idx = idx % num_verts_per_loop # Ensure index wraps around
+                     v_pos_local = verts_xy_pos[idx]
+                     v_neg_local = verts_xy_neg[idx]
+                     # Transform to world
+                     v_pos_world = (mat @ v_pos_local.to_4d()).xyz.copy()
+                     v_neg_world = (mat @ v_neg_local.to_4d()).xyz.copy()
+                     connecting_verts_draw.extend([v_pos_world, v_neg_world])
+                     line_segments_for_picking.append( (v_pos_world.copy(), v_neg_world.copy()) )
+
+                 if connecting_verts_draw:
+                     offset_verts = offset_vertices(connecting_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
                      batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts})
                      batches_to_draw.append((batch, color))
 
+        # --- Circle Example ---
+        elif sdf_type_prop == "circle":
+            primitive_type = 'LINES'
+            segments = 24
+            # Unit circle radius 0.5 in XY plane
+            local_verts_raw = create_unit_circle_vertices_xy(segments)
+            world_verts_outline = []
+            if local_verts_raw:
+                for v_local in local_verts_raw:
+                    v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                    v_world_4d = mat @ v4
+                    world_verts_outline.append(v_world_4d.xyz.copy())
+
+                if world_verts_outline:
+                    circle_verts_draw = []
+                    for i in range(len(world_verts_outline)):
+                        v1 = world_verts_outline[i]
+                        v2 = world_verts_outline[(i + 1) % len(world_verts_outline)]
+                        circle_verts_draw.extend([v1, v2])
+                        line_segments_for_picking.append((v1.copy(), v2.copy()))
+
+                    offset_verts_draw = offset_vertices(circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                    batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts_draw})
+                    batches_to_draw.append((batch, color))
+
+        # --- Ring Example ---
         elif sdf_type_prop == "ring":
-            primitive_type = 'LINE_LOOP'; segments = 24
+            primitive_type = 'LINES'
+            segments = 24
             unit_outer_r = 0.5
             unit_inner_r = obj.get("sdf_inner_radius", 0.25)
-            unit_inner_r = max(0.0, min(unit_inner_r, unit_outer_r - 1e-5)) # Clamp inner radius
+            unit_inner_r = max(0.0, min(unit_inner_r, unit_outer_r - 1e-5))
 
-            # Calculate world center and oriented axes based on matrix
-            world_center = mat.translation
-            # Get scaled axes which define orientation and scale
-            world_x_axis_scaled = mat.col[0].xyz
-            world_y_axis_scaled = mat.col[1].xyz
-            # Note: This assumes the XY plane of the empty defines the ring plane.
-            # We use the scaled axes vectors directly to define the circle plane.
+            # Create vertices for outer and inner circles in local XY plane
+            local_outer_verts_raw = create_unit_circle_vertices_xy(segments) # Radius 0.5
+            local_inner_verts_raw = []
+            if unit_inner_r > 1e-6 and segments >=3 :
+                 scale_factor = unit_inner_r / unit_outer_r
+                 for v in local_outer_verts_raw:
+                     local_inner_verts_raw.append( (v[0] * scale_factor, v[1] * scale_factor, 0.0) )
 
-            # We need the radius in world units along these potentially scaled axes
-            # Transform unit vectors along X and Y to find world radius vectors
-            world_outer_radius_vec_x = (mat @ Vector((unit_outer_r, 0, 0)).to_4d()).xyz - world_center
-            world_outer_radius_vec_y = (mat @ Vector((0, unit_outer_r, 0)).to_4d()).xyz - world_center
-            world_inner_radius_vec_x = (mat @ Vector((unit_inner_r, 0, 0)).to_4d()).xyz - world_center
-            world_inner_radius_vec_y = (mat @ Vector((0, unit_inner_r, 0)).to_4d()).xyz - world_center
-
-            # Average the lengths for potentially non-uniform scaling cases (approximation)
-            world_outer_r = (world_outer_radius_vec_x.length + world_outer_radius_vec_y.length) / 2.0
-            world_inner_r = (world_inner_radius_vec_x.length + world_inner_radius_vec_y.length) / 2.0
-
-            # Use the scaled matrix axes directions for drawing the circles
-            draw_right = world_x_axis_scaled.normalized()
-            draw_up = world_y_axis_scaled.normalized()
-            # Simple check for collinearity (should be rare with standard transforms)
-            if draw_right.cross(draw_up).length_squared < 1e-6:
-                 # Fallback if axes are collinear (e.g., scale Z to 0) - use world XY
-                 draw_right = Vector((1.0,0.0,0.0))
-                 draw_up = Vector((0.0,1.0,0.0))
-
-
-            # Generate world vertices directly using the calculated world radii and axes
-            outer_verts = create_circle_vertices(world_center, draw_right, draw_up, world_outer_r, segments)
-            inner_verts = create_circle_vertices(world_center, draw_right, draw_up, world_inner_r, segments)
-
-            # Create batches if vertices were generated
-            if outer_verts:
-                offset_outer = offset_vertices(outer_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                try:
+            # Transform outer circle
+            world_outer_outline = []
+            if local_outer_verts_raw:
+                for v_local in local_outer_verts_raw:
+                    v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                    v_world_4d = mat @ v4
+                    world_outer_outline.append(v_world_4d.xyz.copy())
+                if world_outer_outline:
+                    outer_circle_verts_draw = []
+                    for i in range(len(world_outer_outline)):
+                        v1 = world_outer_outline[i]
+                        v2 = world_outer_outline[(i + 1) % len(world_outer_outline)]
+                        outer_circle_verts_draw.extend([v1, v2])
+                        line_segments_for_picking.append((v1.copy(), v2.copy()))
+                    offset_outer = offset_vertices(outer_circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
                     batch_outer = batch_for_shader(shader, primitive_type, {"pos": offset_outer})
                     batches_to_draw.append((batch_outer, color))
-                except Exception as e: print(f"FF Draw Error: Ring Outer batch failed for {obj.name}: {e}")
-            if inner_verts:
-                offset_inner = offset_vertices(inner_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                try:
+
+            # Transform inner circle
+            world_inner_outline = []
+            if local_inner_verts_raw:
+                for v_local in local_inner_verts_raw:
+                    v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                    v_world_4d = mat @ v4
+                    world_inner_outline.append(v_world_4d.xyz.copy())
+                if world_inner_outline:
+                    inner_circle_verts_draw = []
+                    for i in range(len(world_inner_outline)):
+                        v1 = world_inner_outline[i]
+                        v2 = world_inner_outline[(i + 1) % len(world_inner_outline)]
+                        inner_circle_verts_draw.extend([v1, v2])
+                        line_segments_for_picking.append((v1.copy(), v2.copy()))
+                    offset_inner = offset_vertices(inner_circle_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
                     batch_inner = batch_for_shader(shader, primitive_type, {"pos": offset_inner})
                     batches_to_draw.append((batch_inner, color))
-                except Exception as e: print(f"FF Draw Error: Ring Inner batch failed for {obj.name}: {e}")
 
+        # --- Polygon Example ---
         elif sdf_type_prop == "polygon":
-            primitive_type = 'LINE_LOOP'
+            primitive_type = 'LINES'
             sides = obj.get("sdf_sides", 6)
-            sides = max(3, sides) # Ensure at least 3 sides
+            sides = max(3, sides)
+            # Unit polygon inscribed in radius 0.5 circle in XY plane
+            local_verts_raw = create_unit_polygon_vertices_xy(sides)
+            world_verts_outline = []
+            if local_verts_raw:
+                for v_local in local_verts_raw:
+                    v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                    v_world_4d = mat @ v4
+                    world_verts_outline.append(v_world_4d.xyz.copy())
 
-            # Generate local UNIT polygon vertices (radius 0.5 in XY plane)
-            local_verts = create_unit_polygon_vertices_xy(sides) # Use the new helper
-            world_verts = [] # Initialize before loop
+                if world_verts_outline:
+                    poly_verts_draw = []
+                    for i in range(len(world_verts_outline)):
+                        v1 = world_verts_outline[i]
+                        v2 = world_verts_outline[(i + 1) % len(world_verts_outline)]
+                        poly_verts_draw.extend([v1, v2])
+                        line_segments_for_picking.append((v1.copy(), v2.copy()))
 
-            if local_verts:
-                 # Transform local vertices to world space
-                 for v_local in local_verts:
-                     v_vec = Vector(v_local)
-                     v4 = v_vec.to_4d(); v4.w = 1.0
-                     v_world_4d = mat @ v4 # Apply object's world matrix
-                     world_verts.append(v_world_4d.xyz)
+                    offset_verts_draw = offset_vertices(poly_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                    batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts_draw})
+                    batches_to_draw.append((batch, color))
 
-                 if world_verts:
-                     # Offset vertices towards camera
-                     offset_verts = offset_vertices(world_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                     # Create batch
-                     try:
-                         batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts})
-                         batches_to_draw.append((batch, color))
-                     except Exception as e: print(f"FF Draw Error: Polygon batch failed for {obj.name}: {e}")
-
+        # --- Half Space Example ---
         elif sdf_type_prop == "half_space":
-            plane_vis_size = 4.0 # Size of the visualization square
-            normal_vis_length = 0.5 # Length of the normal vector visualization
+            primitive_type = 'LINES'
+            plane_vis_size = 2.0 # Make visual smaller relative to other shapes maybe
+            normal_vis_length = 0.5
+            world_center = mat.translation
+            # Get axes directly from matrix columns
+            world_x_axis = mat.col[0].xyz
+            world_y_axis = mat.col[1].xyz
+            world_z_axis = mat.col[2].xyz
 
-            # Get transform components
-            world_center = mat.translation # Point on the plane
-            world_x_axis = mat.col[0].xyz.normalized() # Plane's X direction
-            world_y_axis = mat.col[1].xyz.normalized() # Plane's Y direction
-            world_z_axis = mat.col[2].xyz.normalized() # Plane's normal direction
+            # Create rectangle vertices using scaled axes for size
+            plane_verts = create_rectangle_vertices(world_center, world_x_axis.normalized(), world_y_axis.normalized(), plane_vis_size, plane_vis_size)
 
-            # 1. Draw Plane Representation (a large square)
-            primitive_type_plane = 'LINE_LOOP'
-            # Use create_rectangle_vertices helper
-            plane_verts = create_rectangle_vertices(world_center, world_x_axis, world_y_axis, plane_vis_size, plane_vis_size)
             if plane_verts:
-                offset_plane_verts = offset_vertices(plane_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                try:
-                    batch_plane = batch_for_shader(shader, primitive_type_plane, {"pos": offset_plane_verts})
-                    batches_to_draw.append((batch_plane, color))
-                except Exception as e: print(f"FF Draw Error: HalfSpace Plane batch failed for {obj.name}: {e}")
+                plane_loop_verts_draw = []
+                for i in range(len(plane_verts)):
+                    v1 = plane_verts[i]
+                    v2 = plane_verts[(i + 1) % len(plane_verts)]
+                    plane_loop_verts_draw.extend([v1, v2])
+                    line_segments_for_picking.append((v1.copy(), v2.copy()))
 
-            # 2. Draw Normal Vector
-            primitive_type_normal = 'LINES'
+                offset_plane_verts = offset_vertices(plane_loop_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                batch_plane = batch_for_shader(shader, primitive_type, {"pos": offset_plane_verts})
+                batches_to_draw.append((batch_plane, color))
+
+            # Normal vector line + arrow head
             normal_start = world_center
-            normal_end = world_center + world_z_axis * normal_vis_length
-            # Draw arrow head lines (simple triangle)
+            normal_end = world_center + world_z_axis.normalized() * normal_vis_length
             arrow_size = normal_vis_length * 0.2
-            arrow_base = normal_end - world_z_axis * arrow_size # Move back along normal
-            arrow_p1 = arrow_base + world_x_axis * arrow_size * 0.5 # Offset along plane X
-            arrow_p2 = arrow_base - world_x_axis * arrow_size * 0.5 # Offset along plane X
-            arrow_p3 = arrow_base + world_y_axis * arrow_size * 0.5 # Offset along plane Y
-            arrow_p4 = arrow_base - world_y_axis * arrow_size * 0.5 # Offset along plane Y
+            arrow_base = normal_end - world_z_axis.normalized() * arrow_size
+            # Arrow wings based on world X/Y axes ortho to normal Z
+            arrow_p1 = arrow_base + world_x_axis.normalized() * arrow_size * 0.5
+            arrow_p2 = arrow_base - world_x_axis.normalized() * arrow_size * 0.5
+            arrow_p3 = arrow_base + world_y_axis.normalized() * arrow_size * 0.5
+            arrow_p4 = arrow_base - world_y_axis.normalized() * arrow_size * 0.5
 
-            normal_verts = [
-                normal_start, normal_end, # Main shaft
-                normal_end, arrow_p1,     # Arrow head lines
+            normal_verts_draw = [
+                normal_start, normal_end,
+                normal_end, arrow_p1,
                 normal_end, arrow_p2,
                 normal_end, arrow_p3,
                 normal_end, arrow_p4
             ]
-            if normal_verts:
-                offset_normal_verts = offset_vertices(normal_verts, camera_location, DEPTH_OFFSET_FACTOR)
-                try:
-                    batch_normal = batch_for_shader(shader, primitive_type_normal, {"pos": offset_normal_verts})
-                    # Use a slightly different color for the normal? Maybe brighter?
-                    normal_color = (color[0]*1.2, color[1]*1.2, color[2]*1.2, color[3])
-                    batches_to_draw.append((batch_normal, normal_color))
-                except Exception as e: print(f"FF Draw Error: HalfSpace Normal batch failed for {obj.name}: {e}")
+            # Add normal line and arrow lines for picking
+            line_segments_for_picking.append( (normal_start.copy(), normal_end.copy()) )
+            line_segments_for_picking.append( (normal_end.copy(), arrow_p1.copy()) )
+            line_segments_for_picking.append( (normal_end.copy(), arrow_p2.copy()) )
+            line_segments_for_picking.append( (normal_end.copy(), arrow_p3.copy()) )
+            line_segments_for_picking.append( (normal_end.copy(), arrow_p4.copy()) )
 
+
+            offset_normal_verts = offset_vertices(normal_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+            batch_normal = batch_for_shader(shader, primitive_type, {"pos": offset_normal_verts})
+            # Slightly different color for normal?
+            normal_color = (color[0]*0.8, color[1]*1.2, color[2]*1.2, color[3])
+            batches_to_draw.append((batch_normal, normal_color))
+
+        # --- Torus Example (Placeholder - Requires more complex geometry) ---
+        elif sdf_type_prop == "torus":
+             # Torus drawing is complex. For now, maybe draw just the main loop?
+             primitive_type = 'LINES'
+             segments = 24
+             unit_major_r = obj.get("sdf_torus_major_radius", 0.35)
+             # unit_minor_r = obj.get("sdf_torus_minor_radius", 0.15) # Minor needed for full visual
+
+             local_main_loop_verts_raw = []
+             for i in range(segments):
+                 angle = (i / segments) * 2 * math.pi
+                 local_main_loop_verts_raw.append( (math.cos(angle) * unit_major_r, math.sin(angle) * unit_major_r, 0.0) )
+
+             world_main_loop_outline = []
+             if local_main_loop_verts_raw:
+                 for v_local in local_main_loop_verts_raw:
+                     v4 = Vector(v_local).to_4d(); v4.w = 1.0
+                     v_world_4d = mat @ v4
+                     world_main_loop_outline.append(v_world_4d.xyz.copy())
+
+                 if world_main_loop_outline:
+                     loop_verts_draw = []
+                     for i in range(len(world_main_loop_outline)):
+                         v1 = world_main_loop_outline[i]
+                         v2 = world_main_loop_outline[(i + 1) % len(world_main_loop_outline)]
+                         loop_verts_draw.extend([v1, v2])
+                         line_segments_for_picking.append((v1.copy(), v2.copy()))
+
+                     offset_verts_draw = offset_vertices(loop_verts_draw, camera_location, DEPTH_OFFSET_FACTOR)
+                     batch = batch_for_shader(shader, primitive_type, {"pos": offset_verts_draw})
+                     batches_to_draw.append((batch, color))
+             # TODO: Add minor radius loops for better torus representation
+
+
+        # --- Store collected line segments for this object ---
+        if line_segments_for_picking:
+            _draw_line_data[obj_name] = line_segments_for_picking
+            # print(f"DRAW DBG: Stored {len(line_segments_for_picking)} segments for {obj_name}") # DEBUG
+
+        # --- Draw the batches for the object ---
         for batch, batch_color in batches_to_draw:
             try:
                 shader.uniform_float("color", batch_color)
                 batch.draw(shader)
             except Exception as e:
-                 print(f"FieldForge Draw Error: Final Batch Draw failed for {obj.name} ({sdf_type_prop}): {e}")
+                print(f"FieldForge Draw Error: Final Batch Draw failed for {obj_name} ({sdf_type_prop}): {e}")
 
-    # --- Restore GPU State ---
+    # --- Restore GPU state ---
     gpu.state.line_width_set(old_line_width)
     gpu.state.blend_set(old_blend)
     gpu.state.depth_test_set(old_depth_test)
@@ -2715,7 +3422,7 @@ def tag_redraw_all_view3d():
                     area.tag_redraw()
     except Exception as e:
         # Can sometimes fail during startup/shutdown
-        # print(f"FieldForge WARN: Error tagging redraw: {e}")
+        print(f"FieldForge WARN: Error tagging redraw: {e}")
         pass
 
 # --- Initial Update Check on Load/Register ---
@@ -2768,6 +3475,7 @@ classes = (
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,
     OBJECT_OT_sdf_manual_update,
+    VIEW3D_OT_fieldforge_select_handler,
     # Panels
     VIEW3D_PT_fieldforge_main,
     # Menus
@@ -2780,7 +3488,7 @@ _handler_ref = None
 
 def register():
     """Registers all addon classes, handlers, and menu items."""
-    global _handler_ref, _draw_handle # <<< Include draw handle
+    global _handler_ref, _draw_handle, _selection_handler_running # Include draw handle and flag
     # Clear global state dictionaries on registration to ensure clean start
     global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times, _sdf_update_caches
     _debounce_timers.clear()
@@ -2788,18 +3496,25 @@ def register():
     _updates_pending.clear()
     _last_update_finish_times.clear()
     _sdf_update_caches.clear()
+    _selection_handler_running = False # Ensure flag is reset
 
     # Ensure libfive path is added (might be redundant if run via __main__, but safe)
     if libfive_python_dir not in sys.path: sys.path.append(libfive_python_dir)
 
-    # Register classes
+    select_handler_registered = False
     for cls in classes:
         try:
             bpy.utils.register_class(cls)
+            if cls == VIEW3D_OT_fieldforge_select_handler:
+                select_handler_registered = True
         except ValueError:
-            pass # Class already registered, ignore
+            if cls == VIEW3D_OT_fieldforge_select_handler:
+                 select_handler_registered = True # Already registered is ok
+            pass
         except Exception as e:
             print(f"FieldForge: Failed to register class {cls.__name__}: {e}")
+            if cls == VIEW3D_OT_fieldforge_select_handler:
+                select_handler_registered = False
 
     # Add menu item
     try:
@@ -2810,90 +3525,150 @@ def register():
     # Register depsgraph handler only if libfive is available
     if libfive_available:
         handler_list = bpy.app.handlers.depsgraph_update_post
-        # Prevent duplicate handlers
         if ff_depsgraph_handler not in handler_list:
             handler_list.append(ff_depsgraph_handler)
-        # Store reference for unregistration
         _handler_ref = ff_depsgraph_handler
-
         # Trigger initial check for existing bounds objects after registration is complete
-        bpy.app.timers.register(initial_update_check_all, first_interval=1.0)
+        bpy.app.timers.register(initial_update_check_all, first_interval=1.0) # Keep this longer delay
 
-    # --- NEW: Register Draw Handler ---
+    # Register Draw Handler
     if _draw_handle is None:
         try:
             _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
-                ff_draw_callback, # The function object
-                (),               # Empty tuple for args
-                'WINDOW', 'POST_VIEW'
+                ff_draw_callback, (), 'WINDOW', 'POST_VIEW'
             )
             print("FieldForge: Custom Draw Handler Registered.")
         except Exception as e:
             print(f"FieldForge ERROR: Failed to register draw handler: {e}")
-        # --- End: Register Draw Handler ---
 
-    print(f"FieldForge: Registered. (libfive available: {libfive_available})")
+    # --- Start the modal selection handler ---
+    # Use a timer, but check if registration was successful first
+    if libfive_available and select_handler_registered and not _selection_handler_running:
+        def start_select_handler(max_attempts=5, interval=0.2):
+            current_attempt = 0
+            def attempt_invoke():
+                nonlocal current_attempt
+                current_attempt += 1
+                print(f"START HANDLER DBG: Attempt {current_attempt}/{max_attempts}...") # DEBUG
+
+                op_type = getattr(bpy.types, "VIEW3D_OT_fieldforge_select_handler", None)
+                if not op_type:
+                    print("  START HANDLER DBG: Operator TYPE not found.") # DEBUG
+                    if current_attempt < max_attempts: return interval
+                    else: print("FF Start Handler Failed: Type not found."); return None
+
+                if not hasattr(bpy.ops.view3d, 'fieldforge_select_handler'):
+                     print("  START HANDLER DBG: Operator ID not found.") # DEBUG
+                     if current_attempt < max_attempts: return interval
+                     else: print("FF Start Handler Failed: ID not found."); return None
+
+                if _selection_handler_running:
+                     print("  START HANDLER DBG: Already running flag.") # DEBUG
+                     return None
+
+                try:
+                    print("  START HANDLER DBG: Attempting invoke...") # DEBUG
+                    bpy.ops.view3d.fieldforge_select_handler('INVOKE_DEFAULT')
+                    # if _selection_handler_running:
+                    #     print("  START HANDLER DBG: Invoke finished, flag TRUE.") # DEBUG
+                    # else:
+                    #     print("  START HANDLER DBG: Invoke finished, flag FALSE (Invoke failed?).") # DEBUG
+                except Exception as e:
+                     print(f"  START HANDLER DBG: ERROR during bpy.ops call: {e}")
+                     import traceback
+                     traceback.print_exc()
+                return None # Stop timer
+
+            bpy.app.timers.register(attempt_invoke, first_interval=interval)
+        start_select_handler()
+    elif not select_handler_registered:
+         print("FieldForge WARN: Selection handler class failed to register.")
+
+    print(f"FieldForge: Registered. (libfive available: {libfive_available})") # DEBUG
     tag_redraw_all_view3d()
 
 
 def unregister():
     """Unregisters all addon classes, handlers, and menu items."""
-    global _handler_ref, _draw_handle # <<< Include draw handle
+    # Access global variables needed within the function
+    global _handler_ref, _draw_handle, _draw_line_data
+    global _debounce_timers # Need this for clearing
+    global _last_trigger_states, _updates_pending, _last_update_finish_times, _sdf_update_caches
+    global _selection_handler_running # <<< Make sure it's global here
 
-    # --- NEW: Unregister Draw Handler ---
+    print("FieldForge: Starting Unregister...") # <<< Add entry print
+
+    # --- 1. Unregister Draw Handler ---
     if _draw_handle is not None:
         try:
             bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, 'WINDOW')
-            print("FieldForge: Custom Draw Handler Unregistered.")
-        except ValueError:
-             pass # Ignore error if already removed
-        except Exception as e:
-             print(f"FieldForge WARN: Error removing draw handler: {e}")
+            print("FieldForge: Custom Draw Handler Unregistered.") # DEBUG
+        except ValueError: pass
+        except Exception as e: print(f"FieldForge WARN: Error removing draw handler: {e}")
         _draw_handle = None
-    # --- End: Unregister Draw Handler ---
 
-    # Unregister depsgraph handler
+    # --- 2. Unregister Depsgraph Handler ---
     if _handler_ref:
         handler_list = bpy.app.handlers.depsgraph_update_post
         if _handler_ref in handler_list:
             try:
                 handler_list.remove(_handler_ref)
+                print("FieldForge: Depsgraph handler removed.")
             except ValueError:
-                pass # Handler already removed
+                print("FieldForge: Depsgraph handler already removed?")
             except Exception as e:
                 print(f"FieldForge WARN: Error removing depsgraph handler: {e}")
-        _handler_ref = None
+        _handler_ref = None # <<< Ensure handle is None after removal attempt
 
-    # Remove menu item
+    # --- 3. Remove Menu Item ---
     try:
-        bpy.types.VIEW3D_MT_add.remove(menu_func)
-    except Exception:
-        pass # Menu item might already be removed
+        # Check if it exists before removing
+        if menu_func in bpy.types.VIEW3D_MT_add.draw_funcs:
+             bpy.types.VIEW3D_MT_add.remove(menu_func)
+             print("FieldForge: Menu item removed.")
+    except Exception as e:
+         print(f"FieldForge WARN: Error removing menu item: {e}")
 
-    # Cancel all active timers managed by the addon
-    global _debounce_timers
-    if bpy.app.timers: # Check if timers system is still available (might not be during shutdown)
-        for bounds_name in list(_debounce_timers.keys()): # Iterate over a copy of keys
-             cancel_debounce_timer(bounds_name)
-    _debounce_timers.clear() # Clear the dictionary itself
 
-    # Clear other global state dictionaries
+    # --- 4. Cancel Timers ---
+    if bpy.app.timers: # Check if timers system is still available
+        timer_count = len(_debounce_timers)
+        if timer_count > 0:
+            print(f"FieldForge: Cancelling {timer_count} debounce timers...")
+            for bounds_name in list(_debounce_timers.keys()): # Iterate over a copy of keys
+                 cancel_debounce_timer(bounds_name) # This function handles unregistering
+        _debounce_timers.clear()
+    else:
+        print("FieldForge WARN: Timers system not available during unregister.")
+
+
+    # --- 5. Clear Global State ---
     _last_trigger_states.clear()
     _updates_pending.clear()
     _last_update_finish_times.clear()
     _sdf_update_caches.clear()
+    _draw_line_data.clear()
+    print("FieldForge: Cleared global state dictionaries.")
 
-    # Unregister classes in reverse order
+    # --- >>> 6. Explicitly Reset Modal Flag <<< ---
+    if _selection_handler_running:
+        print("UNREGISTER DBG: Setting selection handler flag to FALSE.") # DEBUG
+        _selection_handler_running = False
+    print(f"UNREGISTER DBG: _selection_handler_running explicitly set to: {_selection_handler_running}")
+
+    # --- 7. Unregister Classes ---
+    print(f"FieldForge: Unregistering {len(classes)} classes...")
     for cls in reversed(classes):
         try:
             bpy.utils.unregister_class(cls)
         except (RuntimeError, ValueError):
-            pass # Class might already be unregistered or Blender is shutting down
+            # Class might already be unregistered or Blender is shutting down
+            pass
         except Exception as e:
             print(f"FieldForge: Failed to unregister class {cls.__name__}: {e}")
 
     print("FieldForge: Unregistered.")
-    tag_redraw_all_view3d() # Force redraw after unregistration
+    tag_redraw_all_view3d()
 
 
 # --- Main Execution Block (for direct script execution or reload) ---
