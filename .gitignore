@@ -5,3 +5,10 @@ __pycache__/
 
 # Dont include precompiled libfive binaries until there are working and tested binaries
 libfive/
+
+# Blender backup files
+*.blend1
+*.blend2
+
+# Graphic project related files
+Screenshot.xcf
