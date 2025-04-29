@@ -521,10 +521,14 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
                     return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
-            # --- Handle ESC ---
-            elif event.type == 'ESC' and event.value == 'PRESS':
-                if self.is_button_down: self.reset_drag_state()
-                return self.cancel_modal(context)
+            elif event.type in {'DEL', 'X', 'ESC'} and event.value == 'PRESS':
+                if self.is_manually_grabbing:
+                    if self.initial_world_matrix and self.target_obj_on_press:
+                        try: self.target_obj_on_press.matrix_world = self.initial_world_matrix
+                        except ReferenceError: pass
+                    self.reset_drag_state()
+                    tag_redraw_all_view3d()
+                return {'PASS_THROUGH'}
 
             # --- Pass through other events ---
             return {'PASS_THROUGH'}
