@@ -1,0 +1,7 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Dont include precompiled libfive binaries until there are working and tested binaries
+libfive/
