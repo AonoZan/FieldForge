@@ -221,6 +221,10 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         if utils.is_valid_2d_loft_source(obj):
             for child in obj.children:
                 if child.name in processed_children: continue
+                # Make sure child exists and is visible before considering for loft
+                actual_child = bpy.context.scene.objects.get(child.name)
+                if not actual_child or not actual_child.visible_get(view_layer=bpy.context.view_layer): continue
+
                 if utils.is_valid_2d_loft_source(child) and child.get("sdf_use_loft", False):
                     loft_child_found = child; break # Process only the first
 
@@ -229,7 +233,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                 try:
                     shape_a = reconstruct_shape(obj)
                     shape_b = reconstruct_shape(loft_child_found)
-                    if shape_a and shape_b and shape_a != lf.emptiness() and shape_b != lf.emptiness():
+                    if shape_a is not None and shape_b is not None and \
+                       shape_a is not lf.emptiness() and shape_b is not lf.emptiness():
                         zmin = 0.0 # Parent's local Z
                         zmax = loft_child_found.location.z # Child's local Z relative to parent
                         if abs(zmax - zmin) < 1e-5: zmax = zmin + 1e-5 # Ensure non-zero height
@@ -239,45 +244,48 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                         processed_children.add(loft_child_found.name) # Mark child as handled
                     else:
                         print(f"FieldForge WARN (process_hierarchy): Loft failed - could not reconstruct base shapes for {obj_name} or {loft_child_found.name}. Using parent shape.")
-                        current_shape = reconstruct_shape(obj) or lf.emptiness() # Fallback
+                        reconstructed_fallback = reconstruct_shape(obj)
+                        if reconstructed_fallback is not None and reconstructed_fallback is not lf.emptiness():
+                            current_shape = reconstructed_fallback
+                        else:
+                            current_shape = lf.emptiness()
                 except Exception as e:
                     print(f"FieldForge ERROR (process_hierarchy): Loft failed between {obj_name} and {loft_child_found.name}: {e}")
-                    current_shape = reconstruct_shape(obj) or lf.emptiness() # Fallback
+                    reconstructed_fallback = reconstruct_shape(obj)
+                    if reconstructed_fallback is not None and reconstructed_fallback is not lf.emptiness():
+                         current_shape = reconstructed_fallback
+                    else:
+                         current_shape = lf.emptiness()
                     if loft_child_found: processed_children.add(loft_child_found.name)
 
         # --- Stage 1b: If NOT lofting, get base shape and maybe extrude ---
         if loft_child_found is None:
             reconstructed = reconstruct_shape(obj)
-            # Check if reconstruct failed (returned None) or returned the specific emptiness object
             if reconstructed is None or reconstructed is lf.emptiness():
-                current_shape = lf.emptiness() # Assign emptiness explicitly
+                current_shape = lf.emptiness()
             else:
-                current_shape = reconstructed # Use the valid shape returned
-            if current_shape is not lf.emptiness(): 
+                current_shape = reconstructed
                 sdf_type = obj.get("sdf_type", "")
                 if sdf_type in {"circle", "ring", "polygon"}: # Check if it's a 2D type
                     try:
                         depth = obj.get("sdf_extrusion_depth", 0.1); safe_depth = max(1e-6, depth)
                         zmin_ex = -safe_depth / 2.0; zmax_ex = safe_depth / 2.0
                         current_shape = lf.extrude_z(current_shape, zmin_ex, zmax_ex)
-                        # print(f"  DEBUG: Extruded {obj_name} ({sdf_type}) by {safe_depth:.3f}") # DEBUG
                     except Exception as e: print(f"FieldForge ERROR (process_hierarchy): Extruding {obj_name} failed: {e}"); current_shape = lf.emptiness()
 
         # --- Stage 2: Apply Shell (to lofted or extruded/base shape) ---
-        if obj.get("sdf_use_shell", False) and current_shape != lf.emptiness():
+        if obj.get("sdf_use_shell", False) and current_shape is not None and current_shape is not lf.emptiness():
             try:
                 offset = obj.get("sdf_shell_offset", 0.1); safe_offset = float(offset)
-                if abs(safe_offset) > 1e-6: # Only apply if offset is non-zero
+                if abs(safe_offset) > 1e-6:
                      # print(f"  DEBUG: Shelling {obj_name} by {safe_offset:.3f}") # DEBUG
                      current_shape = lf.shell(current_shape, safe_offset)
             except Exception as e: print(f"FieldForge ERROR (process_hierarchy): Shelling {obj_name} failed: {e}"); current_shape = lf.emptiness()
 
         # --- Stage 3: Apply Array ---
-        if current_shape is not lf.emptiness(): 
+        if current_shape is not None and current_shape is not lf.emptiness():
             main_mode = obj.get("sdf_main_array_mode", 'NONE')
             if main_mode != 'NONE':
-                 # (Array logic - same as in original __init__)
-                 # ... calculate array_func, args based on main_mode and active axes/counts ...
                  active_x = obj.get("sdf_array_active_x", False); active_y = obj.get("sdf_array_active_y", False); active_z = obj.get("sdf_array_active_z", False)
                  array_func = None; args = None; array_type_str = "None"
                  if main_mode == 'LINEAR':
@@ -301,7 +309,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
 
         # --- Stage 4: Apply Transform ---
         # Transform the final shape resulting from previous stages
-        if current_shape is not lf.emptiness(): 
+        # Added checks for None and emptiness before transforming
+        if current_shape is not None and current_shape is not lf.emptiness():
             try:
                 # Use evaluated matrix for world transform
                 obj_matrix_inv = obj.matrix_world.inverted()
@@ -318,6 +327,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
 
     # --- Stage 5: Combine with Remaining (Non-Lofted, Visible) Children ---
     shape_so_far = processed_shape_for_this_obj # Start with this object's transformed shape
+    # Make sure shape_so_far is not None before proceeding with children
+    if shape_so_far is None: shape_so_far = lf.emptiness()
 
     # Determine blend factor for combining children TO this obj
     interaction_blend_factor = 0.0
@@ -331,48 +342,47 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
     for child in obj.children:
         # Skip children already handled by loft
         if child.name in processed_children:
-            # print(f"  DEBUG: Skipping already lofted child: {child.name}") # DEBUG
             continue
 
-        # --- >>> NEW: Check child visibility here <<< ---
-        # Recursively process only if child is visible in the viewport
-        if child.visible_get(view_layer=bpy.context.view_layer):
-            # print(f"  DEBUG: Processing Child: {child.name} of {obj_name}") # DEBUG
-            child_processed_shape = process_sdf_hierarchy(child, settings) # Pass settings down
+        # Check child visibility and existence
+        actual_child = bpy.context.scene.objects.get(child.name)
+        if not actual_child or not actual_child.visible_get(view_layer=bpy.context.view_layer):
+            continue # Skip non-existent or hidden children
 
-            # Combine using standard interaction modes if child shape is valid
-            if child_processed_shape is not None and child_processed_shape is not lf.emptiness():
-                # Get interaction modes from the child object
-                use_morph_on_child = child.get("sdf_use_morph", False)
-                use_clearance_on_child = child.get("sdf_use_clearance", False)
-                is_child_negative = child.get("sdf_is_negative", False)
+        # print(f"  DEBUG: Processing Child: {child.name} of {obj_name}") # DEBUG
+        child_processed_shape = process_sdf_hierarchy(child, settings) # Pass settings down
 
-                # Priority: Morph > Clearance > Negative > Additive
-                try:
-                    if use_morph_on_child:
-                        factor = child.get("sdf_morph_factor", 0.5); safe_factor = max(0.0, min(1.0, float(factor)))
-                        shape_so_far = lf.morph(shape_so_far, child_processed_shape, safe_factor)
-                    elif use_clearance_on_child:
-                        offset_val = child.get("sdf_clearance_offset", 0.05); keep_original = child.get("sdf_clearance_keep_original", True)
-                        safe_offset = max(0.0, float(offset_val))
-                        offset_child_shape = lf.offset(child_processed_shape, safe_offset)
-                        shape_after_cut = lf.difference(shape_so_far, offset_child_shape)
-                        if keep_original: # Combine cut result with original child shape
-                            shape_so_far = combine_shapes(shape_after_cut, child_processed_shape, interaction_blend_factor)
-                        else: # Only keep the cut result
-                            shape_so_far = shape_after_cut
-                    elif is_child_negative: # Subtractive
-                         safe_blend = max(0.0, interaction_blend_factor)
-                         if safe_blend <= constants.CACHE_PRECISION: shape_so_far = lf.difference(shape_so_far, child_processed_shape)
-                         else: clamped_blend = min(1.0, safe_blend); shape_so_far = lf.blend_difference(shape_so_far, child_processed_shape, clamped_blend)
-                    else: # Additive mode (Union or Blend)
-                        shape_so_far = combine_shapes(shape_so_far, child_processed_shape, interaction_blend_factor)
-                except Exception as e_combine:
-                     print(f"FieldForge ERROR (process_hierarchy): Failed combining child {child.name} to {obj.name}: {e_combine}")
-                     # Decide error strategy: skip child, return emptiness? Skipping child seems safer.
-                     continue # Skip to next child on combination error
-            # else: print(f"  DEBUG: Child {child.name} result was empty/None, skipping combination.") # DEBUG
-        # else: print(f"  DEBUG: Skipping hidden child: {child.name}") # DEBUG
+        # Combine using standard interaction modes if child shape is valid (not None AND not empty)
+        if child_processed_shape is not None and child_processed_shape is not lf.emptiness():
+            # Get interaction modes from the child object
+            use_morph_on_child = child.get("sdf_use_morph", False)
+            use_clearance_on_child = child.get("sdf_use_clearance", False)
+            is_child_negative = child.get("sdf_is_negative", False)
 
+            # Priority: Morph > Clearance > Negative > Additive
+            try:
+                if use_morph_on_child:
+                    factor = child.get("sdf_morph_factor", 0.5); safe_factor = max(0.0, min(1.0, float(factor)))
+                    shape_so_far = lf.morph(shape_so_far, child_processed_shape, safe_factor)
+                elif use_clearance_on_child:
+                    offset_val = child.get("sdf_clearance_offset", 0.05); keep_original = child.get("sdf_clearance_keep_original", True)
+                    safe_offset = max(0.0, float(offset_val))
+                    offset_child_shape = lf.offset(child_processed_shape, safe_offset)
+                    shape_after_cut = lf.difference(shape_so_far, offset_child_shape)
+                    if keep_original: # Combine cut result with original child shape
+                        shape_so_far = combine_shapes(shape_after_cut, child_processed_shape, interaction_blend_factor)
+                    else: # Only keep the cut result
+                        shape_so_far = shape_after_cut
+                elif is_child_negative: # Subtractive
+                     safe_blend = max(0.0, interaction_blend_factor)
+                     if safe_blend <= constants.CACHE_PRECISION: shape_so_far = lf.difference(shape_so_far, child_processed_shape)
+                     else: clamped_blend = min(1.0, safe_blend); shape_so_far = lf.blend_difference(shape_so_far, child_processed_shape, clamped_blend)
+                else: # Additive mode (Union or Blend)
+                    shape_so_far = combine_shapes(shape_so_far, child_processed_shape, interaction_blend_factor)
+            except Exception as e_combine:
+                 print(f"FieldForge ERROR (process_hierarchy): Failed combining child {child.name} to {obj.name}: {e_combine}")
+                 # Decide error strategy: skip child, return emptiness? Skipping child seems safer.
+                 continue # Skip to next child on combination error
+        # else: print(f"  DEBUG: Child {child.name} result was empty/None, skipping combination.") # DEBUG
 
     return shape_so_far
