@@ -198,13 +198,16 @@ def create_unit_cylinder_cap_vertices(segments: int) -> tuple[list, list]:
             bot_verts.append( (x, y, -half_height) )
     return top_verts, bot_verts
 
-def create_unit_rounded_rectangle_plane(local_right: Vector, local_up: Vector, radius: float, segments_per_corner: int) -> list[Vector]:
+def create_unit_rounded_rectangle_plane(local_right: Vector, local_up: Vector, draw_radius: float, segments_per_corner: int) -> list[Vector]:
     """
     Generates local vertices (Vectors) for a unit rounded rectangle (-0.5 to 0.5)
-    centered at origin, in the plane defined by local_right/up. Radius clamped 0 to 0.5.
+    centered at origin, in the plane defined by local_right/up.
+    draw_radius is the calculated internal radius for drawing (expected 0.0 to 0.5).
     """
-    half_w, half_h = 0.5, 0.5; center = Vector((0.0, 0.0, 0.0))
-    radius = max(0.0, min(radius, 0.5 - 1e-6)) # Clamp radius slightly below 0.5
+    half_w, half_h = 0.5, 0.5
+    center = Vector((0.0, 0.0, 0.0))
+    radius = max(0.0, min(draw_radius, half_w))
+    effective_corner_radius = min(radius, half_w - 1e-4)
 
     # If radius is effectively zero, return sharp corners
     if radius <= 1e-5:
@@ -215,31 +218,26 @@ def create_unit_rounded_rectangle_plane(local_right: Vector, local_up: Vector, r
         return [tr, tl, bl, br]
 
     if segments_per_corner < 1: segments_per_corner = 1
-    inner_w = half_w - radius; inner_h = half_h - radius
+    inner_w = half_w - effective_corner_radius
+    inner_h = half_h - effective_corner_radius
     # Corner centers
     center_tr = center + (local_right * inner_w) + (local_up * inner_h)
     center_tl = center + (-local_right * inner_w) + (local_up * inner_h)
     center_bl = center + (-local_right * inner_w) - (local_up * inner_h)
-    center_br = center + (right * inner_w) - (up * inner_h) # MISTAKE HERE - should be local_right, local_up
-
-    # --- Corrected Corner Centers ---
-    center_tr = center + (local_right * inner_w) + (local_up * inner_h)
-    center_tl = center + (-local_right * inner_w) + (local_up * inner_h)
-    center_bl = center + (-local_right * inner_w) - (local_up * inner_h)
-    center_br = center + (local_right * inner_w) - (local_up * inner_h) # Corrected
-
-    vertices = []; delta_angle = (math.pi / 2.0) / segments_per_corner
+    center_br = center + (local_right * inner_w) - (local_up * inner_h)
+    vertices = []
+    delta_angle = (math.pi / 2.0) / segments_per_corner
+    arc_radius = radius
     # TR corner (0 to pi/2)
-    for i in range(segments_per_corner + 1): angle = i * delta_angle; offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * radius; vertices.append(center_tr + offset)
+    for i in range(segments_per_corner + 1): angle = i * delta_angle; offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_tr + offset)
     # TL corner (pi/2 to pi)
-    for i in range(1, segments_per_corner + 1): angle = (math.pi / 2.0) + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * radius; vertices.append(center_tl + offset)
+    for i in range(1, segments_per_corner + 1): angle = (math.pi / 2.0) + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_tl + offset)
     # BL corner (pi to 3pi/2)
-    for i in range(1, segments_per_corner + 1): angle = math.pi + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * radius; vertices.append(center_bl + offset)
+    for i in range(1, segments_per_corner + 1): angle = math.pi + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_bl + offset)
     # BR corner (3pi/2 to 2pi)
-    for i in range(1, segments_per_corner + 1): angle = (3 * math.pi / 2.0) + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * radius; vertices.append(center_br + offset)
+    for i in range(1, segments_per_corner + 1): angle = (3 * math.pi / 2.0) + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_br + offset)
 
     return vertices
-
 
 # --- Selection Helpers ---
 

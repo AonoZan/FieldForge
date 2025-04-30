@@ -335,21 +335,34 @@ def ff_draw_callback():
                                 batches_to_draw.append(batch_for_shader(shader, primitive_type, {"pos": offset_vertices(sides_d, region_3d, camera_location, DEPTH_OFFSET_FACTOR)}))
                             except Exception as e: print(f"FF Draw Batch Error (Cone Side): {obj_name} - {e}")
                     except Exception as e_calc: print(f"FF Draw Calc Error (Cone Sides): {obj_name} - {e_calc}")
-            # Rounded Box
             elif sdf_type_prop == "rounded_box":
-                cs=4; r=obj.get("sdf_round_radius",0.1); ir=max(0.0, min(r*0.5, 0.5-1e-6)); lx=Vector((1,0,0)); ly=Vector((0,1,0)); lz=Vector((0,0,1))
-                loops=[utils.create_unit_rounded_rectangle_plane(lx,ly,ir,cs), utils.create_unit_rounded_rectangle_plane(ly,lz,ir,cs), utils.create_unit_rounded_rectangle_plane(lx,lz,ir,cs)]
-                for local_v in loops:
-                    if not local_v: continue
-                    world_l=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v]
-                    if world_l:
-                        draw_p=[];
-                        for i in range(len(world_l)): v1=world_l[i]; v2=world_l[(i+1)%len(world_l)]; draw_p.extend([v1,v2]); line_segments_for_picking.append((v1.copy(),v2.copy()))
+                cs = 4
+                roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
+                effective_prop_for_draw = min(max(roundness_prop, 0.0), 0.5)
+                internal_draw_radius = effective_prop_for_draw * (0.25 / 0.5)
+
+                lx = Vector((1, 0, 0)); ly = Vector((0, 1, 0)); lz = Vector((0, 0, 1))
+                loops = [
+                    utils.create_unit_rounded_rectangle_plane(lx, ly, internal_draw_radius, cs), # XY
+                    utils.create_unit_rounded_rectangle_plane(lx, lz, internal_draw_radius, cs), # XZ
+                    utils.create_unit_rounded_rectangle_plane(ly, lz, internal_draw_radius, cs), # YZ
+                ]
+                for local_v_loop in loops:
+                    if not local_v_loop: continue
+                    world_loop = [(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_loop]
+                    if world_loop:
+                        draw_p = []
+                        for i in range(len(world_loop)):
+                            v1 = world_loop[i]
+                            v2 = world_loop[(i + 1) % len(world_loop)]
+                            draw_p.extend([v1, v2])
+                            line_segments_for_picking.append((v1.copy(), v2.copy()))
                         if draw_p:
-                            # Indent try/except block
                             try:
-                                batches_to_draw.append(batch_for_shader(shader, primitive_type, {"pos": offset_vertices(draw_p, region_3d, camera_location, DEPTH_OFFSET_FACTOR)}))
-                            except Exception as e: print(f"FF Draw Batch Error (RndBox): {obj_name} - {e}")
+                                offset_loop = offset_vertices(draw_p, region_3d, camera_location, DEPTH_OFFSET_FACTOR)
+                                batches_to_draw.append(batch_for_shader(shader, primitive_type, {"pos": offset_loop}))
+                            except Exception as e:
+                                print(f"FF Draw Batch Error (RoundedBox Loop): {obj_name} - {e}")
             # Circle
             elif sdf_type_prop == "circle":
                 seg=24; local_v=utils.create_unit_circle_vertices_xy(seg)

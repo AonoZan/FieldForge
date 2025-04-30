@@ -55,62 +55,60 @@ def reconstruct_shape(obj) -> lf.Shape | None:
     shape = None
     unit_radius = 0.5 # Standard radius for shapes like cylinder/cone base/sphere/circle
     unit_height = 1.0 # Standard height for shapes like cylinder/cone
+    half_size = 0.5 # Half-dimension for unit cube/box related calculations
 
     try:
         if sdf_type == "cube":
-            shape = lf.cube_centered((1.0, 1.0, 1.0))
+            shape = lf.cube_centered((2 * half_size, 2 * half_size, 2 * half_size))
         elif sdf_type == "sphere":
             shape = lf.sphere(unit_radius)
         elif sdf_type == "cylinder":
-            shape = lf.cylinder_z(unit_radius, unit_height, base=(0, 0, -unit_height / 2.0))
+            shape = lf.cylinder_z(unit_radius, unit_height, base=(0, 0, -half_size))
         elif sdf_type == "cone":
-             # Apply scaling factor if needed to match visual expectation vs mathematical cone
-             # CONE_MESH_SCALE_FACTOR = 0.449 # If using the factor
-             # mesh_radius = unit_radius * CONE_MESH_SCALE_FACTOR
-             # mesh_height = unit_height * CONE_MESH_SCALE_FACTOR
-             # shape = lf.cone_z(mesh_radius, mesh_height, base=(0, 0, 0.0)) # Base at Z=0
-             # Or use direct unit cone:
-             shape = lf.cone_z(unit_radius, unit_height, base=(0, 0, 0.0)) # Base at Z=0 (object origin)
-
+             shape = lf.cone_z(unit_radius, unit_height, base=(0, 0, 0.0))
         elif sdf_type == "torus":
-            # Use unit radii directly from properties
-            default_major = 0.35; default_minor = 0.15
+            default_major = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_major_radius"]
+            default_minor = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_minor_radius"]
             major_r_prop = obj.get("sdf_torus_major_radius", default_major)
             minor_r_prop = obj.get("sdf_torus_minor_radius", default_minor)
             major_r = max(0.01, major_r_prop); minor_r = max(0.005, minor_r_prop)
-            minor_r = min(minor_r, major_r - 1e-5) # Ensure minor < major
-            shape = lf.torus_z(major_r, minor_r, center=(0,0,0)) # Centered unit torus
+            minor_r = min(minor_r, major_r - 1e-5)
+            shape = lf.torus_z(major_r, minor_r, center=(0,0,0))
+
         elif sdf_type == "rounded_box":
-            round_radius = obj.get("sdf_round_radius", 0.1)
-            # Unit box (-0.5 to 0.5) radius needs clamping relative to half-size (0.5)
-            safe_radius = max(0.0, min(round_radius, 0.5 - 1e-5))
-            half_size = 0.5
+            roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
+            internal_sdf_radius = min(roundness_prop, 0.5) * half_size / 0.5
+            internal_sdf_radius = min(max(roundness_prop, 0.0), 1.0) * half_size
+            effective_prop_value = min(max(roundness_prop, 0.0), 0.5)
+            internal_sdf_radius = effective_prop_value * (half_size / 0.5)
             corner_a = (-half_size, -half_size, -half_size)
             corner_b = ( half_size,  half_size,  half_size)
-            shape = lf.rounded_box(corner_a, corner_b, safe_radius)
+            if internal_sdf_radius <= 1e-5:
+                shape = lf.cube_centered((2 * half_size, 2 * half_size, 2 * half_size))
+            else:
+                safe_sdf_radius = min(internal_sdf_radius, half_size - 1e-5)
+                shape = lf.rounded_box(corner_a, corner_b, safe_sdf_radius)
         elif sdf_type == "circle":
-            shape = lf.circle(unit_radius, center=(0, 0)) # 2D unit circle
+            shape = lf.circle(unit_radius, center=(0, 0))
         elif sdf_type == "ring":
-            inner_r = obj.get("sdf_inner_radius", 0.25)
-            # Inner radius is relative to outer unit_radius (0.5)
-            safe_inner_r = max(0.0, min(inner_r, unit_radius - 1e-5))
-            shape = lf.ring(unit_radius, safe_inner_r, center=(0, 0)) # 2D unit ring
+            inner_r_prop = obj.get("sdf_inner_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_inner_radius"])
+            # Ensure inner radius is relative to the unit_radius (0.5)
+            safe_inner_r = max(0.0, min(inner_r_prop * (unit_radius/0.5), unit_radius - 1e-5))
+            shape = lf.ring(unit_radius, safe_inner_r, center=(0, 0))
         elif sdf_type == "polygon":
-            sides = obj.get("sdf_sides", 6)
+            sides = obj.get("sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"])
             safe_n = max(3, sides)
-            shape = lf.polygon(unit_radius, safe_n, center=(0, 0)) # 2D unit polygon
+            shape = lf.polygon(unit_radius, safe_n, center=(0, 0))
         elif sdf_type == "half_space":
-            # Unit half_space: Plane at local Z=0, normal along local +Z
             shape = lf.half_space((0.0, 0.0, 1.0), (0.0, 0.0, 0.0))
         else:
-            # print(f"FieldForge WARN (sdf_logic): Unknown sdf_type '{sdf_type}' for {obj.name}") # DEBUG
-            return lf.emptiness() # Return emptiness for unknown types
+            print(f"FieldForge WARN (reconstruct_shape): Unknown sdf_type '{sdf_type}' for {obj.name}")
+            return lf.emptiness()
 
     except Exception as e:
         print(f"FieldForge ERROR (reconstruct_shape): Error creating unit shape for {obj.name} ({sdf_type}): {e}")
-        return lf.emptiness() # Return empty on error
+        return lf.emptiness()
 
-    # Return the created unit shape (or None if libfive wasn't imported)
     return shape
 
 
