@@ -61,7 +61,7 @@ FieldForge requires specific components **bundled directly within the addon's fo
 
 **Recommended Method (From Release ZIP):**
 
-1.  Download the latest release `.zip` file from the [Releases page](https://github.com/your-repo/FieldForge/releases) (Replace with actual link when available).
+1.  Download the latest release `.zip` file from the [Releases page](https://github.com/AonoZan/FieldForge/releases).
 2.  Open Blender.
 3.  Go to `Edit > Preferences > Add-ons`.
 4.  Click the `Install...` button.
