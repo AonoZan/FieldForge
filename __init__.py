@@ -2,8 +2,8 @@
 
 bl_info = {
     "name": "FieldForge",
-    "author": "Your Name & libfive Team",
-    "version": (0, 5, 3), # Consider fetching from constants.py if desired
+    "author": "AonoZan & libfive Team",
+    "version": (0, 6, 0), # Consider fetching from constants.py if desired
     "blender": (4, 4, 0), # Make sure this matches the Blender version you target
     "location": "View3D > Sidebar (N-Panel) > FieldForge Tab | Add > Mesh > Field Forge SDF",
     "description": "Adds and manages dynamic SDF shapes using libfive with hierarchical blending, extrusion, and custom visuals",
