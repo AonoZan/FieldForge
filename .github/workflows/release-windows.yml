@@ -100,35 +100,44 @@ jobs:
           echo "Determined version: ${{ env.VERSION }}"
         shell: bash
 
-      - name: Create staging directory structure
+      - name: Prepare Staging Directory and Copy Addon Files
         run: |
-          mkdir -p staging/${{ env.ADDON_NAME }}
-          mkdir -p staging/${{ env.ADDON_NAME }}/libfive/src
-          mkdir -p staging/${{ env.ADDON_NAME }}/libfive/stdlib
-          mkdir -p staging/${{ env.ADDON_NAME }}/ui
-          mkdir -p staging/${{ env.ADDON_NAME }}/core
-        shell: bash # mkdir is cross-platform enough
+          $stagingRoot = "staging"
+          $addonDestDir = Join-Path -Path $stagingRoot -ChildPath "${{ env.ADDON_NAME }}"
 
-      - name: Copy Addon Python files
-        run: |
-          # Copy all python files and subdirectories from addon_code to staging
-          # Use robocopy for more robust copying on Windows
+          # Ensure staging root exists, remove addon destination if it exists
+          if (-not (Test-Path $stagingRoot)) { mkdir $stagingRoot }
+          if (Test-Path $addonDestDir) {
+            Write-Host "Removing existing destination: $addonDestDir"
+            Remove-Item -Path $addonDestDir -Recurse -Force
+          }
+          # Recreate the base addon destination directory AFTER potential removal
+          mkdir $addonDestDir
+          Write-Host "Created clean destination: $addonDestDir"
 
-          $destDir = "staging/${{ env.ADDON_NAME }}"
-          # Ensure destination exists but is empty
-          if (Test-Path $destDir) { Remove-Item -Path $destDir -Recurse -Force }
-          mkdir $destDir
-          
+          # Use robocopy to copy source, excluding specified files and directories
+          Write-Host "Copying addon files from addon_code to $addonDestDir ..."
           robocopy addon_code $addonDestDir /E `
                    /XD .git* .github* `
                    /XF .gitignore Example.blend LICENSE README.md Screenshot.png libfive* # Exclude specific files AND libfive leftovers
-          
-          # Ensure the libfive directories exist within the addon staging dir *before* copying into them
-          if (-not (Test-Path staging/${{ env.ADDON_NAME }}/libfive)) { mkdir staging/${{ env.ADDON_NAME }}/libfive }
-          if (-not (Test-Path staging/${{ env.ADDON_NAME }}/libfive/src)) { mkdir staging/${{ env.ADDON_NAME }}/libfive/src }
-          if (-not (Test-Path staging/${{ env.ADDON_NAME }}/libfive/stdlib)) { mkdir staging/${{ env.ADDON_NAME }}/libfive/stdlib }
-          if (-not (Test-Path staging/${{ env.ADDON_NAME }}/ui)) { mkdir staging/${{ env.ADDON_NAME }}/ui }
-          if (-not (Test-Path staging/${{ env.ADDON_NAME }}/core)) { mkdir staging/${{ env.ADDON_NAME }}/core }
+
+          # Check Robocopy exit code (allow codes < 8)
+          if ($LASTEXITCODE -ge 8) {
+              Write-Error "Robocopy failed with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+          } else {
+              Write-Host "Robocopy completed with exit code $LASTEXITCODE (addon files)."
+          }
+
+          # Create the necessary libfive structure within the addon directory *after* copying addon files
+          $libfiveBase = Join-Path -Path $addonDestDir -ChildPath "libfive"
+          $libfiveSrc = Join-Path -Path $libfiveBase -ChildPath "src"
+          $libfiveStdlib = Join-Path -Path $libfiveBase -ChildPath "stdlib"
+          if (-not (Test-Path $libfiveBase))   { mkdir $libfiveBase }
+          if (-not (Test-Path $libfiveSrc))    { mkdir $libfiveSrc }
+          if (-not (Test-Path $libfiveStdlib)) { mkdir $libfiveStdlib }
+          Write-Host "Ensured libfive directory structure exists in $addonDestDir"
+
         shell: powershell
 
       - name: Copy Python Bindings from libfive build
