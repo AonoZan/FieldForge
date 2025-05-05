@@ -4,6 +4,8 @@ from bpy.app.handlers import persistent
 from .. import utils
 from .. import constants
 
+from ..ui import operators
+
 # Global dictionary to store mesh data before saving
 _mesh_data_backup = {}
 
@@ -46,3 +48,27 @@ def ff_save_post_handler(dummy):
             # Remove the temporary mesh if it's no longer used
             if temp_mesh and temp_mesh.users == 0:
                 bpy.data.meshes.remove(temp_mesh)
+
+
+@persistent
+def ff_load_post_handler(dummy):
+    """
+    Ensures the FieldForge selection handler is running after a file loads.
+    Forces reset of the running flag and attempts to start the handler.
+    """
+
+    # This ensures we always try to init the handler for the newly loaded file context.
+    print(f"FieldForge INFO (load_post): Forcing _selection_handler_running = False (was {getattr(operators, '_selection_handler_running', 'N/A')})") # Safer getattr
+    operators._selection_handler_running = False
+
+    # Now, always attempt to start the handler via timer.
+    # The timer function itself has checks against multiple concurrent runs.
+    try:
+        print("FieldForge INFO (load_post): Calling start_select_handler_via_timer...") # DEBUG
+        operators.start_select_handler_via_timer()
+    except AttributeError:
+         print("FieldForge ERROR (load_post): Could not find function to start select handler in operators.py")
+    except Exception as e:
+        print(f"FieldForge ERROR (load_post): Failed to start modal select handler via timer: {e}")
+        # Optionally try resetting the flag again on error?
+        # operators._selection_handler_running = False

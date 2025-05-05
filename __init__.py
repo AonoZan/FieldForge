@@ -175,6 +175,17 @@ def register():
         if update_manager.ff_depsgraph_handler not in bpy.app.handlers.depsgraph_update_post:
             bpy.app.handlers.depsgraph_update_post.append(update_manager.ff_depsgraph_handler)
 
+        # Save Handlers
+        if handlers.ff_save_pre_handler not in bpy.app.handlers.save_pre:
+            bpy.app.handlers.save_pre.append(handlers.ff_save_pre_handler)
+        if handlers.ff_save_post_handler not in bpy.app.handlers.save_post:
+            bpy.app.handlers.save_post.append(handlers.ff_save_post_handler)
+
+        # Load Post Handler (for modal operator startup) <--- NEW
+        if handlers.ff_load_post_handler not in bpy.app.handlers.load_post:
+            bpy.app.handlers.load_post.append(handlers.ff_load_post_handler)
+            print("  - Load Post handler registered.") # DEBUG
+
         # Draw Handler (store handle within drawing module)
         if drawing._draw_handle is None:
             drawing._draw_handle = bpy.types.SpaceView3D.draw_handler_add(
@@ -186,17 +197,6 @@ def register():
     except Exception as e:
         print(f"  ERROR: Failed registering handlers: {e}")
 
-    # Start Modal Operator (using function in operators module)
-    print("FieldForge: Starting modal select handler...")
-    try:
-        # Use a timer to ensure Blender UI is ready
-        # Assumes operators.py defines a function like 'start_select_handler_via_timer'
-        operators.start_select_handler_via_timer()
-    except AttributeError:
-         print("  ERROR: Could not find function to start select handler in operators.py")
-    except Exception as e:
-        print(f"  ERROR: Failed to start modal select handler: {e}")
-
     # Trigger Initial Update Checks (using function in update_manager)
     print("FieldForge: Scheduling initial update checks...")
     try:
@@ -204,12 +204,6 @@ def register():
         bpy.app.timers.register(update_manager.initial_update_check_all, first_interval=1.0)
     except Exception as e:
         print(f"  ERROR: Failed to schedule initial update check: {e}")
-
-    if handlers.ff_save_pre_handler not in bpy.app.handlers.save_pre:
-        bpy.app.handlers.save_pre.append(handlers.ff_save_pre_handler)
-    if handlers.ff_save_post_handler not in bpy.app.handlers.save_post:
-        bpy.app.handlers.save_post.append(handlers.ff_save_post_handler)
-
 
     # print(f"FieldForge: Registration complete.")
     # Force redraw after registration
@@ -236,6 +230,17 @@ def unregister():
         # Depsgraph
         if update_manager.ff_depsgraph_handler in bpy.app.handlers.depsgraph_update_post:
             bpy.app.handlers.depsgraph_update_post.remove(update_manager.ff_depsgraph_handler)
+
+        # Save Handlers
+        if handlers.ff_save_pre_handler in bpy.app.handlers.save_pre:
+            bpy.app.handlers.save_pre.remove(handlers.ff_save_pre_handler)
+        if handlers.ff_save_post_handler in bpy.app.handlers.save_post:
+            bpy.app.handlers.save_post.remove(handlers.ff_save_post_handler)
+
+        # Load Post Handler
+        if handlers.ff_load_post_handler in bpy.app.handlers.load_post:
+            bpy.app.handlers.load_post.remove(handlers.ff_load_post_handler)
+            print("  - Load Post handler unregistered.") # DEBUG
 
         # Draw Handler (using handle stored in drawing module)
         if drawing._draw_handle is not None:
@@ -272,22 +277,6 @@ def unregister():
         # operators module might reset its flag automatically or on next invoke
     except Exception as e:
         print(f"  WARN: Error clearing addon state: {e}")
-        
-    drawing.clear_draw_data()
-
-    if handlers.ff_save_pre_handler in bpy.app.handlers.save_pre:
-        bpy.app.handlers.save_pre.remove(handlers.ff_save_pre_handler)
-    if handlers.ff_save_post_handler in bpy.app.handlers.save_post:
-        bpy.app.handlers.save_post.remove(handlers.ff_save_post_handler)
-
-    # Unregister Properties (if any were registered)
-    # try:
-    #     del bpy.types.Object.my_prop_group
-    # except (AttributeError, TypeError): pass
-    # bpy.utils.unregister_class(MyPropertyGroup)
-
-    # Clean up namespace a bit (optional)
-    # del sys.modules[__name__ + ".core.update_manager"] # Example - be careful with this
 
     print("FieldForge: Unregistration complete.")
     # Force redraw after unregistration
