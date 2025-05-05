@@ -16,13 +16,13 @@ env:
   CMAKE_BUILD_TYPE: Release
   LIBFIVE_COMMIT_SHA: '71899313d36ce14de6646ef760fa6bbc5c0cc067' # Consider updating periodically
   ADDON_NAME: FieldForge
-  VCPKG_TRIPLET: x64-windows # Define vcpkg triplet
+  #VCPKG_TRIPLET: x64-windows # Define vcpkg triplet
 
 jobs:
   build_and_package_windows:
     name: Build libfive and Package Addon (Windows)
     # Use a GitHub-hosted Windows runner with VS 2019 available
-    runs-on: windows-2019 # This runner should have VS 16 2019
+    runs-on: [self-hosted, windows-2019, x64, local-run] # This runner should have VS 16 2019
 
     permissions:
       contents: write # Needed for creating releases
@@ -42,7 +42,8 @@ jobs:
         id: runvcpkg
         with:
           vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f' # Use a known good commit or update
-          vcpkgDirectory: ${{ runner.temporary }}/vcpkg # Use temp dir for vcpkg cache
+          #vcpkgDirectory: ${{ runner.temporary }}/vcpkg # Use temp dir for vcpkg cache
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
           runVcpkgInstall: true # Let run-vcpkg handle caching
 
       - name: Install libfive dependencies via vcpkg
