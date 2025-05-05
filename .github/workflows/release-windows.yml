@@ -99,51 +99,44 @@ jobs:
           fi
           echo "Determined version: ${{ env.VERSION }}"
         shell: bash
-        
-      - name: Create staging directory structure
-        # Using bash for consistency with Linux, requires Git Bash on Windows runner
-        run: |
-          mkdir -p staging/FieldForge
-          mkdir -p staging/FieldForge/libfive
-          mkdir -p staging/FieldForge/libfive/src
-          mkdir -p staging/FieldForge/libfive/stdlib
-        shell: bash
   
       - name: Prepare Staging Directory and Copy Addon Files
         run: |
           $stagingRoot = "staging"
           $addonDestDir = Join-Path -Path $stagingRoot -ChildPath "${{ env.ADDON_NAME }}"
-
-          # Ensure staging root exists, remove addon destination if it exists
+      
+          # Ensure staging root exists
           if (-not (Test-Path $stagingRoot)) { mkdir $stagingRoot }
+      
+          # Instead of deleting $addonDestDir, only clean up specific addon files if needed
+          # Avoid deleting the libfive directory structure
           if (Test-Path $addonDestDir) {
-            Write-Host "Removing existing destination: $addonDestDir"
-            Remove-Item -Path $addonDestDir -Recurse -Force
+            Write-Host "Cleaning up existing addon files in: $addonDestDir (preserving libfive)"
+            # Remove only the addon-specific files/directories, excluding libfive
+            Get-ChildItem -Path $addonDestDir -Exclude "libfive" | Remove-Item -Recurse -Force
+          } else {
+            Write-Host "Creating addon destination: $addonDestDir"
+            mkdir $addonDestDir
           }
-          # Recreate the base addon destination directory AFTER potential removal
-          mkdir $addonDestDir
-          Write-Host "Created clean destination: $addonDestDir"
-
+      
           # Use robocopy to copy source, excluding specified files and directories
           Write-Host "Copying addon files from addon_code to $addonDestDir ..."
           robocopy addon_code $addonDestDir /E `
                    /XD .git* .github* `
-                   /XF .gitignore Example.blend LICENSE README.md Screenshot.png libfive* # Exclude specific files AND libfive leftovers
-
+                   /XF .gitignore Example.blend LICENSE README.md screenshot.png libfive*
+      
           # Store the exit code immediately
           $RoboExitCode = $LASTEXITCODE
-
+      
           # Check Robocopy exit code (allow codes < 8)
           if ($RoboExitCode -ge 8) {
               Write-Error "Robocopy failed with exit code $RoboExitCode"
-              exit $RoboExitCode # Explicitly fail the step for codes 8+
+              exit $RoboExitCode
           } else {
               Write-Host "Robocopy completed with exit code $RoboExitCode (considered success)."
-              exit 0 # Explicitly exit the script block with success code 0
           }
-
-          # --- This part is now unreachable if robocopy fails, which is fine ---
-          # Create the necessary libfive structure within the addon directory
+      
+          # Verify libfive directory structure exists
           $libfiveBase = Join-Path -Path $addonDestDir -ChildPath "libfive"
           $libfiveSrc = Join-Path -Path $libfiveBase -ChildPath "src"
           $libfiveStdlib = Join-Path -Path $libfiveBase -ChildPath "stdlib"
@@ -151,13 +144,19 @@ jobs:
           if (-not (Test-Path $libfiveSrc))    { mkdir $libfiveSrc }
           if (-not (Test-Path $libfiveStdlib)) { mkdir $libfiveStdlib }
           Write-Host "Ensured libfive directory structure exists in $addonDestDir"
-
         shell: powershell
 
       - name: Copy Python Bindings from libfive build
         run: |
-          Copy-Item build/libfive/bind/python/libfive/*.py staging/${{ env.ADDON_NAME }}/libfive/
-          Copy-Item build/libfive/bind/python/libfive/stdlib/*.py staging/${{ env.ADDON_NAME }}/libfive/stdlib/
+          $libfiveDest = "staging/${{ env.ADDON_NAME }}/libfive"
+          $stdlibDest = "staging/${{ env.ADDON_NAME }}/libfive/stdlib"
+      
+          # Ensure target directories exist
+          if (-not (Test-Path $libfiveDest)) { mkdir $libfiveDest }
+          if (-not (Test-Path $stdlibDest)) { mkdir $stdlibDest }
+      
+          Copy-Item build/libfive/bind/python/libfive/*.py $libfiveDest/
+          Copy-Item build/libfive/bind/python/libfive/stdlib/*.py $stdlibDest/
         shell: powershell
 
       - name: Copy Compiled Windows Libraries from Build
