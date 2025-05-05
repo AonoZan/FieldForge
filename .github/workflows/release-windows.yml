@@ -103,6 +103,8 @@ jobs:
       - name: Create staging directory structure
         # Using bash for consistency with Linux, requires Git Bash on Windows runner
         run: |
+          mkdir -p staging/FieldForge
+          mkdir -p staging/FieldForge/libfive
           mkdir -p staging/FieldForge/libfive/src
           mkdir -p staging/FieldForge/libfive/stdlib
         shell: bash
