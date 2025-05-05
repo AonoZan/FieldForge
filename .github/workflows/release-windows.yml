@@ -102,21 +102,20 @@ jobs:
   
       - name: Prepare Staging Directory and Copy Addon Files
         run: |
+          $ErrorActionPreference = "Stop" # Stop on any error to catch issues
           $stagingRoot = "staging"
           $addonDestDir = Join-Path -Path $stagingRoot -ChildPath "${{ env.ADDON_NAME }}"
       
           # Ensure staging root exists
-          if (-not (Test-Path $stagingRoot)) { mkdir $stagingRoot }
+          if (-not (Test-Path $stagingRoot)) { mkdir $stagingRoot | Out-Null }
       
-          # Instead of deleting $addonDestDir, only clean up specific addon files if needed
-          # Avoid deleting the libfive directory structure
+          # Clean up specific addon files, preserving libfive
           if (Test-Path $addonDestDir) {
             Write-Host "Cleaning up existing addon files in: $addonDestDir (preserving libfive)"
-            # Remove only the addon-specific files/directories, excluding libfive
-            Get-ChildItem -Path $addonDestDir -Exclude "libfive" | Remove-Item -Recurse -Force
+            Get-ChildItem -Path $addonDestDir -Exclude "libfive" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           } else {
             Write-Host "Creating addon destination: $addonDestDir"
-            mkdir $addonDestDir
+            mkdir $addonDestDir | Out-Null
           }
       
           # Use robocopy to copy source, excluding specified files and directories
@@ -140,10 +139,13 @@ jobs:
           $libfiveBase = Join-Path -Path $addonDestDir -ChildPath "libfive"
           $libfiveSrc = Join-Path -Path $libfiveBase -ChildPath "src"
           $libfiveStdlib = Join-Path -Path $libfiveBase -ChildPath "stdlib"
-          if (-not (Test-Path $libfiveBase))   { mkdir $libfiveBase }
-          if (-not (Test-Path $libfiveSrc))    { mkdir $libfiveSrc }
-          if (-not (Test-Path $libfiveStdlib)) { mkdir $libfiveStdlib }
+          if (-not (Test-Path $libfiveBase))   { mkdir $libfiveBase | Out-Null }
+          if (-not (Test-Path $libfiveSrc))    { mkdir $libfiveSrc | Out-Null }
+          if (-not (Test-Path $libfiveStdlib)) { mkdir $libfiveStdlib | Out-Null }
           Write-Host "Ensured libfive directory structure exists in $addonDestDir"
+      
+          # Explicitly exit with success code
+          exit 0
         shell: powershell
 
       - name: Copy Python Bindings from libfive build
