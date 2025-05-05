@@ -100,7 +100,7 @@ jobs:
           echo "Determined version: ${{ env.VERSION }}"
         shell: bash
 
-      - name: Prepare Staging Directory and Copy Addon Files
+       - name: Prepare Staging Directory and Copy Addon Files
         run: |
           $stagingRoot = "staging"
           $addonDestDir = Join-Path -Path $stagingRoot -ChildPath "${{ env.ADDON_NAME }}"
@@ -121,15 +121,20 @@ jobs:
                    /XD .git* .github* `
                    /XF .gitignore Example.blend LICENSE README.md Screenshot.png libfive* # Exclude specific files AND libfive leftovers
 
+          # Store the exit code immediately
+          $RoboExitCode = $LASTEXITCODE
+
           # Check Robocopy exit code (allow codes < 8)
-          if ($LASTEXITCODE -ge 8) {
-              Write-Error "Robocopy failed with exit code $LASTEXITCODE"
-              exit $LASTEXITCODE
+          if ($RoboExitCode -ge 8) {
+              Write-Error "Robocopy failed with exit code $RoboExitCode"
+              exit $RoboExitCode # Explicitly fail the step for codes 8+
           } else {
-              Write-Host "Robocopy completed with exit code $LASTEXITCODE (addon files)."
+              Write-Host "Robocopy completed with exit code $RoboExitCode (considered success)."
+              exit 0 # Explicitly exit the script block with success code 0
           }
 
-          # Create the necessary libfive structure within the addon directory *after* copying addon files
+          # --- This part is now unreachable if robocopy fails, which is fine ---
+          # Create the necessary libfive structure within the addon directory
           $libfiveBase = Join-Path -Path $addonDestDir -ChildPath "libfive"
           $libfiveSrc = Join-Path -Path $libfiveBase -ChildPath "src"
           $libfiveStdlib = Join-Path -Path $libfiveBase -ChildPath "stdlib"
