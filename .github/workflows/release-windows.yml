@@ -99,6 +99,13 @@ jobs:
           fi
           echo "Determined version: ${{ env.VERSION }}"
         shell: bash
+        
+      - name: Create staging directory structure
+        # Using bash for consistency with Linux, requires Git Bash on Windows runner
+        run: |
+          mkdir -p staging/FieldForge/libfive/src
+          mkdir -p staging/FieldForge/libfive/stdlib
+        shell: bash
   
       - name: Prepare Staging Directory and Copy Addon Files
         run: |
