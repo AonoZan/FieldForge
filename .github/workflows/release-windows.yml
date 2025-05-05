@@ -113,7 +113,16 @@ jobs:
         run: |
           # Copy all python files and subdirectories from addon_code to staging
           # Use robocopy for more robust copying on Windows
-          robocopy addon_code staging/${{ env.ADDON_NAME }} /E /XD .git* .github*
+
+          $destDir = "staging/${{ env.ADDON_NAME }}"
+          # Ensure destination exists but is empty
+          if (Test-Path $destDir) { Remove-Item -Path $destDir -Recurse -Force }
+          mkdir $destDir
+          
+          robocopy addon_code $addonDestDir /E `
+                   /XD .git* .github* `
+                   /XF .gitignore Example.blend LICENSE README.md Screenshot.png libfive* # Exclude specific files AND libfive leftovers
+          
           # Ensure the libfive directories exist within the addon staging dir *before* copying into them
           if (-not (Test-Path staging/${{ env.ADDON_NAME }}/libfive)) { mkdir staging/${{ env.ADDON_NAME }}/libfive }
           if (-not (Test-Path staging/${{ env.ADDON_NAME }}/libfive/src)) { mkdir staging/${{ env.ADDON_NAME }}/libfive/src }
