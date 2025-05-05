@@ -40,6 +40,22 @@ jobs:
       #     sudo apt-get install -y build-essential cmake libeigen3-dev libpng-dev zlib1g-dev
       # === END OF COMMENTED STEP ===
 
+      - name: Modify libfive CMake Options
+        run: |
+          CMAKE_FILE="${{ env.LIBFIVE_CHECKOUT_DIR }}/CMakeLists.txt"
+          echo "Modifying CMake options in ${CMAKE_FILE}..."
+          # Use sed to replace the entire line containing the option.
+          # This is generally safer than trying to just replace ON/OFF if spacing/comments vary.
+          # Ensure the replacement string exactly matches the desired line format.
+          sed -i 's/^option(BUILD_STUDIO_APP.*)/option(BUILD_STUDIO_APP "Build Studio application" OFF)/' "${CMAKE_FILE}"
+          sed -i 's/^option(BUILD_GUILE_BINDINGS.*)/option(BUILD_GUILE_BINDINGS "Build Guile bindings" OFF)/' "${CMAKE_FILE}"
+          sed -i 's/^option(BUILD_PYTHON_BINDINGS.*)/option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)/' "${CMAKE_FILE}"
+          sed -i 's/^option(ENABLE_DEBUG.*)/option(ENABLE_DEBUG "Add debugging Symbols to the binaries" OFF)/' "${CMAKE_FILE}"
+
+          echo "CMake options modification complete. Verifying changes (first 50 lines):"
+          head -n 50 "${CMAKE_FILE}" # Print start of file for verification
+        shell: bash
+
       - name: Configure CMake for libfive
         run: >
           cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build
