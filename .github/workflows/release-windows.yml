@@ -44,7 +44,7 @@ jobs:
           vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f' # Use a known good commit or update
           #vcpkgDirectory: ${{ runner.temporary }}/vcpkg # Use temp dir for vcpkg cache
           vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
-          runVcpkgInstall: true # Let run-vcpkg handle caching
+          #runVcpkgInstall: true # Let run-vcpkg handle caching
 
       - name: Install libfive dependencies via vcpkg
         # Install dependencies using the defined triplet
