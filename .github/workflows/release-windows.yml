@@ -16,7 +16,7 @@ env:
   CMAKE_BUILD_TYPE: Release
   LIBFIVE_COMMIT_SHA: '71899313d36ce14de6646ef760fa6bbc5c0cc067' # Consider updating periodically
   ADDON_NAME: FieldForge
-  #VCPKG_TRIPLET: x64-windows # Define vcpkg triplet
+  VCPKG_TRIPLET: x64-windows # Define vcpkg triplet
 
 jobs:
   build_and_package_windows:
