@@ -65,6 +65,8 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     row_upd2.prop(obj, '["sdf_show_source_empties"]', text="Show Source Visuals") # Controls custom draw + empty visibility
     row_upd3 = box_upd.row(align=True)
     row_upd3.prop(obj, '["sdf_create_result_object"]', text="Create Result If Missing")
+    row_upd4 = box_upd.row(align=True)
+    row_upd4.prop(obj, '["sdf_discard_mesh_on_save"]', text="Discard Mesh on Save")
 
     col.separator()
 

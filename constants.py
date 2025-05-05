@@ -58,6 +58,8 @@ DEFAULT_SETTINGS = {
     # --- Display and Object Management ---
     "sdf_show_source_empties": True, # Toggle visibility of source Empties AND custom draw outlines
     "sdf_create_result_object": True, # Allow auto-creation of the result mesh object if it's missing during an update
+
+    "sdf_discard_mesh_on_save": True, # Don't save generated mesh by default
 }
 
 # --- Optional: Default values for Source Object properties ---

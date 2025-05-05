@@ -84,6 +84,7 @@ if "bpy" in locals():
     # Order can matter if modules depend on each other
     from . import constants
     from . import utils
+    from .core import handlers
     from .core import sdf_logic
     from .core import state
     from .core import update_manager
@@ -105,6 +106,7 @@ else:
     # Standard imports for first load
     from . import constants
     from . import utils
+    from .core import handlers
     from .core import sdf_logic
     from .core import state
     from .core import update_manager
@@ -203,6 +205,11 @@ def register():
     except Exception as e:
         print(f"  ERROR: Failed to schedule initial update check: {e}")
 
+    if handlers.ff_save_pre_handler not in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.append(handlers.ff_save_pre_handler)
+    if handlers.ff_save_post_handler not in bpy.app.handlers.save_post:
+        bpy.app.handlers.save_post.append(handlers.ff_save_post_handler)
+
 
     # print(f"FieldForge: Registration complete.")
     # Force redraw after registration
@@ -267,6 +274,11 @@ def unregister():
         print(f"  WARN: Error clearing addon state: {e}")
         
     drawing.clear_draw_data()
+
+    if handlers.ff_save_pre_handler in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.remove(handlers.ff_save_pre_handler)
+    if handlers.ff_save_post_handler in bpy.app.handlers.save_post:
+        bpy.app.handlers.save_post.remove(handlers.ff_save_post_handler)
 
     # Unregister Properties (if any were registered)
     # try:
