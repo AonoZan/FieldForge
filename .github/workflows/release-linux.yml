@@ -92,10 +92,14 @@ jobs:
           mkdir -p staging/FieldForge
           mkdir -p staging/FieldForge/libfive/src
           mkdir -p staging/FieldForge/libfive/stdlib
+          mkdir -p staging/FieldForge/ui
+          mkdir -p staging/FieldForge/core
 
       - name: Copy Addon Python files
         run: |
-          cp addon_code/__init__.py staging/FieldForge/
+          cp addon_code/*.py staging/FieldForge/
+          cp addon_code/ui/*.py staging/FieldForge/ui/
+          cp addon_code/core/*.py staging/FieldForge/core/
           
       - name: Fix RPATH for libfive-stdlib.so
         run: |
