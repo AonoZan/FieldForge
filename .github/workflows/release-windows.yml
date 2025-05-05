@@ -99,8 +99,8 @@ jobs:
           fi
           echo "Determined version: ${{ env.VERSION }}"
         shell: bash
-
-       - name: Prepare Staging Directory and Copy Addon Files
+  
+      - name: Prepare Staging Directory and Copy Addon Files
         run: |
           $stagingRoot = "staging"
           $addonDestDir = Join-Path -Path $stagingRoot -ChildPath "${{ env.ADDON_NAME }}"
