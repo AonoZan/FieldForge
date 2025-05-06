@@ -65,7 +65,22 @@ def reconstruct_shape(obj) -> lf.Shape | None:
         elif sdf_type == "cylinder":
             shape = lf.cylinder_z(unit_radius, unit_height, base=(0, 0, -half_size))
         elif sdf_type == "cone":
-             shape = lf.cone_z(unit_radius, unit_height, base=(0, 0, 0.0))
+            if unit_height <= 1e-6: # Avoid division by zero if height is near zero
+                 # Fallback to a flat disk or emptiness if height is zero.
+                 # For simplicity, return emptiness; a disk could be lf.circle extruded slightly.
+                 print(f"FieldForge WARN (reconstruct_shape): Cone height near zero for {obj.name}. Returning empty shape.")
+                 return lf.emptiness()
+
+            # Denominator for scaling factor
+            sqrt_term = math.sqrt(unit_radius**2 + unit_height**2)
+            if sqrt_term <= 1e-6: # Avoid division by zero if unit_radius and unit_height are both zero
+                 print(f"FieldForge WARN (reconstruct_shape): Cone radius and height near zero for {obj.name}. Returning empty shape.")
+                 return lf.emptiness()
+
+            cone_param_radius = (unit_radius**2) / sqrt_term
+            cone_param_height = (unit_height * unit_radius) / sqrt_term
+            
+            shape = lf.cone_z(cone_param_radius, cone_param_height, base=(0, 0, 0.0))
         elif sdf_type == "torus":
             default_major = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_major_radius"]
             default_minor = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_minor_radius"]
