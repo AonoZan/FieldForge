@@ -341,17 +341,20 @@ class OBJECT_OT_fieldforge_toggle_array_axis(Operator):
     axis: EnumProperty(items=[('X',"X","X"), ('Y',"Y","Y"), ('Z',"Z","Z")], name="Axis", default='X')
     @classmethod
     def poll(cls, context): return context.active_object and utils.is_sdf_source(context.active_object)
-    def execute(self, context): # Logic remains the same, just uses utils/ff_update
+    def execute(self, context):
         obj = context.active_object; act_x="sdf_array_active_x"; act_y="sdf_array_active_y"; act_z="sdf_array_active_z"
         is_x=obj.get(act_x,False); is_y=obj.get(act_y,False); is_z=obj.get(act_z,False); changed = False
-        if self.axis == 'X': new_x = not is_x; obj[act_x]=new_x; changed=True;
-        if not new_x: obj[act_y]=False; obj[act_z]=False
+        if self.axis == 'X':
+            new_x = not is_x; obj[act_x]=new_x; changed=True
+            if not new_x:
+                if is_y: obj[act_y]=False; changed=True
+                if is_z: obj[act_z]=False; changed=True
         elif self.axis == 'Y':
-            if not is_x and not is_y: self.report({'WARNING'}, "Activate X first"); return {'CANCELLED'}
-            new_y = not is_y; obj[act_y]=new_y; changed=True;
-            if not new_y: obj[act_z]=False
+            if not is_x: self.report({'WARNING'}, "Activate X axis first to enable Y."); return {'CANCELLED'}
+            new_y = not is_y; obj[act_y]=new_y; changed=True
+            if not new_y and is_z: obj[act_z]=False; changed=True
         elif self.axis == 'Z':
-            if not is_y and not is_z: self.report({'WARNING'}, "Activate Y first"); return {'CANCELLED'}
+            if not is_x or not is_y: self.report({'WARNING'}, "Activate X and Y axes first to enable Z."); return {'CANCELLED'}
             obj[act_z] = not is_z; changed=True
         if changed:
             parent_bounds = utils.find_parent_bounds(obj)

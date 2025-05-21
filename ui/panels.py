@@ -114,10 +114,10 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     is_negative = obj.get("sdf_is_negative", False) and not use_loft and not use_morph and not use_clearance # Exclusive
 
     # Loft Toggle (only if valid parent/child pair)
-    can_loft = parent and utils.is_valid_2d_loft_source(obj) and utils.is_valid_2d_loft_source(parent)
+    can_loft = True;# parent and utils.is_valid_2d_loft_source(obj) and utils.is_valid_2d_loft_source(parent)
     if can_loft:
         row_loft = interact_col.row(align=True)
-        row_loft.prop(obj, '["sdf_use_loft"]', text="Use Loft From Parent", toggle=True, icon='IPO_LINEAR')
+        row_loft.prop(obj, '["sdf_use_loft"]', text="Use Loft", toggle=True, icon='IPO_LINEAR')
         if use_loft: row_loft.label(text="(Overrides others)")
     else:
         # Show disabled loft toggle or just omit it? Omit for cleaner UI.
