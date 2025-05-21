@@ -81,7 +81,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     # Core props
                     'sdf_type': sdf_type,
                     'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", 0.0),
-                    'sdf_is_negative': actual_child_obj.get("sdf_is_negative", False),
+                    'sdf_csg_operation': actual_child_obj.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"]),
                     # Interaction Modifiers
                     'sdf_use_clearance': actual_child_obj.get("sdf_use_clearance", False),
                     'sdf_clearance_offset': actual_child_obj.get("sdf_clearance_offset", 0.05),

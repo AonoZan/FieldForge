@@ -320,7 +320,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
 
         use_morph = child.get("sdf_use_morph", False)
         use_clearance = child.get("sdf_use_clearance", False) and not use_morph
-        is_negative = child.get("sdf_is_negative", False) and not use_morph and not use_clearance
+        child_csg_op_type = child.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
 
         if use_morph:
             morph_factor = float(child.get("sdf_morph_factor", 0.5))
@@ -335,12 +335,48 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                 if keep_original:
                     current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
             except Exception as e: print(f"FF ERROR (clearance {child.name} on {obj_name}): {e}")
-        elif is_negative: # Subtractive
-            safe_blend = max(0.0, obj_s_child_blend_factor)
-            if safe_blend <= constants.CACHE_PRECISION: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
-            else: clamped_blend = min(1.0, safe_blend); current_scene_shape = lf.blend_difference(current_scene_shape, processed_child_subtree_world, clamped_blend)
-        else:
+        elif child_csg_op_type == "NONE": pass
+        
+        elif child_csg_op_type == "UNION":
+            current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
+        
+        elif child_csg_op_type == "INTERSECT":
+            # Intersection is always sharp. Parent's blend factor is ignored for this operation.
+            if current_scene_shape is lf.emptiness() or processed_child_subtree_world is lf.emptiness():
+                current_scene_shape = lf.emptiness() # Intersection with empty is empty
+            else:
+                try:
+                    # print(f"  Attempting SHARP intersection between current of '{obj_name}' and child '{child.name}'")
+                    current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world)
+                except Exception as e: 
+                    print(f"FF ERROR (intersecting {child.name} with {obj_name}): {e}")
+                    current_scene_shape = lf.emptiness()
+        
+        elif child_csg_op_type == "DIFFERENCE":
+            if current_scene_shape is lf.emptiness(): pass 
+            elif processed_child_subtree_world is lf.emptiness(): pass 
+            else:
+                try:
+                    blend_radius_for_subtraction = obj_s_child_blend_factor
+                    if blend_radius_for_subtraction > constants.CACHE_PRECISION:
+                        clamped_blend_difference = min(max(0.0, blend_radius_for_subtraction), 1.0) 
+                        # print(f"  Attempting BLENDED difference for '{child.name}' from '{obj_name}' with blend: {clamped_blend_difference}")
+                        current_scene_shape = lf.subtraction(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
+                    else:
+                        # print(f"  Attempting SHARP difference for '{child.name}' from '{obj_name}'")
+                        current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
+                except AttributeError: # Fallback if lf.subtraction (blended) isn't found
+                    print(f"FF WARN: Blended subtraction (lf.subtraction) not found for {child.name}. Using sharp difference.")
+                    current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
+                except Exception as e: 
+                    print(f"FF ERROR (subtracting {child.name} from {obj_name}): {e}")
+                    current_scene_shape = lf.emptiness()
+        
+        else: # Fallback for unknown CSG op
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
 
-    if current_scene_shape is None: return lf.emptiness()
+        if _lf_imported_ok and current_scene_shape is None: # Should be caught by lf.emptiness() usage
+            current_scene_shape = lf.emptiness()
+            
+    if current_scene_shape is None: return lf.emptiness() # Covers case where _lf_imported_ok is False
     return current_scene_shape

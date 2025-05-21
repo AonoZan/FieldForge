@@ -17,7 +17,7 @@ from .operators import (
     OBJECT_OT_sdf_manual_update,
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,
-    # Add other operator bl_idname imports if needed for buttons
+    OBJECT_OT_fieldforge_set_csg_mode
 )
 
 
@@ -94,7 +94,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     """ Draws the UI elements for the SDF Source object properties. """
     obj = context.object # Assumes active object is an SDF Source
     sdf_type = obj.get("sdf_type", "Unknown")
-    parent = obj.parent
 
     col = layout.column()
 
@@ -111,38 +110,47 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     use_loft = obj.get("sdf_use_loft", False)
     use_morph = obj.get("sdf_use_morph", False) and not use_loft # Exclusive
     use_clearance = obj.get("sdf_use_clearance", False) and not use_loft and not use_morph # Exclusive
-    is_negative = obj.get("sdf_is_negative", False) and not use_loft and not use_morph and not use_clearance # Exclusive
+    csg_active = not use_loft and not use_morph and not use_clearance
 
-    # Loft Toggle (only if valid parent/child pair)
-    can_loft = True;# parent and utils.is_valid_2d_loft_source(obj) and utils.is_valid_2d_loft_source(parent)
-    if can_loft:
+    row_csg = interact_col.row(align=True)
+    row_csg.active = csg_active # Disable if morph/clearance/loft is active
+    current_csg_op = obj.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
+
+    op_none = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='RADIOBUT_OFF', depress=(current_csg_op == 'NONE'))
+    op_none.csg_mode = 'NONE'
+    op_union = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='ADD', depress=(current_csg_op == 'UNION'))
+    op_union.csg_mode = 'UNION'
+    op_intersect = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='SELECT_INTERSECT', depress=(current_csg_op == 'INTERSECT'))
+    op_intersect.csg_mode = 'INTERSECT'
+    op_diff = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='SELECT_DIFFERENCE', depress=(current_csg_op == 'DIFFERENCE'))
+    # Alternative for Difference: 'REMOVE' icon if SELECT_DIFFERENCE is not preferred
+    # op_diff = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='REMOVE', depress=(current_csg_op == 'DIFFERENCE'))
+    op_diff.csg_mode = 'DIFFERENCE'
+
+    if not csg_active:
+        interact_col.label(text="(CSG mode overridden by Loft/Morph/Clearance)")
+
+    # Loft Toggle
+    # Loft validity can be complex, for UI simplicity, just show the toggle. Logic is in sdf_logic.
+    if sdf_type in ["circle", "polygon", "ring"]:
         row_loft = interact_col.row(align=True)
         row_loft.prop(obj, '["sdf_use_loft"]', text="Use Loft", toggle=True, icon='IPO_LINEAR')
-        if use_loft: row_loft.label(text="(Overrides others)")
-    else:
-        # Show disabled loft toggle or just omit it? Omit for cleaner UI.
-        # row_loft = interact_col.row(align=True); row_loft.active = False
-        # row_loft.prop(obj, '["sdf_use_loft"]', text="Use Loft (Invalid Pair)", toggle=True, icon='IPO_LINEAR')
-        pass # Only show Loft option when applicable
+    # if use_loft: row_loft.label(text="(Overrides others)") # Already handled by csg_active
 
     # Morph Toggle & Factor
     row_morph = interact_col.row(align=True); row_morph.active = not use_loft
     row_morph.prop(obj, '["sdf_use_morph"]', text="Morph", toggle=True, icon='MOD_SIMPLEDEFORM')
-    sub_morph = row_morph.row(align=True); sub_morph.active = use_morph
+    sub_morph = row_morph.row(align=True); sub_morph.active = use_morph and not use_loft
     sub_morph.prop(obj, '["sdf_morph_factor"]', text="Factor")
 
     # Clearance Toggle & Offset
     row_clearance = interact_col.row(align=True); row_clearance.active = not use_loft and not use_morph
     row_clearance.prop(obj, '["sdf_use_clearance"]', text="Clearance", toggle=True, icon='MOD_OFFSET')
-    sub_clearance = row_clearance.row(align=True); sub_clearance.active = use_clearance
+    sub_clearance = row_clearance.row(align=True); sub_clearance.active = use_clearance and not use_loft and not use_morph
     sub_clearance.prop(obj, '["sdf_clearance_offset"]', text="Offset")
-    if use_clearance: # Only show 'Keep Original' if Clearance is active
-        row_clearance_keep = interact_col.row(align=True); row_clearance_keep.active = use_clearance
+    if use_clearance and not use_loft and not use_morph:
+        row_clearance_keep = interact_col.row(align=True); row_clearance_keep.active = True
         row_clearance_keep.prop(obj, '["sdf_clearance_keep_original"]', text="Keep Original Shape")
-
-    # Negative Toggle
-    row_negative = interact_col.row(align=True); row_negative.active = not use_loft and not use_morph and not use_clearance
-    row_negative.prop(obj, '["sdf_is_negative"]', text="Negative (Subtractive)", toggle=True, icon='REMOVE')
 
     # Visual cue for draw color (optional)
     # draw_color_row = interact_col.row(align=True); draw_color_row.active = False; draw_color_row.label(text="", icon='INFO')

@@ -66,8 +66,8 @@ DEFAULT_SETTINGS = {
 # While these are set in the Add operators, having them here could be useful for reference
 # or if you needed to reset properties on an existing source.
 DEFAULT_SOURCE_SETTINGS = {
-    "sdf_child_blend_factor": 0.0, # Blend factor for *its* children (0 = sharp union/diff)
-    "sdf_is_negative": False,
+    "sdf_child_blend_factor": 0.0,
+    "sdf_csg_operation": "UNION",
     "sdf_use_clearance": False,
     "sdf_clearance_offset": 0.05,
     "sdf_clearance_keep_original": True,
@@ -76,8 +76,7 @@ DEFAULT_SOURCE_SETTINGS = {
     "sdf_use_loft": False,
     "sdf_use_shell": False,
     "sdf_shell_offset": 0.1,
-    "sdf_main_array_mode": 'NONE', # Options: 'NONE', 'LINEAR', 'RADIAL'
-    # Linear Array Defaults
+    "sdf_main_array_mode": 'NONE',
     "sdf_array_active_x": False,
     "sdf_array_active_y": False,
     "sdf_array_active_z": False,

@@ -132,7 +132,17 @@ class AddSdfSourceBase(Operator):
 
     # Common interaction properties shown in dialog
     initial_child_blend: FloatProperty(name="Child Blend Factor", description="Blend factor for children parented TO this object", default=0.0, min=0.0, max=5.0, subtype='FACTOR')
-    is_negative: BoolProperty(name="Negative (Subtractive)", description="Make this shape subtractive", default=False)
+    initial_csg_operation: EnumProperty(
+        name="CSG Operation",
+        description="Default CSG operation for this child with its parent",
+        items=[
+            ('UNION', "Union", "Add to parent shape (default)", 'ADD', 0),
+            ('DIFFERENCE', "Difference", "Subtract from parent shape", 'REMOVE', 1),
+            ('INTERSECT', "Intersect", "Intersect with parent shape", 'INTERSECT', 2),
+            ('NONE', "None", "No direct CSG contribution (passthrough/group)", 'RADIOBUT_OFF', 3),
+        ],
+        default='UNION'
+    )
     use_clearance: BoolProperty(name="Use Clearance", description="Make shape subtract an offset version (exclusive with Negative/Morph)", default=False)
     initial_clearance_offset: FloatProperty(name="Clearance Offset", description="Offset distance for Clearance", default=0.05, min=0.0, subtype='DISTANCE', unit='LENGTH')
     use_morph: BoolProperty(name="Use Morph", description="Morph from parent towards this shape (exclusive with Negative/Clearance)", default=False)
@@ -182,14 +192,20 @@ class AddSdfSourceBase(Operator):
         obj["sdf_type"] = sdf_type
         defaults = constants.DEFAULT_SOURCE_SETTINGS # Use defaults from constants
         obj["sdf_child_blend_factor"] = self.initial_child_blend # Set from operator prop
-        # Determine initial interaction mode (exclusive toggles)
+        # Determine initial interaction mode (Morph/Clearance override CSG op)
         final_use_morph = self.use_morph
         final_use_clearance = self.use_clearance and not final_use_morph
-        final_is_negative = self.is_negative and not final_use_clearance and not final_use_morph
-        obj["sdf_use_morph"] = final_use_morph; obj["sdf_use_clearance"] = final_use_clearance; obj["sdf_is_negative"] = final_is_negative
+        
+        obj["sdf_use_morph"] = final_use_morph
         obj["sdf_morph_factor"] = self.initial_morph_factor if final_use_morph else defaults["sdf_morph_factor"]
+        obj["sdf_use_clearance"] = final_use_clearance
         obj["sdf_clearance_offset"] = self.initial_clearance_offset if final_use_clearance else defaults["sdf_clearance_offset"]
         obj["sdf_clearance_keep_original"] = defaults["sdf_clearance_keep_original"]
+        # Set CSG operation if not using morph or clearance
+        if not final_use_morph and not final_use_clearance:
+            obj["sdf_csg_operation"] = self.initial_csg_operation
+        else: # Default to UNION if morph/clearance is active, as csg_op is overridden
+            obj["sdf_csg_operation"] = "UNION" 
         # Set other defaults from constants file
         obj["sdf_use_loft"] = defaults["sdf_use_loft"]; obj["sdf_use_shell"] = defaults["sdf_use_shell"]
         obj["sdf_shell_offset"] = defaults["sdf_shell_offset"]; obj["sdf_main_array_mode"] = defaults["sdf_main_array_mode"]
@@ -204,27 +220,37 @@ class AddSdfSourceBase(Operator):
                 try: obj[key] = value
                 except TypeError as e: print(f"WARN: Could not set prop '{key}' on {obj.name}: {e}. Value: {value}")
 
-        # Set color based on PRIMARY interaction mode
-        if final_use_morph: obj.color = (0.3, 0.5, 1.0, 1.0) # Blueish
-        elif final_use_clearance or final_is_negative: obj.color = (1.0, 0.3, 0.3, 1.0) # Reddish
-        else: obj.color = (0.5, 0.5, 0.5, 1.0) # Neutral grey
+        # Set color based on effective interaction mode
+        current_csg_op = obj["sdf_csg_operation"] # Read back what was set
+        if final_use_morph: 
+            obj.color = (0.3, 0.5, 1.0, 1.0) # Blueish (Morph)
+        elif final_use_clearance:
+            obj.color = (1.0, 0.6, 0.2, 1.0) # Orangeish (Clearance)
+        elif current_csg_op == "DIFFERENCE":
+            obj.color = (1.0, 0.3, 0.3, 1.0) # Reddish (Difference)
+        elif current_csg_op == "INTERSECT":
+            obj.color = (0.8, 0.2, 0.8, 1.0) # Purplish (Intersect)
+        elif current_csg_op == "NONE":
+            obj.color = (0.3, 0.3, 0.3, 1.0) # Dark Grey (None)
+        else: # UNION or other
+            obj.color = (0.5, 0.5, 0.5, 1.0) # Neutral grey (Union)
 
         # Set initial STANDARD visibility based on PARENT BOUNDS setting
         show_standard_empty = utils.get_bounds_setting(parent_bounds, "sdf_show_source_empties")
         obj.hide_viewport = not show_standard_empty
-        obj.hide_render = not show_standard_empty # Keep consistent
+        obj.hide_render = not show_standard_empty
 
-        # Select the new object
         context.view_layer.objects.active = obj
         for sel_obj in context.selected_objects:
             if sel_obj != obj: sel_obj.select_set(False)
         obj.select_set(True)
 
-        # Report success
-        mode_str = " [Morph]" if final_use_morph else " [Clearance]" if final_use_clearance else " [Negative]" if final_is_negative else ""
+        mode_str = ""
+        if final_use_morph: mode_str = " [Morph]"
+        elif final_use_clearance: mode_str = " [Clearance]"
+        else: mode_str = f" [{current_csg_op.capitalize()}]"
         self.report({'INFO'}, f"Added SDF Source: {obj.name} ({sdf_type}) under {target_parent.name}{mode_str}")
 
-        # Trigger update check for the PARENT BOUNDS hierarchy
         ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"add_{sdf_type}_source")
         tag_redraw_all_view3d() # Redraw to show new object/outline
         return {'FINISHED'}
@@ -384,6 +410,49 @@ class OBJECT_OT_fieldforge_set_main_array_mode(Operator):
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_set_csg_mode(Operator):
+    """Sets the SDF CSG operation mode for the active source object."""
+    bl_idname = "object.fieldforge_set_csg_mode"
+    bl_label = "Set SDF CSG Mode"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    csg_mode: EnumProperty(
+        items=[
+            ('NONE', "None", "No direct CSG contribution", 'RADIOBUT_OFF', 0),
+            ('UNION', "Union", "Add to parent shape", 'ADD', 1),
+            ('DIFFERENCE', "Difference", "Subtract from parent shape", 'REMOVE', 2),
+            ('INTERSECT', "Intersect", "Intersect with parent shape", 'INTERSECT', 3),
+        ],
+        name="CSG Mode",
+        default='UNION'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_source(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_csg_operation"
+        current_op_mode = obj.get(prop_name, constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
+        
+        if current_op_mode != self.csg_mode:
+            obj[prop_name] = self.csg_mode
+            
+            # Update color based on new CSG mode (if not overridden by morph/clearance)
+            use_morph = obj.get("sdf_use_morph", False)
+            use_clearance = obj.get("sdf_use_clearance", False)
+            if not use_morph and not use_clearance:
+                if self.csg_mode == "DIFFERENCE": obj.color = (1.0, 0.3, 0.3, 1.0)
+                elif self.csg_mode == "INTERSECT": obj.color = (0.8, 0.2, 0.8, 1.0)
+                elif self.csg_mode == "NONE": obj.color = (0.3, 0.3, 0.3, 1.0)
+                else: obj.color = (0.5, 0.5, 0.5, 1.0) # UNION
+
+            parent_bounds = utils.find_parent_bounds(obj)
+            if parent_bounds:
+                ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_csg_mode_{obj.name}_{self.csg_mode}")
+            tag_redraw_all_view3d()
+        return {'FINISHED'}
 
 # --- Modal Selection/Grab Handler ---
 
@@ -736,6 +805,7 @@ classes_to_register = (
     OBJECT_OT_add_sdf_half_space_source,
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,
+    OBJECT_OT_fieldforge_set_csg_mode,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )
