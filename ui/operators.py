@@ -280,6 +280,11 @@ class OBJECT_OT_add_sdf_cone_source(AddSdfSourceBase):
     bl_idname = "object.add_sdf_cone_source"; bl_label = "SDF Cone Source"
     def execute(self, context): return self.add_sdf_empty(context, "cone", 'PLAIN_AXES', "FF_Cone")
 
+class OBJECT_OT_add_sdf_pyramid_source(AddSdfSourceBase):
+    """Adds an Empty controller for an SDF Pyramid"""
+    bl_idname = "object.add_sdf_pyramid_source";bl_label = "SDF Pyramid Source"
+    def execute(self, context): return self.add_sdf_empty(context, "pyramid", 'PLAIN_AXES', "FF_Pyramid")
+
 class OBJECT_OT_add_sdf_torus_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Torus"""
     bl_idname = "object.add_sdf_torus_source"; bl_label = "SDF Torus Source"
@@ -797,6 +802,7 @@ classes_to_register = (
     OBJECT_OT_add_sdf_sphere_source,
     OBJECT_OT_add_sdf_cylinder_source,
     OBJECT_OT_add_sdf_cone_source,
+    OBJECT_OT_add_sdf_pyramid_source,
     OBJECT_OT_add_sdf_torus_source,
     OBJECT_OT_add_sdf_rounded_box_source,
     OBJECT_OT_add_sdf_circle_source,

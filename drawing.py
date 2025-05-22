@@ -279,6 +279,25 @@ def ff_draw_callback():
                         line_segments_for_picking_for_this_obj.append((w_apex_cone.copy(), b_pl_cone.copy()))
                         all_world_verts_for_batch_if_selected.extend(sides_d_cone)
                     except Exception as e_calc: print(f"FF Draw Calc Error (Cone Sides): {obj_name} - {e_calc}")
+            elif sdf_type_prop == "pyramid":
+                local_base_verts_pyramid = [
+                    Vector((-0.5, -0.5, 0.0)), Vector(( 0.5, -0.5, 0.0)),
+                    Vector(( 0.5,  0.5, 0.0)), Vector((-0.5,  0.5, 0.0))
+                ]
+                local_apex_pyramid = Vector((0.0, 0.0, 1.0))
+
+                world_base_verts_pyramid = [(mat @ v.to_4d()).xyz.copy() for v in local_base_verts_pyramid]
+                world_apex_pyramid = (mat @ local_apex_pyramid.to_4d()).xyz.copy()
+
+                for i in range(len(world_base_verts_pyramid)):
+                    v1 = world_base_verts_pyramid[i]
+                    v2 = world_base_verts_pyramid[(i + 1) % len(world_base_verts_pyramid)]
+                    line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
+                    all_world_verts_for_batch_if_selected.extend([v1, v2])
+                
+                for v_base in world_base_verts_pyramid:
+                    line_segments_for_picking_for_this_obj.append((v_base.copy(), world_apex_pyramid.copy()))
+                    all_world_verts_for_batch_if_selected.extend([v_base, world_apex_pyramid])
             elif sdf_type_prop == "rounded_box":
                 cs = 4
                 roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])

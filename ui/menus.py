@@ -18,6 +18,7 @@ from .operators import (
     OBJECT_OT_add_sdf_sphere_source,
     OBJECT_OT_add_sdf_cylinder_source,
     OBJECT_OT_add_sdf_cone_source,
+    OBJECT_OT_add_sdf_pyramid_source,
     OBJECT_OT_add_sdf_torus_source,
     OBJECT_OT_add_sdf_rounded_box_source,
     OBJECT_OT_add_sdf_circle_source,
@@ -67,6 +68,7 @@ class VIEW3D_MT_add_sdf(Menu):
         col.operator(OBJECT_OT_add_sdf_sphere_source.bl_idname, text="Sphere", icon='MESH_UVSPHERE')
         col.operator(OBJECT_OT_add_sdf_cylinder_source.bl_idname, text="Cylinder", icon='MESH_CYLINDER')
         col.operator(OBJECT_OT_add_sdf_cone_source.bl_idname, text="Cone", icon='MESH_CONE')
+        col.operator(OBJECT_OT_add_sdf_pyramid_source.bl_idname, text="Pyramid", icon='MESH_CONE')
         col.operator(OBJECT_OT_add_sdf_torus_source.bl_idname, text="Torus", icon='MESH_TORUS')
         col.operator(OBJECT_OT_add_sdf_rounded_box_source.bl_idname, text="Rounded Box", icon='MOD_BEVEL')
         col.operator(OBJECT_OT_add_sdf_circle_source.bl_idname, text="Circle", icon='MESH_CIRCLE')

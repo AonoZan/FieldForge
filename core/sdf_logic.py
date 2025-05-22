@@ -58,6 +58,11 @@ def reconstruct_shape(obj) -> lf.Shape | None:
     unit_height = 1.0 # Standard height for shapes like cylinder/cone
     half_size = 0.5 # Half-dimension for unit cube/box related calculations
 
+    unit_pyramid_base_half_x = 0.5
+    unit_pyramid_base_half_y = 0.5
+    unit_pyramid_height = 1.0
+    unit_pyramid_zmin = 0
+
     try:
         if sdf_type == "cube":
             shape = lf.cube_centered((2 * half_size, 2 * half_size, 2 * half_size))
@@ -82,6 +87,15 @@ def reconstruct_shape(obj) -> lf.Shape | None:
             cone_param_height = (unit_height * unit_radius) / sqrt_term
             
             shape = lf.cone_z(cone_param_radius, cone_param_height, base=(0, 0, 0.0))
+        elif sdf_type == "pyramid":
+            base_corner_a = (-unit_pyramid_base_half_x, -unit_pyramid_base_half_y)
+            base_corner_b = ( unit_pyramid_base_half_x,  unit_pyramid_base_half_y)
+            shape = lf.pyramid_z(
+                base_corner_a,
+                base_corner_b,
+                unit_pyramid_zmin,
+                unit_pyramid_height
+            )
         elif sdf_type == "torus":
             default_major = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_major_radius"]
             default_minor = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_minor_radius"]
