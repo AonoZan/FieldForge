@@ -24,6 +24,7 @@ from .operators import (
     OBJECT_OT_add_sdf_circle_source,
     OBJECT_OT_add_sdf_ring_source,
     OBJECT_OT_add_sdf_polygon_source,
+    OBJECT_OT_add_sdf_text_source,
     OBJECT_OT_add_sdf_half_space_source,
     # Add other operator bl_idname imports if needed for menu items
 )
@@ -74,6 +75,7 @@ class VIEW3D_MT_add_sdf(Menu):
         col.operator(OBJECT_OT_add_sdf_circle_source.bl_idname, text="Circle", icon='MESH_CIRCLE')
         col.operator(OBJECT_OT_add_sdf_ring_source.bl_idname, text="Ring", icon='CURVE_NCIRCLE') # Or MESH_TORUS? CURVE_NCIRCLE is good
         col.operator(OBJECT_OT_add_sdf_polygon_source.bl_idname, text="Polygon", icon='MESH_CIRCLE') # Shares icon with Circle
+        col.operator(OBJECT_OT_add_sdf_text_source.bl_idname, text="Text", icon='OUTLINER_OB_FONT')
         col.operator(OBJECT_OT_add_sdf_half_space_source.bl_idname, text="Half Space", icon='MESH_PLANE')
 
         # Optional: Add informational text below if adding sources is disabled

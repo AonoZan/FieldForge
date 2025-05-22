@@ -163,7 +163,13 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     param_col = param_box.column(align=True)
     has_params = False # Track if any params are shown for this type
 
-    if sdf_type == "rounded_box":
+    if sdf_type == "text":
+        param_col.label(text="Parameters:")
+        param_col.prop(obj, '["sdf_text_string"]', text="Text")
+        # If you made text extrudable via the generic extrusion depth:
+        # param_col.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+        has_params = True
+    elif sdf_type == "rounded_box":
         param_col.label(text="Parameters:")
         param_col.prop(obj, '["sdf_round_radius"]', text="Rounding Radius")
         has_params = True

@@ -329,6 +329,32 @@ class OBJECT_OT_add_sdf_polygon_source(AddSdfSourceBase):
         props = {"sdf_sides": self.initial_sides, "sdf_extrusion_depth": self.initial_extrusion_depth}
         return self.add_sdf_empty(context, "polygon", 'PLAIN_AXES', "FF_Polygon", props_to_set=props)
 
+class OBJECT_OT_add_sdf_text_source(AddSdfSourceBase):
+    """Adds an Empty controller for an SDF Text object"""
+    bl_idname = "object.add_sdf_text_source"
+    bl_label = "SDF Text Source"
+
+    initial_text_string: StringProperty(
+        name="Text",
+        description="The text string to generate",
+        default=constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"]
+    )
+    # If you want text to be extrudable by default via the common extrusion property:
+    initial_extrusion_depth: FloatProperty(
+        name="Extrusion Depth (Optional)", 
+        description="Depth of extrusion along local Z if text is treated as 2D base", 
+        default=0.0 # Default to flat, user can set it if they want extrusion
+        # Or use constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"] if you want it extruded by default
+    )
+    def execute(self, context):
+        props_to_set = {"sdf_text_string": self.initial_text_string}
+        # Only add extrusion depth if you want it to be part of the Text object's initial setup
+        # And if you've modified sdf_logic.py to make "text" extrudable.
+        if self.initial_extrusion_depth > 1e-5 : # Only set if user provided a value
+             props_to_set["sdf_extrusion_depth"] = self.initial_extrusion_depth
+        
+        return self.add_sdf_empty(context, "text", 'PLAIN_AXES', "FF_Text", props_to_set=props_to_set)
+
 class OBJECT_OT_add_sdf_half_space_source(AddSdfSourceBase):
     """Adds an Empty controller for an SDF Half Space"""
     bl_idname = "object.add_sdf_half_space_source"; bl_label = "SDF Half Space Source"
@@ -808,6 +834,7 @@ classes_to_register = (
     OBJECT_OT_add_sdf_circle_source,
     OBJECT_OT_add_sdf_ring_source,
     OBJECT_OT_add_sdf_polygon_source,
+    OBJECT_OT_add_sdf_text_source,
     OBJECT_OT_add_sdf_half_space_source,
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,

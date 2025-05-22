@@ -358,6 +358,42 @@ def ff_draw_callback():
                         line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
                         all_world_verts_for_batch_if_selected.extend([v1,v2])
 
+            elif sdf_type_prop == "text":
+                text_string = obj.get("sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
+                if not text_string.strip(): continue # Don't draw if empty
+
+                # Approximate unit bounds for text (height ~1, width estimated)
+                # This matches the rough centering in reconstruct_shape
+                num_chars = len(text_string)
+                est_unit_width = num_chars * 0.7  # Very rough estimate
+                est_unit_height = 1.0 # Based on libfive's font definition
+
+                half_w = est_unit_width / 2.0
+                half_h = est_unit_height / 2.0
+
+                # Local corners of the bounding box (2D in XY plane, centered around where text starts)
+                # The text in reconstruct_shape starts at (-est_width/2, -0.5)
+                # So the box should be relative to that.
+                # If text starts at (sx, sy) and has width w, height h, then box is
+                # (sx, sy), (sx+w, sy), (sx+w, sy+h), (sx, sy+h)
+                # Our start_pos_x = -half_w, start_pos_y = -0.5 (baseline)
+                # So, local corners are approximately:
+                # (-half_w, -0.5) , (half_w, -0.5), (half_w, 0.5), (-half_w, 0.5)
+                # This centers the box horizontally and makes its vertical center at y=0
+                local_rect_verts = [
+                    Vector((-half_w, -half_h, 0.0)), Vector(( half_w, -half_h, 0.0)),
+                    Vector(( half_w,  half_h, 0.0)), Vector((-half_w,  half_h, 0.0))
+                ]
+                
+                world_rect_verts = [(mat @ v.to_4d()).xyz.copy() for v in local_rect_verts]
+
+                if world_rect_verts:
+                    for i in range(len(world_rect_verts)):
+                        v1 = world_rect_verts[i]
+                        v2 = world_rect_verts[(i + 1) % len(world_rect_verts)]
+                        line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
+                        all_world_verts_for_batch_if_selected.extend([v1, v2])
+
             elif sdf_type_prop == "half_space":
                 draw_plane_size_hs=2.0; arrow_len_factor_hs=0.5 
                 plane_verts_local_hs = [

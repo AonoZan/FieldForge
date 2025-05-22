@@ -110,6 +110,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_radial_array_center_on_origin': actual_child_obj.get("sdf_array_center_on_origin", constants.DEFAULT_SOURCE_SETTINGS["sdf_array_center_on_origin"]),
                     # --- Shape-specific props ---
                     # Use conditional get based on sdf_type to keep state clean
+                    'sdf_text_string': actual_child_obj.get("sdf_text_string") if sdf_type == "text" else None,
                     'sdf_round_radius': actual_child_obj.get("sdf_round_radius") if sdf_type == "rounded_box" else None,
                     'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth") if sdf_type in {"circle", "ring", "polygon"} else None,
                     'sdf_inner_radius': actual_child_obj.get("sdf_inner_radius") if sdf_type == "ring" else None,

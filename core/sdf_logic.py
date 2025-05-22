@@ -129,6 +129,30 @@ def reconstruct_shape(obj) -> lf.Shape | None:
             sides = obj.get("sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"])
             safe_n = max(3, int(sides))
             shape = lf.polygon(unit_radius, safe_n, center=(0, 0))
+        elif sdf_type == "text": # NEW SHAPE
+            text_string = obj.get("sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
+            if not text_string.strip(): # If string is empty or only whitespace
+                print(f"FieldForge WARN (reconstruct_shape): Empty text string for {obj.name}. Returning empty shape.")
+                return lf.emptiness()
+            
+            # lf.text(txt, pos) - pos is 2D starting position.
+            # For a unit shape, we want it somewhat centered.
+            # The libfive font has a character height of ~1.
+            # Let's estimate width based on char count and assume avg char width ~0.6-0.8 for centering.
+            # This is a rough estimate for the *unit* shape.
+            # Actual text layout is complex. For simplicity, start text at a slight negative X offset.
+            num_chars = len(text_string)
+            # A very rough estimated width, assuming char height is 1 and aspect is ~0.7
+            estimated_width = num_chars * 0.7 
+            start_pos_x = -estimated_width / 2.0 
+            # Y position: libfive text seems to draw along baseline, so to center vertically around y=0:
+            start_pos_y = -0.5 # Assuming char height of 1, baseline starts slightly down
+            
+            shape = lf.text(text_string, (start_pos_x, start_pos_y))
+            # Note: This text is 2D. Extrusion will be handled by the generic 2D shape extrusion
+            # in process_sdf_hierarchy if sdf_extrusion_depth is set.
+            # For now, "text" is not in is_2d_shape_for_extrude. If we want text to be extrudable
+            # by default like circle/ring/polygon, we'd add it there.
         elif sdf_type == "half_space":
             shape = lf.half_space((0.0, 0.0, 1.0), (0.0, 0.0, 0.0))
         else:
@@ -209,7 +233,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         unit_shape_modified_by_own_ops = reconstruct_shape(obj)
         
         sdf_type = obj.get("sdf_type", "")
-        is_2d_shape_for_extrude = sdf_type in {"circle", "ring", "polygon"}
+        is_2d_shape_for_extrude = sdf_type in {"circle", "ring", "polygon", "text"}
         if is_2d_shape_for_extrude and unit_shape_modified_by_own_ops is not lf.emptiness():
             depth = obj.get("sdf_extrusion_depth", constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"])
             if float(depth) > 1e-5:

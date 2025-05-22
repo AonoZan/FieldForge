@@ -97,4 +97,5 @@ DEFAULT_SOURCE_SETTINGS = {
     "sdf_extrusion_depth": 0.1,
     "sdf_inner_radius": 0.25, # Ring inner radius (unit space)
     "sdf_sides": 6,           # Polygon sides
+    "sdf_text_string": "Text",
 }
