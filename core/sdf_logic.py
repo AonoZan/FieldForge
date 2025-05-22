@@ -398,21 +398,15 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                     print(f"FF ERROR (intersecting {child_name} with {obj_name}): {e}")
                     current_scene_shape = lf.emptiness()
         elif child_csg_op_type == "DIFFERENCE":
-            try:
-                blend_radius_for_subtraction = obj_s_child_blend_factor 
-                if blend_radius_for_subtraction > constants.CACHE_PRECISION:
-                    clamped_blend_difference = min(max(0.0, blend_radius_for_subtraction), 1.0) 
-                    current_scene_shape = lf.subtraction(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
-                else:
+            if current_scene_shape is lf.emptiness() or processed_child_subtree_world is lf.emptiness():
+                current_scene_shape = lf.emptiness()
+            else:
+                try:
                     current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
-            except AttributeError:
-                print(f"FF WARN: Blended subtraction (lf.subtraction) not found. Using sharp difference for {child_name} from {obj_name}.")
-                current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
-            except Exception as e: 
-                print(f"FF ERROR (subtracting {child_name} from {obj_name}): {e}")
-                try: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
-                except Exception as e_diff: print(f"FF ERROR (fallback sharp difference for {child_name} from {obj_name}): {e_diff}")
-        
+                except Exception as e: 
+                    print(f"FF ERROR (subtracting {child_name} from {obj_name}): {e}")
+                    try: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
+                    except Exception as e_diff: print(f"FF ERROR (fallback sharp difference for {child_name} from {obj_name}): {e_diff}")
         else: 
             print(f"FF WARN: Unknown sdf_csg_operation '{child_csg_op_type}' for {child_name}. Defaulting to union.")
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
