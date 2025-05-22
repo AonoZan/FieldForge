@@ -107,6 +107,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     # Radial Array Props (Only relevant if mode is RADIAL)
                     'sdf_radial_count': actual_child_obj.get("sdf_radial_count", 6),
                     'sdf_radial_center': tuple(actual_child_obj.get("sdf_radial_center", (0.0, 0.0))), # Convert bpy_prop_array to tuple
+                    'sdf_radial_array_center_on_origin': actual_child_obj.get("sdf_array_center_on_origin", constants.DEFAULT_SOURCE_SETTINGS["sdf_array_center_on_origin"]),
                     # --- Shape-specific props ---
                     # Use conditional get based on sdf_type to keep state clean
                     'sdf_round_radius': actual_child_obj.get("sdf_round_radius") if sdf_type == "rounded_box" else None,

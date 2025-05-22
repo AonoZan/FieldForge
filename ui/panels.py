@@ -255,6 +255,21 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         cnt_r = "sdf_radial_count"; cen_r = "sdf_radial_center"
         radial_col.prop(obj, f'["{cnt_r}"]', text="Count")
         radial_col.prop(obj, f'["{cen_r}"]', text="Center Offset")
+    if current_main_mode != 'NONE':
+        prop_center_on_origin = "sdf_array_center_on_origin"
+        row_center_origin = main_arr_col.row()
+        # Only enable the checkbox if the offset is non-zero, otherwise, it's redundant.
+        #current_center_offset = obj.get(cen_r, (0.0, 0.0))
+        #is_offset_non_zero = abs(current_center_offset[0]) > 1e-5 or abs(current_center_offset[1]) > 1e-5
+        #row_center_origin.active = is_offset_non_zero 
+        row_center_origin.prop(obj, f'["{prop_center_on_origin}"]', text="Center on Origin")
+        #if not is_offset_non_zero:
+            # If offset is zero, it's already centered. We can indicate the checkbox would have no effect.
+            # Or simply disable it. If disabled, the text below is useful.
+            # If we want to ensure the property is True when offset is zero:
+            # if not is_offset_non_zero and not obj.get(prop_center_on_origin, True):
+            # obj[prop_center_on_origin] = True # Force true if offset is zero
+           # pass # UI will show it disabled
 
     col.separator()
     # Info Text

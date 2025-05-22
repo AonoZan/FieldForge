@@ -12,7 +12,6 @@ import bpy
 # Attempt to import libfive - success depends on setup in root __init__.py
 try:
     import libfive.stdlib as lf
-    import libfive.shape # Access Shape.X etc.
     _lf_imported_ok = True
 except ImportError:
     print("FieldForge WARN (sdf_logic.py): libfive modules not found during import.")
@@ -142,7 +141,7 @@ def apply_blender_transform_to_sdf(shape, obj_matrix_world_inv: Matrix) -> lf.Sh
         print(f"FieldForge WARN (apply_transform): Received None matrix_world_inv.")
         return lf.emptiness()
 
-    X, Y, Z = libfive.shape.Shape.X(), libfive.shape.Shape.Y(), libfive.shape.Shape.Z()
+    X, Y, Z = lf.Shape.X(), lf.Shape.Y(), lf.Shape.Z()
     mat_inv = obj_matrix_world_inv
     try:
         x_p = mat_inv[0][0] * X + mat_inv[0][1] * Y + mat_inv[0][2] * Z + mat_inv[0][3]
@@ -150,7 +149,7 @@ def apply_blender_transform_to_sdf(shape, obj_matrix_world_inv: Matrix) -> lf.Sh
         z_p = mat_inv[2][0] * X + mat_inv[2][1] * Y + mat_inv[2][2] * Z + mat_inv[2][3]
         transformed_shape = shape.remap(x_p, y_p, z_p)
     except OverflowError:
-         print(f"FieldForge ERROR (apply_transform): OverflowError during remap for '{shape}' (likely extreme transform values).")
+         print(f"FieldForge ERROR (apply_transform): OverflowError during remap for shape (obj likely has extreme transform values).")
          return lf.emptiness()
     except TypeError as e:
         print(f"FieldForge ERROR (apply_transform): TypeError during remap: {e}")
@@ -214,52 +213,86 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
 
         # --- Libfive Array Application ---
         array_mode = obj.get("sdf_main_array_mode", 'NONE')
+        center_on_origin = obj.get("sdf_array_center_on_origin", True)
         if array_mode != 'NONE' and unit_shape_modified_by_own_ops is not lf.emptiness():
             # temp_shape_for_modifiers in the snippet corresponds to unit_shape_modified_by_own_ops here
             current_shape_before_array = unit_shape_modified_by_own_ops # Store for potential error case
 
-            active_x = obj.get("sdf_array_active_x", False)
-            active_y = obj.get("sdf_array_active_y", False)
-            active_z = obj.get("sdf_array_active_z", False)
-            array_func = None; args = None; array_type_str = "None"
 
             if array_mode == 'LINEAR':
-                nx=max(1,obj.get("sdf_array_count_x",1))
-                ny=max(1,obj.get("sdf_array_count_y",1))
-                nz=max(1,obj.get("sdf_array_count_z",1))
-                dx=obj.get("sdf_array_delta_x",1.0)
-                dy=obj.get("sdf_array_delta_y",1.0)
-                dz=obj.get("sdf_array_delta_z",1.0)
+                active_x = obj.get("sdf_array_active_x", False)
+                active_y = obj.get("sdf_array_active_y", False) and active_x
+                active_z = obj.get("sdf_array_active_z", False) and active_y
 
-                # Determine which array function to use based on active axes
-                if active_x and active_y and active_z and (nx>1 or ny>1 or nz>1): 
-                    args = (unit_shape_modified_by_own_ops,nx,ny,nz,(float(dx),float(dy),float(dz)))
-                    array_func=lf.array_xyz; array_type_str="LinXYZ"
-                elif active_x and active_y and (nx>1 or ny>1): 
-                    args = (unit_shape_modified_by_own_ops,nx,ny,(float(dx),float(dy)))
-                    array_func=lf.array_xy; array_type_str="LinXY"
-                elif active_x and nx>1: 
-                    args = (unit_shape_modified_by_own_ops,nx,float(dx))
-                    array_func=lf.array_x; array_type_str="LinX"
+                nx = int(obj.get("sdf_array_count_x", 2)) if active_x else 1
+                ny = int(obj.get("sdf_array_count_y", 2)) if active_y else 1
+                nz = int(obj.get("sdf_array_count_z", 2)) if active_z else 1
+
+                nx = max(1, nx); ny = max(1, ny); nz = max(1, nz)
+
+                dx_val = float(obj.get("sdf_array_delta_x", 1.0)) if active_x else 0.0
+                dy_val = float(obj.get("sdf_array_delta_y", 1.0)) if active_y else 0.0
+                dz_val = float(obj.get("sdf_array_delta_z", 1.0)) if active_z else 0.0
+                
+                array_applied = False
+                try:
+                    if active_z:
+                        if nx > 1 or ny > 1 or nz > 1:
+                            unit_shape_modified_by_own_ops = lf.array_xyz(current_shape_before_array, nx, ny, nz, (dx_val, dy_val, dz_val))
+                            array_applied = True
+                    elif active_y:
+                        if nx > 1 or ny > 1:
+                            unit_shape_modified_by_own_ops = lf.array_xy(current_shape_before_array, nx, ny, (dx_val, dy_val))
+                            array_applied = True
+                    elif active_x:
+                        if nx > 1:
+                            unit_shape_modified_by_own_ops = lf.array_x(current_shape_before_array, nx, dx_val)
+                            array_applied = True
+                    
+                    if array_applied and center_on_origin:
+                        total_offset_x = (nx - 1) * dx_val if active_x and nx > 1 else 0.0
+                        total_offset_y = (ny - 1) * dy_val if active_y and ny > 1 else 0.0
+                        total_offset_z = (nz - 1) * dz_val if active_z and nz > 1 else 0.0
+
+                        center_shift_x = -total_offset_x / 2.0
+                        center_shift_y = -total_offset_y / 2.0
+                        center_shift_z = -total_offset_z / 2.0
+
+                        if abs(center_shift_x) > 1e-6 or abs(center_shift_y) > 1e-6 or abs(center_shift_z) > 1e-6:
+                            if unit_shape_modified_by_own_ops is not lf.emptiness():
+                                X, Y, Z = lf.Shape.X(), lf.Shape.Y(), lf.Shape.Z()
+                                unit_shape_modified_by_own_ops = unit_shape_modified_by_own_ops.remap(
+                                    X - center_shift_x,
+                                    Y - center_shift_y,
+                                    Z - center_shift_z
+                                )
+                except Exception as e:
+                    print(f"FieldForge ERROR (Linear Array for {obj_name}): {e}")
+                    unit_shape_modified_by_own_ops = current_shape_before_array # Revert
+            
             elif array_mode == 'RADIAL':
-                count = max(1, obj.get("sdf_radial_count", 1))
+                count = max(1, int(obj.get("sdf_radial_count", 1)))
                 center_prop = obj.get("sdf_radial_center", (0.0, 0.0))
                 if count > 1:
-                    try: center_xy = (float(center_prop[0]), float(center_prop[1]))
+                    try: 
+                        center_xy_pivot = (float(center_prop[0]), float(center_prop[1]))
                     except (TypeError, IndexError, ValueError): 
-                        center_xy = (0.0, 0.0)
-                        print(f"FF WARN: Invalid radial center on {obj_name}, using (0,0).")
-                    args = (unit_shape_modified_by_own_ops, count, center_xy)
-                    array_func = lf.array_polar_z
-                    array_type_str = "Radial"
-            
-            if array_func and args:
-                try:
-                    # print(f"  DEBUG: Applying Array {array_type_str} to {obj_name}")
-                    unit_shape_modified_by_own_ops = array_func(*args)
-                except Exception as e: 
-                    print(f"FieldForge ERROR (process_hierarchy): Arraying {obj_name} ({array_type_str}) failed: {e}")
-                    unit_shape_modified_by_own_ops = current_shape_before_array # Revert to pre-array shape on error
+                        center_xy_pivot = (0.0, 0.0)
+                        print(f"FF WARN: Invalid radial center on {obj_name}, using (0,0) for pivot.")   
+                    
+                    try:
+                        unit_shape_modified_by_own_ops = lf.array_polar_z(current_shape_before_array, count, center_xy_pivot)
+                        if center_on_origin and (abs(center_xy_pivot[0]) > 1e-6 or abs(center_xy_pivot[1]) > 1e-6):
+                            if unit_shape_modified_by_own_ops is not lf.emptiness():
+                                X, Y, Z = lf.Shape.X(), lf.Shape.Y(), lf.Shape.Z()
+                                unit_shape_modified_by_own_ops = unit_shape_modified_by_own_ops.remap(
+                                    X + center_xy_pivot[0], 
+                                    Y + center_xy_pivot[1], 
+                                    Z
+                                )
+                    except Exception as e: 
+                        print(f"FieldForge ERROR (Radial Array/Remap for {obj_name}): {e}")
+                        unit_shape_modified_by_own_ops = current_shape_before_array # Revert
         
         if unit_shape_modified_by_own_ops is not lf.emptiness():
             try:
@@ -280,6 +313,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         if not child.visible_get(view_layer=context.view_layer):
             continue
 
+        child_name = child.name 
         is_obj_loft_participant = utils.is_sdf_source(obj) and \
                                   obj.get("sdf_use_loft", False) and \
                                   utils.is_valid_2d_loft_source(obj)
@@ -292,7 +326,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
             child_2d_unit_profile_for_loft = reconstruct_shape(child)
             lofted_contribution_world = lf.emptiness()
             if parent_2d_unit_profile_for_loft is lf.emptiness() or child_2d_unit_profile_for_loft is lf.emptiness():
-                print(f"FF WARN (loft): Invalid 2D unit profiles for loft between {obj_name} and {child.name}.")
+                print(f"FF WARN (loft): Invalid 2D unit profiles for loft between {obj_name} and {child_name}.")
             else:
                 try:
                     child_matrix_relative_to_parent = obj.matrix_world.inverted() @ child.matrix_world
@@ -310,7 +344,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                     if lofted_shape_local_to_obj is not lf.emptiness():
                         lofted_contribution_world = apply_blender_transform_to_sdf(lofted_shape_local_to_obj, obj.matrix_world.inverted())
                 except Exception as e:
-                    print(f"FieldForge ERROR (lofting {obj_name} to {child.name}): {e}")
+                    print(f"FieldForge ERROR (lofting {obj_name} to {child_name}): {e}")
             current_scene_shape = combine_shapes(current_scene_shape, lofted_contribution_world, obj_s_child_blend_factor)
             continue
 
@@ -325,58 +359,48 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         if use_morph:
             morph_factor = float(child.get("sdf_morph_factor", 0.5))
             try: current_scene_shape = lf.blend_expt_unit(processed_child_subtree_world, current_scene_shape, morph_factor)
-            except Exception as e: print(f"FF ERROR (morphing {obj_name} with {child.name}): {e}")
+            except Exception as e: print(f"FF ERROR (morphing {obj_name} with {child_name}): {e}")
         elif use_clearance:
             offset_val = float(child.get("sdf_clearance_offset", 0.05))
             keep_original = child.get("sdf_clearance_keep_original", True)
             try:
-                offset_child_shape = lf.offset(processed_child_subtree_world, offset_val)
-                current_scene_shape = lf.difference(current_scene_shape, offset_child_shape)
-                if keep_original:
+                offset_child_shape_for_subtraction = lf.offset(processed_child_subtree_world, offset_val)
+                current_scene_shape = lf.difference(current_scene_shape, offset_child_shape_for_subtraction)
+                if keep_original: 
                     current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
-            except Exception as e: print(f"FF ERROR (clearance {child.name} on {obj_name}): {e}")
+            except Exception as e: print(f"FF ERROR (clearance {child_name} on {obj_name}): {e}")
         elif child_csg_op_type == "NONE": pass
         
         elif child_csg_op_type == "UNION":
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
         
         elif child_csg_op_type == "INTERSECT":
-            # Intersection is always sharp. Parent's blend factor is ignored for this operation.
             if current_scene_shape is lf.emptiness() or processed_child_subtree_world is lf.emptiness():
                 current_scene_shape = lf.emptiness() # Intersection with empty is empty
             else:
                 try:
-                    # print(f"  Attempting SHARP intersection between current of '{obj_name}' and child '{child.name}'")
                     current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world)
                 except Exception as e: 
-                    print(f"FF ERROR (intersecting {child.name} with {obj_name}): {e}")
+                    print(f"FF ERROR (intersecting {child_name} with {obj_name}): {e}")
                     current_scene_shape = lf.emptiness()
-        
         elif child_csg_op_type == "DIFFERENCE":
-            if current_scene_shape is lf.emptiness(): pass 
-            elif processed_child_subtree_world is lf.emptiness(): pass 
-            else:
-                try:
-                    blend_radius_for_subtraction = obj_s_child_blend_factor
-                    if blend_radius_for_subtraction > constants.CACHE_PRECISION:
-                        clamped_blend_difference = min(max(0.0, blend_radius_for_subtraction), 1.0) 
-                        # print(f"  Attempting BLENDED difference for '{child.name}' from '{obj_name}' with blend: {clamped_blend_difference}")
-                        current_scene_shape = lf.subtraction(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
-                    else:
-                        # print(f"  Attempting SHARP difference for '{child.name}' from '{obj_name}'")
-                        current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
-                except AttributeError: # Fallback if lf.subtraction (blended) isn't found
-                    print(f"FF WARN: Blended subtraction (lf.subtraction) not found for {child.name}. Using sharp difference.")
+            try:
+                blend_radius_for_subtraction = obj_s_child_blend_factor 
+                if blend_radius_for_subtraction > constants.CACHE_PRECISION:
+                    clamped_blend_difference = min(max(0.0, blend_radius_for_subtraction), 1.0) 
+                    current_scene_shape = lf.subtraction(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
+                else:
                     current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
-                except Exception as e: 
-                    print(f"FF ERROR (subtracting {child.name} from {obj_name}): {e}")
-                    current_scene_shape = lf.emptiness()
+            except AttributeError:
+                print(f"FF WARN: Blended subtraction (lf.subtraction) not found. Using sharp difference for {child_name} from {obj_name}.")
+                current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
+            except Exception as e: 
+                print(f"FF ERROR (subtracting {child_name} from {obj_name}): {e}")
+                try: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
+                except Exception as e_diff: print(f"FF ERROR (fallback sharp difference for {child_name} from {obj_name}): {e_diff}")
         
-        else: # Fallback for unknown CSG op
+        else: 
+            print(f"FF WARN: Unknown sdf_csg_operation '{child_csg_op_type}' for {child_name}. Defaulting to union.")
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
-
-        if _lf_imported_ok and current_scene_shape is None: # Should be caught by lf.emptiness() usage
-            current_scene_shape = lf.emptiness()
-            
     if current_scene_shape is None: return lf.emptiness() # Covers case where _lf_imported_ok is False
     return current_scene_shape

@@ -212,7 +212,7 @@ class AddSdfSourceBase(Operator):
         obj["sdf_array_active_x"] = defaults["sdf_array_active_x"]; obj["sdf_array_count_x"] = defaults["sdf_array_count_x"]; obj["sdf_array_delta_x"] = defaults["sdf_array_delta_x"]
         obj["sdf_array_active_y"] = defaults["sdf_array_active_y"]; obj["sdf_array_count_y"] = defaults["sdf_array_count_y"]; obj["sdf_array_delta_y"] = defaults["sdf_array_delta_y"]
         obj["sdf_array_active_z"] = defaults["sdf_array_active_z"]; obj["sdf_array_count_z"] = defaults["sdf_array_count_z"]; obj["sdf_array_delta_z"] = defaults["sdf_array_delta_z"]
-        obj["sdf_radial_count"] = defaults["sdf_radial_count"]; obj["sdf_radial_center"] = tuple(defaults["sdf_radial_center"]) # Ensure tuple
+        obj["sdf_radial_count"] = defaults["sdf_radial_count"]; obj["sdf_radial_center"] = tuple(defaults["sdf_radial_center"]); obj["sdf_array_center_on_origin"] = defaults["sdf_array_center_on_origin"]
 
         # --- Assign Type-Specific Properties (Passed via props_to_set) ---
         if props_to_set:

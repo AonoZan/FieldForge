@@ -89,6 +89,7 @@ DEFAULT_SOURCE_SETTINGS = {
     # Radial Array Defaults
     "sdf_radial_count": 6,
     "sdf_radial_center": (0.0, 0.0),
+    "sdf_array_center_on_origin": True,
     # Shape Specific Defaults (used in operators)
     "sdf_torus_major_radius": 0.35,
     "sdf_torus_minor_radius": 0.15,
