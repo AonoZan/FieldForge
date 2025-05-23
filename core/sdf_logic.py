@@ -217,6 +217,19 @@ def combine_shapes(shape_a, shape_b, blend_factor) -> lf.Shape | None:
         print(f"FieldForge ERROR (combine_shapes): Error combining shapes: {e}")
         return lf.emptiness()
 
+def custom_blended_intersection(shape_a, shape_b, blend_factor_m, lf_module):
+    if not _lf_imported_ok: return lf_module.emptiness()
+    if shape_a is lf_module.emptiness() or shape_b is lf_module.emptiness(): return lf_module.emptiness()
+    try:
+        inv_a = lf_module.inverse(shape_a)
+        inv_b = lf_module.inverse(shape_b)
+        smooth_union_of_inverses = lf_module.blend_expt_unit(inv_a, inv_b, blend_factor_m)
+        return lf_module.inverse(smooth_union_of_inverses)
+    except Exception as e:
+        print(f"FF ERROR (custom_blended_intersection): {e}. Falling back.")
+        try: return lf_module.intersection(shape_a, shape_b)
+        except: return lf_module.emptiness()
+
 def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | None:
     if not _lf_imported_ok:
         return lf.emptiness() # type: ignore
@@ -413,20 +426,30 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
         
         elif child_csg_op_type == "INTERSECT":
-            if current_scene_shape is lf.emptiness() or processed_child_subtree_world is lf.emptiness():
-                current_scene_shape = lf.emptiness() # Intersection with empty is empty
-            else:
-                try:
-                    current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world)
-                except Exception as e: 
-                    print(f"FF ERROR (intersecting {child_name} with {obj_name}): {e}")
-                    current_scene_shape = lf.emptiness()
+            try:
+                blend_radius_for_intersect = obj_s_child_blend_factor # Parent's blend factor
+                if blend_radius_for_intersect > constants.CACHE_PRECISION:
+                    # Use our constructed blended intersection
+                    clamped_blend_intersect = min(max(0.0, blend_radius_for_intersect), 1.0) # Typical range for 'm'
+                    # print(f"DEBUG: Custom Blended Intersecting {child_name} with {obj_name}, factor: {clamped_blend_intersect}")
+                    current_scene_shape = custom_blended_intersection(current_scene_shape, processed_child_subtree_world, clamped_blend_intersect, lf)
+                else:
+                    # print(f"DEBUG: Sharp Intersecting {child_name} with {obj_name}")
+                    current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world) # Sharp
+            except Exception as e: 
+                print(f"FF ERROR (intersecting {child_name} with {obj_name}): {e}")
+                current_scene_shape = lf.emptiness() # Fallback to empty on general error
         elif child_csg_op_type == "DIFFERENCE":
             if current_scene_shape is lf.emptiness() or processed_child_subtree_world is lf.emptiness():
                 current_scene_shape = lf.emptiness()
             else:
                 try:
-                    current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
+                    blend_radius_for_difference = obj_s_child_blend_factor
+                    if blend_radius_for_difference > constants.CACHE_PRECISION:
+                        clamped_blend_difference = min(max(0.0, blend_radius_for_difference), 1.0) 
+                        current_scene_shape = lf.blend_difference(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
+                    else:
+                        current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world, clamped_blend_difference) # Sharp
                 except Exception as e: 
                     print(f"FF ERROR (subtracting {child_name} from {obj_name}): {e}")
                     try: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
