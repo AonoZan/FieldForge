@@ -17,7 +17,8 @@ from .operators import (
     OBJECT_OT_sdf_manual_update,
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,
-    OBJECT_OT_fieldforge_set_csg_mode
+    OBJECT_OT_fieldforge_set_csg_mode,
+    OBJECT_OT_fieldforge_reorder_source,
 )
 
 
@@ -97,6 +98,50 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
 
     col = layout.column()
 
+    # Hierarchy (Up/Down) buttons
+    if obj.parent:
+        box_hierarchy = col.box()
+        hier_col = box_hierarchy.column(align=True)
+        hier_col.label(text="Processing Order:")
+
+        can_move_up = False
+        can_move_down = False
+
+        sdf_siblings = []
+        for child in obj.parent.children:
+            if utils.is_sdf_source(child) and child.visible_get(view_layer=context.view_layer):
+                sdf_siblings.append(child)
+
+        if len(sdf_siblings) > 1:
+            def get_sort_key(c):
+                return (c.get("sdf_processing_order", float('inf')), c.name)
+            sdf_siblings.sort(key=get_sort_key)
+
+            try:
+                idx = sdf_siblings.index(obj)
+                if idx > 0:
+                    can_move_up = True
+                if idx < len(sdf_siblings) - 1:
+                    can_move_down = True
+            except ValueError:
+                pass
+
+        row_order = hier_col.row(align=True)
+
+        up_button_layout = row_order.row()
+        up_button_layout.active = can_move_up
+        op_up = up_button_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname, text="", icon='TRIA_UP')
+        op_up.direction = 'UP'
+
+        down_button_layout = row_order.row() 
+        down_button_layout.active = can_move_down
+        op_down = down_button_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname, text="", icon='TRIA_DOWN')
+        op_down.direction = 'DOWN'
+        
+        current_order_num = obj.get("sdf_processing_order", "N/A")
+        row_order.label(text=f"  Order: {current_order_num}")
+
+    col.separator()
     # Basic Info
     col.label(text=f"SDF Type: {sdf_type.capitalize()}")
     col.separator()

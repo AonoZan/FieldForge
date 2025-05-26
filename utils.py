@@ -6,6 +6,7 @@ General utility and helper functions for the FieldForge addon.
 
 import bpy
 import math
+import uuid
 from mathutils import Vector, Matrix
 
 # Use relative import to get constants from the parent directory's constants.py
@@ -365,5 +366,120 @@ def find_and_set_new_active(context: bpy.types.Context, just_deselected_obj: bpy
     new_active = selected_objects[0] if selected_objects else None
     context.view_layer.objects.active = new_active
 
-# --- Other Helpers ---
-# (offset_vertices needs to be moved to drawing.py as it needs region_data)
+def get_base_name_from_sdf_object(obj: bpy.types.Object) -> str:
+    """
+    Attempts to get a base name for an SDF object, stripping existing numerical prefixes
+    and Blender's .001 duplicate suffixes.
+    It can also use a stored 'sdf_base_name' property if available.
+    """
+    if "sdf_base_name" in obj and obj["sdf_base_name"]: # Check if not empty
+        return obj["sdf_base_name"]
+
+    name_to_process = obj.name
+    
+    parts_suffix = name_to_process.rsplit('.', 1)
+    if len(parts_suffix) == 2 and parts_suffix[1].isdigit() and len(parts_suffix[1]) == 3:
+        name_to_process = parts_suffix[0]
+
+    parts_prefix = name_to_process.split("_", 1)
+    if len(parts_prefix) > 1 and parts_prefix[0].isdigit() and len(parts_prefix[0]) == 3:
+        if parts_prefix[1]:
+             return parts_prefix[1]
+        return name_to_process
+    return name_to_process
+
+
+def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
+    """
+    Normalizes the 'sdf_processing_order' property and names for all visible
+    SDF source children of a given parent object.
+    Lower order numbers process first.
+    Names are updated to 'NNN_BaseName'.
+    """
+    if not parent_obj:
+        return
+
+    context = bpy.context 
+
+    sdf_children = []
+    for child in parent_obj.children:
+        if child and is_sdf_source(child) and child.visible_get(view_layer=context.view_layer):
+            sdf_children.append(child)
+
+    if not sdf_children:
+        return
+
+    def sort_key_for_normalization(c):
+        return (c.get("sdf_processing_order", float('inf')), c.name)
+
+    sdf_children.sort(key=sort_key_for_normalization)
+
+    # Pass 1: Rename to temporary unique names to avoid clashes
+    temp_name_map = {}
+    for i, child_obj in enumerate(sdf_children):
+        original_name = child_obj.name
+        temp_name = f"_TEMP_FF_{uuid.uuid4().hex[:12]}" 
+        try:
+            child_obj.name = temp_name
+            temp_name_map[temp_name] = child_obj
+        except Exception as e:
+            print(f"FieldForge WARN: Could not rename {original_name} to temp name {temp_name}: {e}")
+            temp_name_map[original_name] = child_obj
+
+    # Pass 2: Assign final order and names
+    # We iterate based on the original sdf_children list which is correctly sorted
+    # but retrieve objects via the temp_name_map to ensure we have the right references
+    # if Blender did something unexpected during temp renaming.
+    final_renamed_children = []
+    for i, original_sorted_child_ref in enumerate(sdf_children):
+        child_obj_found = None
+        for temp_n, obj_ref in temp_name_map.items():
+            if obj_ref == original_sorted_child_ref :
+                try: 
+                    _ = bpy.data.objects[temp_n].name
+                    child_obj_found = bpy.data.objects[temp_n]
+                except KeyError:
+                    try:
+                         _ = original_sorted_child_ref.name 
+                         child_obj_found = original_sorted_child_ref
+                    except ReferenceError:
+                        print(f"FieldForge WARN: Object {original_sorted_child_ref} seems to be gone before final rename.")
+                        continue
+                break
+
+        if not child_obj_found:
+            try:
+                child_obj_found = bpy.data.objects[original_sorted_child_ref.name]
+            except (KeyError, ReferenceError):
+                print(f"FieldForge WARN: Could not re-find object for final rename: {original_sorted_child_ref.name}")
+                continue
+
+        new_order = i * 10
+        child_obj_found["sdf_processing_order"] = new_order
+
+        if "sdf_base_name" not in child_obj_found or not child_obj_found["sdf_base_name"]:
+            derived_base_name = get_base_name_from_sdf_object(child_obj_found) 
+            child_obj_found["sdf_base_name"] = derived_base_name
+
+        base_name_to_use = child_obj_found.get("sdf_base_name", "SDF_Object") 
+
+        new_name_candidate = f"{new_order:03d}_{base_name_to_use}"
+        final_new_name = new_name_candidate
+
+        current_name_idx = 0
+        while final_new_name in bpy.data.objects and bpy.data.objects[final_new_name] != child_obj_found:
+            current_name_idx += 1
+            final_new_name = f"{new_name_candidate}.{current_name_idx:03d}"
+
+        if child_obj_found.name != final_new_name: 
+            try:
+                child_obj_found.name = final_new_name
+            except Exception as e:
+                print(f"FieldForge WARN: Could not assign final name {final_new_name} to {child_obj_found.name} (was temp): {e}")
+        final_renamed_children.append(child_obj_found)
+
+    if context.screen: 
+        for area in context.screen.areas:
+            if area.type == 'OUTLINER':
+                area.tag_redraw()
+                break

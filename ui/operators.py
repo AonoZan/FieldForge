@@ -182,7 +182,7 @@ class AddSdfSourceBase(Operator):
             self.report({'ERROR'}, f"Failed to add Empty: {e}")
             return {'CANCELLED'}
 
-        obj.name = self.make_unique_name(context, name_prefix)
+        obj.name = self.make_unique_name(context, name_prefix + "_temp") 
         obj.parent = target_parent
         try: obj.matrix_parent_inverse = target_parent.matrix_world.inverted()
         except ValueError: obj.matrix_parent_inverse.identity(); print(f"WARN: Could not invert parent matrix for {target_parent.name}.")
@@ -220,6 +220,10 @@ class AddSdfSourceBase(Operator):
                 try: obj[key] = value
                 except TypeError as e: print(f"WARN: Could not set prop '{key}' on {obj.name}: {e}. Value: {value}")
 
+        base_name_parts = name_prefix.split("FF_", 1)
+        initial_base_name = base_name_parts[1] if len(base_name_parts) > 1 and base_name_parts[1] else sdf_type.capitalize()
+        obj["sdf_base_name"] = initial_base_name
+        obj["sdf_processing_order"] = 99999
         # Set color based on effective interaction mode
         current_csg_op = obj["sdf_csg_operation"] # Read back what was set
         if final_use_morph: 
@@ -245,6 +249,10 @@ class AddSdfSourceBase(Operator):
             if sel_obj != obj: sel_obj.select_set(False)
         obj.select_set(True)
 
+        if target_parent: 
+            utils.normalize_sibling_order_and_names(target_parent)
+        else: 
+            obj["sdf_processing_order"] = 0 
         mode_str = ""
         if final_use_morph: mode_str = " [Morph]"
         elif final_use_clearance: mode_str = " [Clearance]"
@@ -485,6 +493,102 @@ class OBJECT_OT_fieldforge_set_csg_mode(Operator):
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
+# --- Reorder Operator ---
+class OBJECT_OT_fieldforge_reorder_source(Operator):
+    """Moves an SDF source object up or down in its parent's processing order"""
+    bl_idname = "object.fieldforge_reorder_source"
+    bl_label = "Reorder SDF Source"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    direction: EnumProperty(
+        items=[
+            ('UP', "Up", "Move higher in processing order (processes earlier)"),
+            ('DOWN', "Down", "Move lower in processing order (processes later)"),
+        ],
+        name="Direction",
+        default='UP'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        if not obj or not utils.is_sdf_source(obj) or not obj.parent:
+            return False
+        return True 
+
+    def execute(self, context):
+        obj_to_move = context.active_object
+
+        if not obj_to_move or not utils.is_sdf_source(obj_to_move):
+            self.report({'WARNING'}, "Active object is not a valid SDF source.")
+            return {'CANCELLED'}
+
+        parent_obj = obj_to_move.parent
+        if not parent_obj:
+            self.report({'WARNING'}, "SDF source has no parent.")
+            return {'CANCELLED'}
+
+        sdf_siblings = []
+        for child in parent_obj.children:
+            if child and utils.is_sdf_source(child) and child.visible_get(view_layer=context.view_layer):
+                sdf_siblings.append(child)
+
+        if not sdf_siblings or obj_to_move not in sdf_siblings:
+            self.report({'WARNING'}, "Could not find SDF siblings or active object among them.")
+            return {'CANCELLED'}
+
+        def get_sort_key(c):
+            return (c.get("sdf_processing_order", float('inf')), c.name)
+        
+        sdf_siblings.sort(key=get_sort_key)
+
+        try:
+            current_index = sdf_siblings.index(obj_to_move)
+        except ValueError:
+            self.report({'ERROR'}, "Internal error: Active object not found in its sorted sibling list.")
+            return {'CANCELLED'}
+
+        swapped_property_values = False
+        if self.direction == 'UP':
+            if current_index > 0:
+                sibling_above = sdf_siblings[current_index - 1]
+
+                obj_order_val = obj_to_move.get("sdf_processing_order", current_index * 10)
+                above_order_val = sibling_above.get("sdf_processing_order", (current_index - 1) * 10)
+
+                obj_to_move["sdf_processing_order"] = above_order_val
+                sibling_above["sdf_processing_order"] = obj_order_val
+                swapped_property_values = True
+            else:
+                return {'FINISHED'} 
+
+        elif self.direction == 'DOWN':
+            if current_index < len(sdf_siblings) - 1:
+                sibling_below = sdf_siblings[current_index + 1]
+
+                obj_order_val = obj_to_move.get("sdf_processing_order", current_index * 10)
+                below_order_val = sibling_below.get("sdf_processing_order", (current_index + 1) * 10)
+
+                obj_to_move["sdf_processing_order"] = below_order_val
+                sibling_below["sdf_processing_order"] = obj_order_val
+                swapped_property_values = True
+            else:
+                return {'FINISHED'}
+
+        if swapped_property_values:
+            utils.normalize_sibling_order_and_names(parent_obj)
+
+            root_bounds = utils.find_parent_bounds(parent_obj) 
+            if not root_bounds and parent_obj.get(constants.SDF_BOUNDS_MARKER, False):
+                root_bounds = parent_obj
+
+            if root_bounds:
+                ff_update.check_and_trigger_update(context.scene, root_bounds.name, f"reorder_source_{obj_to_move.name}")
+
+            tag_redraw_all_view3d()
+            return {'FINISHED'}
+
+        return {'FINISHED'}
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -839,6 +943,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,
     OBJECT_OT_fieldforge_set_csg_mode,
+    OBJECT_OT_fieldforge_reorder_source, # Added new operator
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

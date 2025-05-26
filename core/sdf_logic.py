@@ -1,5 +1,3 @@
-# FieldForge/core/sdf_logic.py
-
 """
 Core SDF Shape Construction Logic for FieldForge Addon.
 
@@ -12,6 +10,7 @@ import bpy
 # Attempt to import libfive - success depends on setup in root __init__.py
 try:
     import libfive.stdlib as lf
+    import libfive.shape as libfive_shape_module
     _lf_imported_ok = True
 except ImportError:
     print("FieldForge WARN (sdf_logic.py): libfive modules not found during import.")
@@ -31,7 +30,7 @@ except ImportError:
         def Y(): raise RuntimeError("libfive not available (Shape.Y)")
         @staticmethod
         def Z(): raise RuntimeError("libfive not available (Shape.Z)")
-    libfive = type('module', (), {'shape': ShapeDummy})()
+    libfive_shape_module = type('module', (), {'Shape': ShapeDummy})()
 
 
 from mathutils import Vector, Matrix
@@ -179,7 +178,7 @@ def apply_blender_transform_to_sdf(shape, obj_matrix_world_inv: Matrix) -> lf.Sh
         print(f"FieldForge WARN (apply_transform): Received None matrix_world_inv.")
         return lf.emptiness()
 
-    X, Y, Z = lf.Shape.X(), lf.Shape.Y(), lf.Shape.Z()
+    X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
     mat_inv = obj_matrix_world_inv
     try:
         x_p = mat_inv[0][0] * X + mat_inv[0][1] * Y + mat_inv[0][2] * Z + mat_inv[0][3]
@@ -311,7 +310,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
 
                         if abs(center_shift_x) > 1e-6 or abs(center_shift_y) > 1e-6 or abs(center_shift_z) > 1e-6:
                             if unit_shape_modified_by_own_ops is not lf.emptiness():
-                                X, Y, Z = lf.Shape.X(), lf.Shape.Y(), lf.Shape.Z()
+                                X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z() # type: ignore
                                 unit_shape_modified_by_own_ops = unit_shape_modified_by_own_ops.remap(
                                     X - center_shift_x,
                                     Y - center_shift_y,
@@ -335,7 +334,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                         unit_shape_modified_by_own_ops = lf.array_polar_z(current_shape_before_array, count, center_xy_pivot)
                         if center_on_origin and (abs(center_xy_pivot[0]) > 1e-6 or abs(center_xy_pivot[1]) > 1e-6):
                             if unit_shape_modified_by_own_ops is not lf.emptiness():
-                                X, Y, Z = lf.Shape.X(), lf.Shape.Y(), lf.Shape.Z()
+                                X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z() # type: ignore
                                 unit_shape_modified_by_own_ops = unit_shape_modified_by_own_ops.remap(
                                     X + center_xy_pivot[0], 
                                     Y + center_xy_pivot[1], 
@@ -358,11 +357,18 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
     obj_s_child_blend_factor = float(settings.get("sdf_global_blend_factor", 0.1)) if is_root_bounds \
                                 else float(obj.get("sdf_child_blend_factor", 0.0))
     
-    sorted_children = sorted(list(obj.children), key=lambda c: c.name)
+    children_to_process = []
+    for child_candidate in obj.children:
+        if child_candidate and child_candidate.visible_get(view_layer=context.view_layer):
+            children_to_process.append(child_candidate)
+
+    def get_sort_key_for_processing(child_obj_param):
+        order = child_obj_param.get("sdf_processing_order", float('inf'))
+        return (order, child_obj_param.name) 
+
+    sorted_children = sorted(children_to_process, key=get_sort_key_for_processing)
 
     for child in sorted_children:
-        if not child.visible_get(view_layer=context.view_layer):
-            continue
 
         child_name = child.name 
         is_obj_loft_participant = utils.is_sdf_source(obj) and \
