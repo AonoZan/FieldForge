@@ -1,5 +1,3 @@
-# FieldForge/ui/menus.py
-
 """
 Defines Blender Menu classes and functions for the FieldForge addon,
 primarily for the Add menu (Shift+A).
@@ -26,7 +24,6 @@ from .operators import (
     OBJECT_OT_add_sdf_polygon_source,
     OBJECT_OT_add_sdf_text_source,
     OBJECT_OT_add_sdf_half_space_source,
-    # Add other operator bl_idname imports if needed for menu items
 )
 
 
@@ -73,8 +70,8 @@ class VIEW3D_MT_add_sdf(Menu):
         col.operator(OBJECT_OT_add_sdf_torus_source.bl_idname, text="Torus", icon='MESH_TORUS')
         col.operator(OBJECT_OT_add_sdf_rounded_box_source.bl_idname, text="Rounded Box", icon='MOD_BEVEL')
         col.operator(OBJECT_OT_add_sdf_circle_source.bl_idname, text="Circle", icon='MESH_CIRCLE')
-        col.operator(OBJECT_OT_add_sdf_ring_source.bl_idname, text="Ring", icon='CURVE_NCIRCLE') # Or MESH_TORUS? CURVE_NCIRCLE is good
-        col.operator(OBJECT_OT_add_sdf_polygon_source.bl_idname, text="Polygon", icon='MESH_CIRCLE') # Shares icon with Circle
+        col.operator(OBJECT_OT_add_sdf_ring_source.bl_idname, text="Ring", icon='CURVE_NCIRCLE')
+        col.operator(OBJECT_OT_add_sdf_polygon_source.bl_idname, text="Polygon", icon='MESH_CIRCLE')
         col.operator(OBJECT_OT_add_sdf_text_source.bl_idname, text="Text", icon='OUTLINER_OB_FONT')
         col.operator(OBJECT_OT_add_sdf_half_space_source.bl_idname, text="Half Space", icon='MESH_PLANE')
 
@@ -92,7 +89,7 @@ class VIEW3D_MT_add_sdf(Menu):
 def menu_func(self, context):
     """ Function called by Blender to draw the menu item in the main Add > Mesh menu. """
     # Adds the Field Forge submenu defined above
-    self.layout.menu(VIEW3D_MT_add_sdf.bl_idname, icon='MOD_OPACITY') # Example icon
+    self.layout.menu(VIEW3D_MT_add_sdf.bl_idname, icon='MOD_OPACITY')
 
 
 # --- List of Menu Classes to Register ---

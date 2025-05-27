@@ -1,5 +1,3 @@
-# FieldForge/constants.py
-
 """
 Constants and default settings used throughout the FieldForge addon.
 """

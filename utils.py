@@ -1,5 +1,3 @@
-# FieldForge/utils.py
-
 """
 General utility and helper functions for the FieldForge addon.
 """
@@ -9,22 +7,13 @@ import math
 import uuid
 from mathutils import Vector, Matrix
 
-# Use relative import to get constants from the parent directory's constants.py
 from . import constants
-
-
-# --- Globals (Potentially set by __init__.py if needed) ---
-# These might be set after libfive is loaded in __init__.py if other utils need them.
-# Alternatively, functions requiring lf/ffi can import them directly if available.
-lf = None
-ffi = None
 
 # --- Blender Object/Hierarchy Helpers ---
 
 def get_all_bounds_objects(context: bpy.types.Context):
     """ Generator yielding all SDF Bounds objects in the current scene """
     for obj in context.scene.objects:
-        # Use get() for safe access to custom property
         if obj.get(constants.SDF_BOUNDS_MARKER, False):
             yield obj
 
@@ -123,7 +112,7 @@ def compare_dicts(dict1: dict | None, dict2: dict | None, tolerance=constants.CA
         return False # Different keys
 
     for key, val1 in dict1.items():
-        val2 = dict2.get(key) # Use get() for safety in case keys mismatch (shouldn't happen due to check above)
+        val2 = dict2.get(key)
 
         # Type-specific comparisons with tolerance
         if isinstance(val1, float):
@@ -140,7 +129,6 @@ def compare_dicts(dict1: dict | None, dict2: dict | None, tolerance=constants.CA
 
 
 # --- Drawing Helpers ---
-# (Moved geometry creation helpers here)
 
 def create_circle_vertices(center: Vector, right: Vector, up: Vector, radius: float, segments: int) -> list[Vector]:
     """ Generates world-space vertices for a circle defined by center, orthogonal axes, radius, and segments. """
@@ -287,18 +275,15 @@ def get_blender_select_mouse() -> str:
 
     try:
         if not bpy.context or not bpy.context.window_manager:
-            # print("FF Keymap WARN: No bpy.context or window_manager available.")
             return default_button
 
         wm = bpy.context.window_manager
         # Ensure we get the active config, falling back correctly
         kc = wm.keyconfigs.user or wm.keyconfigs.addon or wm.keyconfigs.default
         if not kc: # Should not happen, but safeguard
-             # print("FF Keymap ERROR: Could not determine keyconfig.")
              return default_button
         km = kc.keymaps.get('3D View')
         if not km:
-            # print("FF Keymap WARN: '3D View' keymap not found.")
             return default_button
 
         # --- First Pass: Look for the STRICT match based on properties ---
@@ -322,7 +307,6 @@ def get_blender_select_mouse() -> str:
                 if is_primary_select_strict:
                     # Store the first strict match found and stop this pass
                     found_button = kmi.type
-                    # print(f"FF Keymap DBG: Found STRICT match: {found_button}") # DEBUG
                     break
 
         # --- Second Pass: If no strict match, find ANY mouse click without modifiers ---
@@ -337,26 +321,20 @@ def get_blender_select_mouse() -> str:
 
                      # Take the first one found in this relaxed pass
                      found_button = kmi.type
-                     # print(f"FF Keymap DBG: Found RELAXED match: {found_button}") # DEBUG
                      break # Stop after finding the first relaxed match
 
         # --- Final Decision ---
         if found_button:
-            # print(f"FF Keymap INFO: Using detected select button: {found_button}") # INFO
             return found_button
         else:
             # This case means even the relaxed search failed.
             print(f"FF Keymap WARN: Could not detect primary select mouse button ('view3d.select' without modifiers). Using default: {default_button}")
 
     except AttributeError as ae:
-         # print(f"FieldForge WARN: Couldn't fully inspect keymaps (AttributeError): {ae}")
-         traceback.print_exc() # Optional: Print stack trace for attribute errors
+         traceback.print_exc()
     except Exception as e:
-        # print(f"FieldForge WARN: Error querying keymap: {type(e).__name__}: {e}")
-        traceback.print_exc() # Print stack trace for unexpected errors
+        traceback.print_exc()
 
-    # Return default ONLY if search failed or exception occurred
-    # print(f"FF Keymap INFO: Returning default select button due to fallback: {default_button}") # DEBUG
     return default_button
 
 def find_and_set_new_active(context: bpy.types.Context, just_deselected_obj: bpy.types.Object):
@@ -365,6 +343,8 @@ def find_and_set_new_active(context: bpy.types.Context, just_deselected_obj: bpy
     selected_objects = context.selected_objects # This list is already updated
     new_active = selected_objects[0] if selected_objects else None
     context.view_layer.objects.active = new_active
+
+# --- Hierarchy button (Up/Down) object name Helpers ---
 
 def get_base_name_from_sdf_object(obj: bpy.types.Object) -> str:
     """

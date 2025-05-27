@@ -7,7 +7,7 @@ a combined libfive.Shape based on object properties and transformations.
 
 import math
 import bpy
-# Attempt to import libfive - success depends on setup in root __init__.py
+
 try:
     import libfive.stdlib as lf
     import libfive.shape as libfive_shape_module
@@ -35,9 +35,8 @@ except ImportError:
 
 from mathutils import Vector, Matrix
 
-# Use relative imports assuming this file is in FieldForge/core/
 from .. import constants
-from .. import utils # For is_sdf_source, is_valid_2d_loft_source
+from .. import utils
 
 
 def reconstruct_shape(obj) -> lf.Shape | None:
@@ -49,7 +48,7 @@ def reconstruct_shape(obj) -> lf.Shape | None:
     Returns a libfive Shape or lf.emptiness() on error/unknown type.
     """
     if not _lf_imported_ok or not obj:
-        return lf.emptiness() if _lf_imported_ok else None # Return dummy empty or None
+        return lf.emptiness() if _lf_imported_ok else None
 
     sdf_type = obj.get("sdf_type", "")
     shape = None
@@ -70,17 +69,15 @@ def reconstruct_shape(obj) -> lf.Shape | None:
         elif sdf_type == "cylinder":
             shape = lf.cylinder_z(unit_radius, unit_height, base=(0, 0, -half_size))
         elif sdf_type == "cone":
-            if unit_height <= 1e-6: # Avoid division by zero if height is near zero
-                 # Fallback to a flat disk or emptiness if height is zero.
-                 # For simplicity, return emptiness; a disk could be lf.circle extruded slightly.
-                 print(f"FieldForge WARN (reconstruct_shape): Cone height near zero for {obj.name}. Returning empty shape.")
-                 return lf.emptiness()
+            if unit_height <= 1e-6:
+                print(f"FieldForge WARN (reconstruct_shape): Cone height near zero for {obj.name}. Returning empty shape.")
+                return lf.emptiness()
 
             # Denominator for scaling factor
             sqrt_term = math.sqrt(unit_radius**2 + unit_height**2)
             if sqrt_term <= 1e-6: # Avoid division by zero if unit_radius and unit_height are both zero
-                 print(f"FieldForge WARN (reconstruct_shape): Cone radius and height near zero for {obj.name}. Returning empty shape.")
-                 return lf.emptiness()
+                print(f"FieldForge WARN (reconstruct_shape): Cone radius and height near zero for {obj.name}. Returning empty shape.")
+                return lf.emptiness()
 
             cone_param_radius = (unit_radius**2) / sqrt_term
             cone_param_height = (unit_height * unit_radius) / sqrt_term
@@ -133,13 +130,7 @@ def reconstruct_shape(obj) -> lf.Shape | None:
             if not text_string.strip(): # If string is empty or only whitespace
                 print(f"FieldForge WARN (reconstruct_shape): Empty text string for {obj.name}. Returning empty shape.")
                 return lf.emptiness()
-            
-            # lf.text(txt, pos) - pos is 2D starting position.
-            # For a unit shape, we want it somewhat centered.
-            # The libfive font has a character height of ~1.
-            # Let's estimate width based on char count and assume avg char width ~0.6-0.8 for centering.
-            # This is a rough estimate for the *unit* shape.
-            # Actual text layout is complex. For simplicity, start text at a slight negative X offset.
+
             num_chars = len(text_string)
             # A very rough estimated width, assuming char height is 1 and aspect is ~0.7
             estimated_width = num_chars * 0.7 
@@ -148,10 +139,6 @@ def reconstruct_shape(obj) -> lf.Shape | None:
             start_pos_y = -0.5 # Assuming char height of 1, baseline starts slightly down
             
             shape = lf.text(text_string, (start_pos_x, start_pos_y))
-            # Note: This text is 2D. Extrusion will be handled by the generic 2D shape extrusion
-            # in process_sdf_hierarchy if sdf_extrusion_depth is set.
-            # For now, "text" is not in is_2d_shape_for_extrude. If we want text to be extrudable
-            # by default like circle/ring/polygon, we'd add it there.
         elif sdf_type == "half_space":
             shape = lf.half_space((0.0, 0.0, 1.0), (0.0, 0.0, 0.0))
         else:
@@ -217,7 +204,7 @@ def combine_shapes(shape_a, shape_b, blend_factor) -> lf.Shape | None:
         return lf.emptiness()
 
 def custom_blended_intersection(shape_a, shape_b, blend_factor_m, lf_module):
-    if not _lf_imported_ok: return lf_module.emptiness()
+    #if not _lf_imported_ok: return lf_module.emptiness()
     if shape_a is lf_module.emptiness() or shape_b is lf_module.emptiness(): return lf_module.emptiness()
     try:
         inv_a = lf_module.inverse(shape_a)
@@ -230,14 +217,12 @@ def custom_blended_intersection(shape_a, shape_b, blend_factor_m, lf_module):
         except: return lf_module.emptiness()
 
 def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | None:
-    if not _lf_imported_ok:
-        return lf.emptiness() # type: ignore
 
     context = bpy.context
     if not obj.visible_get(view_layer=context.view_layer):
         return lf.emptiness()
 
-    obj_name = obj.name # For logging
+    obj_name = obj.name
 
     # --- 1. Determine object's own non-lofted contribution (if it's a source) ---
     obj_own_initial_shape_world = lf.emptiness()
@@ -265,8 +250,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         array_mode = obj.get("sdf_main_array_mode", 'NONE')
         center_on_origin = obj.get("sdf_array_center_on_origin", True)
         if array_mode != 'NONE' and unit_shape_modified_by_own_ops is not lf.emptiness():
-            # temp_shape_for_modifiers in the snippet corresponds to unit_shape_modified_by_own_ops here
-            current_shape_before_array = unit_shape_modified_by_own_ops # Store for potential error case
+            current_shape_before_array = unit_shape_modified_by_own_ops
 
 
             if array_mode == 'LINEAR':
@@ -310,7 +294,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
 
                         if abs(center_shift_x) > 1e-6 or abs(center_shift_y) > 1e-6 or abs(center_shift_z) > 1e-6:
                             if unit_shape_modified_by_own_ops is not lf.emptiness():
-                                X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z() # type: ignore
+                                X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
                                 unit_shape_modified_by_own_ops = unit_shape_modified_by_own_ops.remap(
                                     X - center_shift_x,
                                     Y - center_shift_y,
@@ -318,7 +302,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                                 )
                 except Exception as e:
                     print(f"FieldForge ERROR (Linear Array for {obj_name}): {e}")
-                    unit_shape_modified_by_own_ops = current_shape_before_array # Revert
+                    unit_shape_modified_by_own_ops = current_shape_before_array
             
             elif array_mode == 'RADIAL':
                 count = max(1, int(obj.get("sdf_radial_count", 1)))
@@ -334,7 +318,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                         unit_shape_modified_by_own_ops = lf.array_polar_z(current_shape_before_array, count, center_xy_pivot)
                         if center_on_origin and (abs(center_xy_pivot[0]) > 1e-6 or abs(center_xy_pivot[1]) > 1e-6):
                             if unit_shape_modified_by_own_ops is not lf.emptiness():
-                                X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z() # type: ignore
+                                X, Y, Z = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
                                 unit_shape_modified_by_own_ops = unit_shape_modified_by_own_ops.remap(
                                     X + center_xy_pivot[0], 
                                     Y + center_xy_pivot[1], 
@@ -433,18 +417,15 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         
         elif child_csg_op_type == "INTERSECT":
             try:
-                blend_radius_for_intersect = obj_s_child_blend_factor # Parent's blend factor
+                blend_radius_for_intersect = obj_s_child_blend_factor
                 if blend_radius_for_intersect > constants.CACHE_PRECISION:
-                    # Use our constructed blended intersection
-                    clamped_blend_intersect = min(max(0.0, blend_radius_for_intersect), 1.0) # Typical range for 'm'
-                    # print(f"DEBUG: Custom Blended Intersecting {child_name} with {obj_name}, factor: {clamped_blend_intersect}")
+                    clamped_blend_intersect = min(max(0.0, blend_radius_for_intersect), 1.0)
                     current_scene_shape = custom_blended_intersection(current_scene_shape, processed_child_subtree_world, clamped_blend_intersect, lf)
                 else:
-                    # print(f"DEBUG: Sharp Intersecting {child_name} with {obj_name}")
-                    current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world) # Sharp
+                    current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world)
             except Exception as e: 
                 print(f"FF ERROR (intersecting {child_name} with {obj_name}): {e}")
-                current_scene_shape = lf.emptiness() # Fallback to empty on general error
+                current_scene_shape = lf.emptiness()
         elif child_csg_op_type == "DIFFERENCE":
             if current_scene_shape is lf.emptiness() or processed_child_subtree_world is lf.emptiness():
                 current_scene_shape = lf.emptiness()
@@ -455,7 +436,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
                         clamped_blend_difference = min(max(0.0, blend_radius_for_difference), 1.0) 
                         current_scene_shape = lf.blend_difference(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
                     else:
-                        current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world, clamped_blend_difference) # Sharp
+                        current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
                 except Exception as e: 
                     print(f"FF ERROR (subtracting {child_name} from {obj_name}): {e}")
                     try: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
@@ -463,5 +444,5 @@ def process_sdf_hierarchy(obj: bpy.types.Object, settings: dict) -> lf.Shape | N
         else: 
             print(f"FF WARN: Unknown sdf_csg_operation '{child_csg_op_type}' for {child_name}. Defaulting to union.")
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, obj_s_child_blend_factor)
-    if current_scene_shape is None: return lf.emptiness() # Covers case where _lf_imported_ok is False
+    if current_scene_shape is None: return lf.emptiness()
     return current_scene_shape

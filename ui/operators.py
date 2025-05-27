@@ -1,5 +1,3 @@
-# FieldForge/ui/operators.py
-
 """
 Defines all Blender Operator classes for the FieldForge addon.
 Includes operators for adding bounds/sources, manual updates, UI interactions,
@@ -7,7 +5,6 @@ and the modal selection/grab handler.
 """
 
 import bpy
-import traceback # For modal error reporting
 from bpy.props import (
     FloatVectorProperty, FloatProperty, IntProperty, PointerProperty,
     StringProperty, EnumProperty, BoolProperty
@@ -82,8 +79,8 @@ class OBJECT_OT_add_sdf_bounds(Operator):
         # Initial setup
         bounds_obj.scale = (2.0, 2.0, 2.0)
         bounds_obj.empty_display_size = 1.0
-        bounds_obj.color = (0.2, 0.8, 1.0, 1.0) # Distinctive blue color
-        bounds_obj.hide_render = True # Controller doesn't need rendering
+        bounds_obj.color = (0.2, 0.8, 1.0, 1.0)
+        bounds_obj.hide_render = True
 
         # Set markers and properties using constants
         bounds_obj[constants.SDF_BOUNDS_MARKER] = True
@@ -150,7 +147,6 @@ class AddSdfSourceBase(Operator):
 
     @classmethod
     def poll(cls, context):
-        # Check libfive availability via utils.lf check
         active_obj = context.active_object
         return utils.lf is not None and active_obj is not None and \
                (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or utils.find_parent_bounds(active_obj) is not None)
@@ -172,7 +168,6 @@ class AddSdfSourceBase(Operator):
         if not parent_bounds and target_parent.get(constants.SDF_BOUNDS_MARKER, False): parent_bounds = target_parent
         if not parent_bounds: self.report({'ERROR'}, "Active object not part of SDF hierarchy."); return {'CANCELLED'}
 
-        # Create Empty at cursor, handle potential context issues
         try:
             with context.temp_override(window=context.window, area=context.area, region=context.region):
                  bpy.ops.object.empty_add(type=display_type, radius=0, location=context.scene.cursor.location, scale=(1.0, 1.0, 1.0))
@@ -434,12 +429,12 @@ class OBJECT_OT_fieldforge_set_main_array_mode(Operator):
     main_mode: EnumProperty(items=[('NONE',"None","None"), ('LINEAR',"Linear","Linear"), ('RADIAL',"Radial","Radial")], name="Main Array Mode", default='NONE')
     @classmethod
     def poll(cls, context): return context.active_object and utils.is_sdf_source(context.active_object)
-    def execute(self, context): # Logic remains the same, just uses utils/ff_update
+    def execute(self, context):
         obj = context.active_object; prop_name = "sdf_main_array_mode"
         current_mode = obj.get(prop_name, 'NONE'); changed = False
         if current_mode != self.main_mode:
             obj[prop_name] = self.main_mode; changed = True
-            if current_mode == 'LINEAR' or self.main_mode == 'NONE': # Reset linear flags
+            if current_mode == 'LINEAR' or self.main_mode == 'NONE':
                 if obj.get("sdf_array_active_x", False): obj["sdf_array_active_x"]=False; changed=True
                 if obj.get("sdf_array_active_y", False): obj["sdf_array_active_y"]=False; changed=True
                 if obj.get("sdf_array_active_z", False): obj["sdf_array_active_z"]=False; changed=True
@@ -477,15 +472,14 @@ class OBJECT_OT_fieldforge_set_csg_mode(Operator):
         
         if current_op_mode != self.csg_mode:
             obj[prop_name] = self.csg_mode
-            
-            # Update color based on new CSG mode (if not overridden by morph/clearance)
+
             use_morph = obj.get("sdf_use_morph", False)
             use_clearance = obj.get("sdf_use_clearance", False)
             if not use_morph and not use_clearance:
                 if self.csg_mode == "DIFFERENCE": obj.color = (1.0, 0.3, 0.3, 1.0)
                 elif self.csg_mode == "INTERSECT": obj.color = (0.8, 0.2, 0.8, 1.0)
                 elif self.csg_mode == "NONE": obj.color = (0.3, 0.3, 0.3, 1.0)
-                else: obj.color = (0.5, 0.5, 0.5, 1.0) # UNION
+                else: obj.color = (0.5, 0.5, 0.5, 1.0)
 
             parent_bounds = utils.find_parent_bounds(obj)
             if parent_bounds:
@@ -594,7 +588,7 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
 class VIEW3D_OT_fieldforge_select_handler(Operator):
     """Modal operator: Selection and MANUAL grab for FieldForge visuals."""
     bl_idname = "view3d.fieldforge_select_handler"; bl_label = "FieldForge Select Handler"
-    bl_options = {'REGISTER', 'INTERNAL'} # Keep INTERNAL
+    bl_options = {'REGISTER', 'INTERNAL'}
 
     _timer = None # Timer for addon status checks
 
@@ -602,9 +596,9 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
     selecting_mouse_button: str = 'LEFTMOUSE'
     is_button_down: bool = False
     drag_threshold_squared: int = 9
-    is_manually_grabbing: bool = False # Changed from drag_initiated for clarity
+    is_manually_grabbing: bool = False
     target_obj_found_on_press: bool = False
-    target_obj_on_press: bpy.types.Object = None # Store ref to object being dragged
+    target_obj_on_press: bpy.types.Object = None
     initial_mouse_screen_pos: tuple = (0, 0)
     initial_mouse_region_pos: tuple = (0, 0)
     initial_world_matrix: Matrix = None
@@ -613,7 +607,6 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
     grab_region_data: bpy.types.RegionView3D = None
 
     def modal(self, context, event):
-    # print(f"FF Modal Tick: Event {event.type} {event.value} | ButtonDown: {self.is_button_down} | Grabbing: {self.is_manually_grabbing}") # DEBUG
 
     # --- Addon Status / Global Flag Checks ---
         prefs = getattr(context, 'preferences', None); addons = getattr(prefs, 'addons', None) if prefs else None
@@ -624,16 +617,12 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
         if self.is_manually_grabbing:
             # Handle Confirm / Cancel / Move during grab
             if event.type == 'LEFTMOUSE' and event.value == 'PRESS':    # Confirm Grab
-                # print("--- GRAB CONFIRM (Left Click) ---") # DEBUG
                 self.reset_drag_state(); tag_redraw_all_view3d(); return {'RUNNING_MODAL'}
             elif event.type == 'RIGHTMOUSE' and event.value == 'PRESS': # Cancel Grab
-                # print("--- GRAB CANCEL (Right Click) ---") # DEBUG
                 self.restore_initial_matrix(); self.reset_drag_state(); tag_redraw_all_view3d(); return {'RUNNING_MODAL'}
             elif event.type == 'ESC' and event.value == 'PRESS':        # Cancel Grab (ESC)
-                # print("--- GRAB CANCEL (ESC) ---") # DEBUG
                 self.restore_initial_matrix(); self.reset_drag_state(); tag_redraw_all_view3d(); return {'RUNNING_MODAL'}
             elif event.type == 'MOUSEMOVE':                            # Update Grab Position
-                # print("--- GRAB MOVE ---") # DEBUG
                 self.update_grab_position(context, event); return {'PASS_THROUGH'} # Pass for redraw
             elif event.type in {'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'MIDDLEMOUSE'}: # Allow navigation
                 return {'PASS_THROUGH'}
@@ -644,13 +633,11 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
             # --- Handle Press Event (Stores state for potential click/drag) ---
             if event.type == self.selecting_mouse_button and event.value == 'PRESS' and not self.is_button_down:
                 self.reset_drag_state(); self.is_button_down = True; self.initial_mouse_screen_pos = (event.mouse_x, event.mouse_y)
-                # print(f"--- PRESS --- Screen=({self.initial_mouse_screen_pos}). ButtonDown SET TRUE.") # DEBUG
                 if event.alt: self.reset_drag_state(); return {'PASS_THROUGH'}
                 area, region, region_data, click_x, click_y = self.find_context_under_mouse(context, event.mouse_x, event.mouse_y)
                 self.initial_mouse_region_pos = (click_x, click_y) if click_x >= 0 else (-1, -1)
                 if area and region and region_data and click_x >= 0:
                     found_name = self.find_object_under_cursor(context, region, region_data, click_x, click_y)
-                    # print(f"--- PRESS --- Found object: {found_name}") # DEBUG
                     if found_name:
                         target_ref = context.scene.objects.get(found_name)
                         if target_ref:
@@ -669,41 +656,23 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
                                         self.initial_grab_depth = (region_data.view_location - origin_loc).length
                                 else:
                                     self.initial_grab_depth = (region_data.view_location - origin_loc).length
-                                # print(f"--- PRESS --- Selected {self.target_obj_on_press.name}. Depth: {self.initial_grab_depth:.2f}. State set.") # DEBUG
                                 tag_redraw_all_view3d(); return {'RUNNING_MODAL'} # Wait for CLICK/CLICK_DRAG/RELEASE
-                    # else:
-                    #     print("--- PRESS --- No object found under cursor.") # DEBUG
-                # else:
-                    # print("--- PRESS --- Invalid region/area. Area: {area}, Region: {region}, RegionData: {region_data}, Click: ({click_x}, {click_y})") # DEBUG
                 self.reset_drag_state()
-                # print("--- PRESS --- No target/invalid region. Reset state. PASS_THROUGH.") # DEBUG
                 return {'PASS_THROUGH'}
 
             # --- Handle CLICK Event (Indicates a click finished without drag) ---
             elif event.type == self.selecting_mouse_button and event.value == 'CLICK':
-                # print(f"--- CLICK --- Detected. ButtonDown: {self.is_button_down}. Consuming.") # DEBUG
                 if self.is_button_down and not self.is_manually_grabbing:
                     return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
             # --- Handle CLICK_DRAG Event (Initiates Manual Grab) ---
             elif event.type == self.selecting_mouse_button and event.value == 'CLICK_DRAG':
-                # print(f"--- CLICK_DRAG --- Detected. Checking conditions...") # DEBUG
-                # print(f"    is_button_down: {self.is_button_down}")
-                # print(f"    target_obj_found_on_press: {self.target_obj_found_on_press}")
-                # print(f"    target_obj_on_press: {self.target_obj_on_press.name if self.target_obj_on_press else None}")
-                # print(f"    initial_world_matrix: {self.initial_world_matrix is not None}")
-                # print(f"    is_manually_grabbing: {self.is_manually_grabbing}")
                 if self.is_button_down and self.target_obj_found_on_press and self.target_obj_on_press and \
                 self.initial_world_matrix and not self.is_manually_grabbing:
-                    print(f"--- CLICK_DRAG --- Initiating manual grab for {self.target_obj_on_press.name}") # DEBUG
                     self.is_manually_grabbing = True
-                    # bpy.ops.ed.undo_push(message="Start FieldForge Grab")
                     self.update_grab_position(context, event)
                     tag_redraw_all_view3d()
-                #     return {'RUNNING_MODAL'}
-                # else:
-                #     print(f"--- CLICK_DRAG --- Conditions FAILED. Passing through.") # DEBUG
                 return {'PASS_THROUGH'}
 
             # --- Fallback: Manual Drag Detection via MOUSEMOVE ---
@@ -713,7 +682,6 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
                 dy = event.mouse_y - self.initial_mouse_screen_pos[1]
                 dist_sq = dx * dx + dy * dy
                 if dist_sq > self.drag_threshold_squared and self.target_obj_found_on_press and self.target_obj_on_press and self.initial_world_matrix:
-                    # print(f"--- MOUSEMOVE DRAG --- Initiating manual grab for {self.target_obj_on_press.name}. Dist: {dist_sq**.5:.2f}") # DEBUG
                     self.is_manually_grabbing = True
                     self.update_grab_position(context, event)
                     tag_redraw_all_view3d()
@@ -722,7 +690,6 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
 
             # --- Handle Release Event ---
             elif event.type == self.selecting_mouse_button and event.value == 'RELEASE':
-                print(f"--- RELEASE --- ButtonDown: {self.is_button_down}") # DEBUG
                 if self.is_button_down:
                     self.reset_drag_state()
                     return {'RUNNING_MODAL'}
@@ -741,7 +708,6 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
             return {'PASS_THROUGH'}
 
     # --- Helper: Restore Initial Matrix ---
-    # (Keep implementation from previous answer)
     def restore_initial_matrix(self):
         if self.is_manually_grabbing and self.initial_world_matrix and self.target_obj_on_press:
             try:
@@ -752,7 +718,6 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
 
 
     # --- Helper: Update Grab Position ---
-    # (Keep implementation from previous answer)
     def update_grab_position(self, context, event):
         if not (self.target_obj_on_press and self.grab_region and self.grab_region_data and self.initial_world_matrix):
             print("DRAGGING WARN: Missing target/context/matrix for update."); self.reset_drag_state(); return
@@ -765,15 +730,12 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
             if init_3d and curr_3d:
                  delta = curr_3d - init_3d; new_matrix = Matrix.Translation(delta) @ self.initial_world_matrix
                  self.target_obj_on_press.matrix_world = new_matrix
-            # else: print("DRAGGING WARN: Projection failed.") # DEBUG
         except Exception as e_drag: print(f"ERROR manual drag update: {e_drag}"); self.reset_drag_state()
 
     def reset_drag_state(self):
         """Resets all state variables related to dragging AND clicking."""
-        #print("--- STATE RESET ---") # DEBUG
         self.is_button_down = False
         self.is_manually_grabbing = False
-        # Reset others too for good measure
         self.target_obj_found_on_press = False
         self.target_obj_on_press = None
         self.initial_mouse_screen_pos = (-1, -1)
@@ -804,7 +766,7 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
     def find_object_under_cursor(self, context, region, region_data, mouse_region_x, mouse_region_y, threshold=10.0):
         """ Finds object using data stored on WindowManager. """
         wm = getattr(context, 'window_manager', None)
-        # --->>> Get data from Window Manager property <<<---
+        # Get data from Window Manager property
         draw_data = wm.get("fieldforge_draw_data", {}) if wm else {}
 
         mx, my = mouse_region_x, mouse_region_y
@@ -813,9 +775,8 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
         closest_obj_name = None; effective_threshold = threshold * context.preferences.system.pixel_size
         scene = context.scene
 
-        # --->>> Use keys from the WM data <<<---
+        # Use keys from the WM data
         obj_names = list(draw_data.keys())
-        #print(f"DEBUG: Object names under cursor (from WM data): {obj_names}") # DEBUG
 
         for obj_name in obj_names:
             obj = scene.objects.get(obj_name)
@@ -823,7 +784,7 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
             parent_bounds = utils.find_parent_bounds(obj)
             if not parent_bounds or not utils.get_bounds_setting(parent_bounds, "sdf_show_source_empties"): continue
 
-            # --->>> Get lines from the WM data <<<---
+            # Get lines from the WM data
             lines = draw_data.get(obj_name, [])
             if not lines: continue
 
@@ -877,7 +838,7 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
         global _selection_handler_running
         if _selection_handler_running: return {'CANCELLED'}
         if context.window is None: return {'CANCELLED'}
-        self.selecting_mouse_button = utils.get_blender_select_mouse() # Use utils version
+        self.selecting_mouse_button = utils.get_blender_select_mouse()
         self.reset_drag_state()
         try: inputs_prefs=getattr(context.preferences, 'inputs', None); drag_thresh=getattr(inputs_prefs, 'drag_threshold', 3) if inputs_prefs else 3; self.drag_threshold_squared = drag_thresh * drag_thresh
         except AttributeError: self.drag_threshold_squared = 9
@@ -896,16 +857,11 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
         if _selection_handler_running: _selection_handler_running = False
         tag_redraw_all_view3d(); return {'CANCELLED'}
 
-# --- END OF CLASS ---
-
-
 # --- Function to Start Modal Handler (called by register) ---
 def start_select_handler_via_timer(max_attempts=5, interval=0.2):
     """ Uses a timer with retries to robustly start the modal handler. """
-    global _selection_handler_running # Access global flag
+    global _selection_handler_running
     current_attempt = 0
-    # (Implementation from previous answer - NO CHANGES NEEDED HERE)
-    # ... (defines attempt_invoke, registers timer) ...
     def attempt_invoke():
         nonlocal current_attempt
         current_attempt += 1
@@ -918,10 +874,10 @@ def start_select_handler_via_timer(max_attempts=5, interval=0.2):
         if not op_type or not op_exists:
             if current_attempt < max_attempts: return interval
             else: print("FF Start Handler Failed: Operator not found"); return None
-        if _selection_handler_running: return None # Already running
+        if _selection_handler_running: return None
         try: bpy.ops.view3d.fieldforge_select_handler('INVOKE_DEFAULT')
         except Exception as e: print(f"ERROR invoking handler: {e}")
-        return None # Stop timer
+        return None
     if not _selection_handler_running: bpy.app.timers.register(attempt_invoke, first_interval=interval)
 
 
@@ -943,7 +899,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_array_axis,
     OBJECT_OT_fieldforge_set_main_array_mode,
     OBJECT_OT_fieldforge_set_csg_mode,
-    OBJECT_OT_fieldforge_reorder_source, # Added new operator
+    OBJECT_OT_fieldforge_reorder_source,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

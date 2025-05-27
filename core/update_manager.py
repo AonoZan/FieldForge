@@ -1,5 +1,3 @@
-# FieldForge/core/update_manager.py
-
 """
 Manages the automatic update process for FieldForge SDF systems.
 Includes debouncing, throttling, triggering mesh regeneration,
@@ -8,7 +6,6 @@ and the Blender dependency graph handler.
 
 import bpy
 import time
-import traceback # For error logging
 from mathutils import Matrix
 
 # Use relative imports assuming this file is in FieldForge/core/
@@ -53,7 +50,6 @@ def update_sdf_cache(new_state: dict, bounds_name: str):
     if new_state and bounds_name:
         # State should already contain copies (e.g., matrix.copy())
         _sdf_update_caches[bounds_name] = new_state
-        # # print("f:DEBUG (update_cache): Updated cache for {bounds_name}") # DEBUG
 
 
 # --- Debounce and Throttle Logic (Per Bounds) ---
@@ -70,7 +66,6 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
 
     bounds_obj = scene.objects.get(bounds_name)
     if not bounds_obj or not bounds_obj.get(constants.SDF_BOUNDS_MARKER):
-        # # print("f:DEBUG (check_trigger): Bounds object '{bounds_name}' not found or invalid.") # DEBUG
         # Clean up potentially orphaned state if object is gone
         _debounce_timers.pop(bounds_name, None)
         _last_trigger_states.pop(bounds_name, None)
@@ -81,12 +76,10 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
 
     # Check the auto-update setting ON THE BOUNDS OBJECT
     if not utils.get_bounds_setting(bounds_obj, "sdf_auto_update"):
-        # # print("f:DEBUG (check_trigger): Auto-update disabled for {bounds_name}.") # DEBUG
         return # Auto update disabled for this system
 
     # Don't re-trigger if an update is already pending/running for this bounds
     if _updates_pending.get(bounds_name, False):
-        # # print("f:DEBUG (check_trigger): Update already pending for {bounds_name}.") # DEBUG
         return
 
     # Get the current state ONLY if necessary checks pass
@@ -97,15 +90,12 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
 
     # Compare current state to the cached state for this specific bounds
     cached_state = _sdf_update_caches.get(bounds_name)
-    # # print("f:DEBUG (check_trigger): Checking state change for {bounds_name} due to '{reason}'. Cache exists: {cached_state is not None}") # DEBUG
     if state.has_state_changed(current_state, cached_state): # Pass cached state directly
-        # # print("f:DEBUG (check_trigger): State HAS changed for {bounds_name}. Scheduling debounce.") # DEBUG
         # State has changed, schedule a new debounce timer
         schedule_new_debounce_timer(scene, bounds_name, current_state)
         # Trigger redraw for custom visuals (handled in drawing.py)
         # Consider importing and calling drawing.tag_redraw_all_view3d() here if needed
         # import drawing; drawing.tag_redraw_all_view3d() # Requires careful import handling
-    # else: print(f"DEBUG (check_trigger): State UNCHANGED for {bounds_name}.") # DEBUG
 
 
 def cancel_debounce_timer(bounds_name: str):
@@ -116,7 +106,6 @@ def cancel_debounce_timer(bounds_name: str):
         try:
             if bpy.app.timers.is_registered(timer):
                 bpy.app.timers.unregister(timer)
-                # # # print("f:DEBUG (cancel_timer): Canceled timer for {bounds_name}") # DEBUG
         except (ValueError, TypeError, ReferenceError): pass # Timer already gone/invalid
         except Exception as e: print(f"FieldForge WARN: Unexpected error cancelling timer for {bounds_name}: {e}")
 
@@ -148,7 +137,6 @@ def schedule_new_debounce_timer(scene: bpy.types.Scene, bounds_name: str, trigge
             first_interval=safe_delay
         )
         _debounce_timers[bounds_name] = new_timer
-        # # # print("f:DEBUG (schedule_timer): Scheduled timer for {bounds_name} with delay {safe_delay:.2f}s") # DEBUG
     except Exception as e:
          print(f"FieldForge ERROR: Failed to register debounce timer for {bounds_name}: {e}")
          _last_trigger_states.pop(bounds_name, None) # Clean up trigger state on failure
@@ -168,23 +156,19 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
 
     bounds_obj = scene.objects.get(bounds_name)
     if not bounds_obj:
-        # # # print("f:DEBUG (debounce_check): Bounds '{bounds_name}' deleted before timer fired.") # DEBUG
         _debounce_timers.pop(bounds_name, None) # Remove timer ref
         return None # Bounds deleted, timer is now defunct
 
     # Timer has fired, remove its reference (it won't fire again unless rescheduled)
     _debounce_timers.pop(bounds_name, None)
-    # # # print("f:DEBUG (debounce_check): Debounce timer fired for {bounds_name}.") # DEBUG
 
     # Check if an update was already manually triggered or is running
     if _updates_pending.get(bounds_name, False):
-        # # # print("f:DEBUG (debounce_check): Update already pending for {bounds_name}, skipping.") # DEBUG
         return None # Let the existing pending update run its course
 
     # Retrieve the state that caused this timer to be scheduled
     state_to_pass_to_update = _last_trigger_states.get(bounds_name)
     if state_to_pass_to_update is None:
-        # # # print("f:DEBUG (debounce_check): No trigger state found for {bounds_name}, skipping.") # DEBUG
         return None # Should not happen if scheduling works correctly
 
     # --- Throttle Check ---
@@ -195,7 +179,6 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
 
     if time_since_last_update >= min_interval:
         # --- Throttle OK: Schedule the actual viewport update ---
-        # # # print("f:DEBUG (debounce_check): Throttle OK for {bounds_name}. Scheduling run_sdf_update.") # DEBUG
         _last_trigger_states.pop(bounds_name, None) # Clear trigger state, it's being used
         _updates_pending[bounds_name] = True # Mark as pending
 
@@ -213,7 +196,6 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
     else:
         # --- Throttle Active: Reschedule this check function ---
         remaining_wait = min_interval - time_since_last_update
-        # # # print("f:DEBUG (debounce_check): Throttled {bounds_name}. Rescheduling check in {remaining_wait:.2f}s") # DEBUG
         # Keep the state in _last_trigger_states for the next attempt
         # Do NOT set the pending flag yet
         # Cancel just in case (shouldn't be needed as timer was popped)
@@ -244,7 +226,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
 
     # Check libfive availability at runtime
     if not _lf_imported_ok:
-         # # # print("FieldForge ERROR (run_update): Libfive not available, cannot update.")
          _updates_pending[bounds_name] = False # Reset pending flag
          return # Cannot proceed
 
@@ -262,7 +243,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
 
     update_type = "VIEWPORT" if is_viewport_update else "FINAL"
     start_time = time.time()
-    # # # print("f:FieldForge: Starting {update_type} update for {bounds_name}...") # DEBUG
 
     mesh_update_successful = False
     mesh_generation_error = False
@@ -298,7 +278,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
         world_extent = max(1e-6, (abs(b_sca_vec.x) + abs(b_sca_vec.y) + abs(b_sca_vec.z)) / 3.0) * extent_factor
         xyz_min = tuple(b_loc[i] - world_extent for i in range(3))
         xyz_max = tuple(b_loc[i] + world_extent for i in range(3))
-        # # # print("f:DEBUG: Meshing region for {bounds_name}: Min={xyz_min}, Max={xyz_max}") # DEBUG
 
         # 3. Select Resolution based on update type and settings from trigger_state
         resolution = sdf_settings_state.get("sdf_final_resolution", 30)
@@ -314,9 +293,7 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
             try:
                 mesh_data = final_combined_shape.get_mesh(xyz_min=xyz_min, xyz_max=xyz_max, resolution=resolution)
                 gen_duration = time.time() - gen_start_time
-                # # # print("f:FieldForge: Mesh gen took {gen_duration:.3f}s for {bounds_name} (Res: {resolution})") # DEBUG
                 if not mesh_data or not mesh_data[0]: # Check if get_mesh returned empty
-                     # # # print("f:FieldForge INFO: Mesh gen resulted in empty mesh for {bounds_name}.") # DEBUG
                      mesh_data = None # Treat as no mesh data
             except Exception as e:
                 print(f"FieldForge Error: libfive mesh generation failed for {bounds_name}: {e}")
@@ -327,7 +304,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
         result_obj = utils.find_result_object(context, result_name)
         if not result_obj:
             if utils.get_bounds_setting(bounds_obj, "sdf_create_result_object"):
-                print(f"FieldForge INFO: Result object '{result_name}' not found, creating...") # INFO
                 try:
                     mesh_data_b = bpy.data.meshes.new(name=result_name + "_Mesh")
                     result_obj = bpy.data.objects.new(result_name, mesh_data_b)
@@ -341,7 +317,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
                  if not mesh_generation_error and mesh_data: # We generated data but have nowhere to put it
                       mesh_generation_error = True
                       print(f"FieldForge ERROR: Result obj '{result_name}' not found & auto-create disabled for {bounds_name}, but mesh data was generated.")
-                 # Else: No result obj, no error, no mesh data -> considered success (empty result expected)
                  mesh_update_successful = True
 
         # 6. Update Mesh Data
@@ -356,21 +331,18 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
                     mesh.from_pydata(mesh_data[0], [], mesh_data[1]) # Verts, Edges (empty), Faces
                     mesh.update() # Recalculate normals, bounds
                     mesh_update_successful = True
-                    # # # print("f:FieldForge: Applied mesh data to '{result_name}'.") # DEBUG
                 except Exception as e:
                     print(f"FieldForge ERROR: Applying mesh data to '{result_name}' failed: {e}")
                     if mesh.vertices: mesh.clear_geometry() # Attempt cleanup
                     mesh_update_successful = False
             else: # No mesh data generated (e.g., empty shape or error)
                 if mesh.vertices or mesh.polygons or mesh.loops: # Clear existing geometry if needed
-                    # # # print("f:FieldForge: Clearing geometry for '{result_name}' (empty result).") # DEBUG
                     mesh.clear_geometry()
                     mesh.update()
                 mesh_update_successful = True # Considered success (empty result applied)
 
     except Exception as e:
          print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {e}")
-         traceback.print_exc()
          mesh_generation_error = True
          mesh_update_successful = False
          # Attempt to clear result mesh geometry on error
@@ -388,7 +360,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
         # Reset pending flag for this specific bounds object
         _updates_pending[bounds_name] = False
         end_time = time.time()
-        # # # print("f:FieldForge: Finished {update_type} for {bounds_name} in {end_time - start_time:.3f}s (Success: {mesh_update_successful})") # DEBUG
 
 
 # --- Scene Update Handler (Dependency Graph) ---
@@ -431,21 +402,14 @@ def ff_depsgraph_handler(scene, depsgraph):
                  bounds_to_check = root_bounds if root_bounds else updated_obj # Target the bounds obj
                  # --- Check conditions that require SDF Recompute ---
                  recompute_needed = False
-                 # 1. Transform changed on bounds OR a source within its hierarchy
                  if update.is_updated_transform and (is_bounds_itself or is_source):
                      recompute_needed = True
-                     if is_source: needs_visual_redraw = True # Source transform change needs visual redraw
-                 # 2. Geometry changed (relevant for modifier results, maybe less direct for SDF)
-                 # Check this carefully - might trigger too often. Maybe only if sdf_show_source_empties is off?
-                 # if update.is_updated_geometry: recompute_needed = True
-                 # 3. Custom property change (not detected by depsgraph) - requires manual trigger or UI hook
-
+                     if is_source: needs_visual_redraw = True
                  if recompute_needed:
                       updated_bounds_names.add(bounds_to_check.name)
 
     # Trigger the check function for each affected bounds hierarchy
     if updated_bounds_names:
-        # # print("f:DEBUG (Depsgraph): Changes detected affecting bounds: {updated_bounds_names}") # DEBUG
         current_scene = getattr(context, 'scene', None)
         if current_scene: # Check scene exists before passing
              for bounds_name in updated_bounds_names:
@@ -478,7 +442,6 @@ def initial_update_check_all():
     if not context or not context.scene: return None # Scene might not be ready
     if not _lf_imported_ok: return None # Don't run checks if libfive failed
 
-    # # print("FieldForge: Running initial update check for existing bounds...")
     count = 0
     processed_bounds = set() # Avoid scheduling multiple checks if bounds are nested/duplicated somehow
 
@@ -513,7 +476,6 @@ def initial_update_check_all():
 def clear_timers_and_state():
     """Cancels all active timers and clears global state dictionaries."""
     global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times, _sdf_update_caches
-    # # print("FieldForge: Clearing timers and update state...")
     if bpy.app.timers: # Check if timers module is still valid
         for bounds_name in list(_debounce_timers.keys()):
              cancel_debounce_timer(bounds_name) # Use existing cancel function
@@ -522,4 +484,3 @@ def clear_timers_and_state():
     _updates_pending.clear()
     _last_update_finish_times.clear()
     _sdf_update_caches.clear()
-    # # print("FieldForge: Timers and state cleared.")

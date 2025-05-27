@@ -1,5 +1,3 @@
-# FieldForge/drawing.py
-
 """
 Handles custom GPU drawing for FieldForge objects in the 3D Viewport.
 Includes the main draw callback, helper for offsetting vertices, redraw tagging,
@@ -10,23 +8,13 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 import math
-from mathutils import Vector, Matrix # Matrix might not be needed here, but Vector is
+from mathutils import Vector
 
-# Use relative imports assuming this file is in FieldForge/
-# These might need adjustment based on your final project structure
-try:
-    from . import constants
-    from . import utils # For find_parent_bounds, get_bounds_setting, is_sdf_source, geometry helpers
-except ImportError:
-    # Fallback for running script directly or if structure changes
-    print("FieldForge WARN (drawing.py): Could not perform relative imports. Using placeholders.")
-    # If running as standalone, these would need to be actual modules
-    import constants
-    import utils
-
+from . import constants
+from . import utils
 
 # --- Module State ---
-# Store the draw handle within this module
+
 _draw_handle = None
 # Double Buffering for picking data to avoid race conditions with event handlers
 _draw_line_data_read = {}  # Data for event handlers to read (stable from previous frame)
@@ -93,14 +81,13 @@ def clear_draw_data():
     """Clears the internal write buffer and the shared WM property."""
     global _draw_line_data_write
     _draw_line_data_write.clear()
-    # Also clear the shared property on unregister/cleanup
+
     wm = getattr(bpy.context, 'window_manager', None)
     if wm and "fieldforge_draw_data" in wm:
         try:
             del wm["fieldforge_draw_data"]
-            # print("DEBUG: Cleared fieldforge_draw_data from WM.") # DEBUG
         except (KeyError, TypeError, AttributeError):
-            pass # Ignore if already deleted or WM invalid
+            pass
 
 
 # --- Main Draw Callback ---
@@ -279,6 +266,7 @@ def ff_draw_callback():
                         line_segments_for_picking_for_this_obj.append((w_apex_cone.copy(), b_pl_cone.copy()))
                         all_world_verts_for_batch_if_selected.extend(sides_d_cone)
                     except Exception as e_calc: print(f"FF Draw Calc Error (Cone Sides): {obj_name} - {e_calc}")
+            # Pyramid
             elif sdf_type_prop == "pyramid":
                 local_base_verts_pyramid = [
                     Vector((-0.5, -0.5, 0.0)), Vector(( 0.5, -0.5, 0.0)),
@@ -298,6 +286,7 @@ def ff_draw_callback():
                 for v_base in world_base_verts_pyramid:
                     line_segments_for_picking_for_this_obj.append((v_base.copy(), world_apex_pyramid.copy()))
                     all_world_verts_for_batch_if_selected.extend([v_base, world_apex_pyramid])
+            # Rounded box
             elif sdf_type_prop == "rounded_box":
                 cs = 4
                 roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
@@ -319,7 +308,7 @@ def ff_draw_callback():
                             v2 = world_loop[(i + 1) % len(world_loop)]
                             line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
                             all_world_verts_for_batch_if_selected.extend([v1, v2])
-            
+            # Circle
             elif sdf_type_prop == "circle":
                 seg_circle=24; local_v_circle=utils.create_unit_circle_vertices_xy(seg_circle)
                 world_o_circle=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_circle]
@@ -328,7 +317,7 @@ def ff_draw_callback():
                         v1=world_o_circle[i]; v2=world_o_circle[(i+1)%len(world_o_circle)]
                         line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
                         all_world_verts_for_batch_if_selected.extend([v1,v2])
-
+            # Ring
             elif sdf_type_prop == "ring":
                 seg_ring=24; r_o_ring=0.5; 
                 r_i_prop_ring = obj.get("sdf_inner_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_inner_radius"])
@@ -347,7 +336,7 @@ def ff_draw_callback():
                         v1=w_inner_ring[i]; v2=w_inner_ring[(i+1)%len(w_inner_ring)]
                         line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
                         all_world_verts_for_batch_if_selected.extend([v1,v2])
-            
+            # Polygon
             elif sdf_type_prop == "polygon":
                 sides_poly = max(3, obj.get("sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"]))
                 local_v_poly=utils.create_unit_polygon_vertices_xy(sides_poly)
@@ -357,7 +346,7 @@ def ff_draw_callback():
                         v1=world_o_poly[i]; v2=world_o_poly[(i+1)%len(world_o_poly)]
                         line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
                         all_world_verts_for_batch_if_selected.extend([v1,v2])
-
+            # Text
             elif sdf_type_prop == "text":
                 text_string = obj.get("sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
                 if not text_string.strip(): continue # Don't draw if empty
@@ -393,7 +382,7 @@ def ff_draw_callback():
                         v2 = world_rect_verts[(i + 1) % len(world_rect_verts)]
                         line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
                         all_world_verts_for_batch_if_selected.extend([v1, v2])
-
+            # Half space
             elif sdf_type_prop == "half_space":
                 draw_plane_size_hs=2.0; arrow_len_factor_hs=0.5 
                 plane_verts_local_hs = [
@@ -417,7 +406,7 @@ def ff_draw_callback():
                 for v_start, v_end in hs_arrow_lines:
                     line_segments_for_picking_for_this_obj.append((v_start.copy(), v_end.copy()))
                     all_world_verts_for_batch_if_selected.extend([v_start, v_end])
-
+            # Torus
             elif sdf_type_prop == "torus":
                 mseg_torus=24; minor_seg_torus=12
                 r_maj_torus=max(0.01,float(obj.get("sdf_torus_major_radius",0.35))) # Ensure float conversion
@@ -451,7 +440,7 @@ def ff_draw_callback():
                             # Point on the minor circle in its local plane, then add center
                             point = l_center_local + (l_axis1_local_torus * math.cos(angle_minor) + l_axis2_local * math.sin(angle_minor)) * r_min_torus
                             l_minor_local_points.append(point)
-                        
+
                         w_minor_torus_points=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_minor_local_points]
                         if w_minor_torus_points:
                             for k in range(len(w_minor_torus_points)): 
@@ -460,11 +449,10 @@ def ff_draw_callback():
                                 all_world_verts_for_batch_if_selected.extend([v1,v2])
             if line_segments_for_picking_for_this_obj:
                 _draw_line_data_write[obj.name] = line_segments_for_picking_for_this_obj
-            
+
             if is_selected or is_active:
                 current_draw_color = active_color_rgba if is_active else select_color_rgba
                 batches_to_draw_for_this_obj = [] # Re-init for this object's draw pass
-
                 try:
                     if sdf_type_prop == "cube" and indexed_world_verts and indices_for_batch:
                         offset_v = offset_vertices(indexed_world_verts, region_3d, camera_location, DEPTH_OFFSET_FACTOR)
@@ -486,7 +474,6 @@ def ff_draw_callback():
         try:
             # Store a shallow copy for the operator to read
             wm["fieldforge_draw_data"] = _draw_line_data_write.copy()
-            # print(f"--- ff_draw_callback Updated WM Property --- Keys: {list(wm['fieldforge_draw_data'].keys())}") # DEBUG
         except Exception as e_prop:
              print(f"FF Draw ERROR: Failed to set WM property: {e_prop}")
         finally: # Restore state

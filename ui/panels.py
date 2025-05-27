@@ -1,5 +1,3 @@
-# FieldForge/ui/panels.py
-
 """
 Defines Blender Panel classes for the FieldForge addon UI,
 displayed in the 3D Viewport Sidebar (N-Panel).
@@ -20,7 +18,6 @@ from .operators import (
     OBJECT_OT_fieldforge_set_csg_mode,
     OBJECT_OT_fieldforge_reorder_source,
 )
-
 
 # --- UI Drawing Helper Functions ---
 
@@ -168,8 +165,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     op_intersect = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='SELECT_INTERSECT', depress=(current_csg_op == 'INTERSECT'))
     op_intersect.csg_mode = 'INTERSECT'
     op_diff = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='SELECT_DIFFERENCE', depress=(current_csg_op == 'DIFFERENCE'))
-    # Alternative for Difference: 'REMOVE' icon if SELECT_DIFFERENCE is not preferred
-    # op_diff = row_csg.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="", icon='REMOVE', depress=(current_csg_op == 'DIFFERENCE'))
     op_diff.csg_mode = 'DIFFERENCE'
 
     if not csg_active:
@@ -180,7 +175,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     if sdf_type in ["circle", "polygon", "ring"]:
         row_loft = interact_col.row(align=True)
         row_loft.prop(obj, '["sdf_use_loft"]', text="Use Loft", toggle=True, icon='IPO_LINEAR')
-    # if use_loft: row_loft.label(text="(Overrides others)") # Already handled by csg_active
 
     # Morph Toggle & Factor
     row_morph = interact_col.row(align=True); row_morph.active = not use_loft
@@ -197,10 +191,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         row_clearance_keep = interact_col.row(align=True); row_clearance_keep.active = True
         row_clearance_keep.prop(obj, '["sdf_clearance_keep_original"]', text="Keep Original Shape")
 
-    # Visual cue for draw color (optional)
-    # draw_color_row = interact_col.row(align=True); draw_color_row.active = False; draw_color_row.label(text="", icon='INFO')
-    # if use_loft: draw_color_row.label(text="(Lofting)") # ... etc ...
-
     col.separator()
 
     # --- Shape Parameters ---
@@ -211,8 +201,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     if sdf_type == "text":
         param_col.label(text="Parameters:")
         param_col.prop(obj, '["sdf_text_string"]', text="Text")
-        # If you made text extrudable via the generic extrusion depth:
-        # param_col.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
         has_params = True
     elif sdf_type == "rounded_box":
         param_col.label(text="Parameters:")
@@ -222,11 +210,10 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         param_col.label(text="Parameters (Unit Space):")
         param_col.prop(obj, '["sdf_torus_major_radius"]', text="Major Radius")
         param_col.prop(obj, '["sdf_torus_minor_radius"]', text="Minor Radius")
-        # Warning if minor >= major
         maj_r = obj.get("sdf_torus_major_radius", 0.35); min_r = obj.get("sdf_torus_minor_radius", 0.15)
         if min_r >= maj_r: param_col.label(text="Minor radius should be < Major", icon='ERROR')
         has_params = True
-    elif sdf_type in {"circle", "ring", "polygon"}: # Extrusion depth for 2D shapes
+    elif sdf_type in {"circle", "ring", "polygon"}:
         param_col.label(text="Parameters:")
         param_col.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
         if sdf_type == "ring":
@@ -238,7 +225,7 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         param_col.label(text="Defined by Transform:")
         param_col.label(text="- Origin: Point on plane")
         param_col.label(text="- Local +Z: Outward Normal")
-        has_params = True # Indicate section is relevant, even without props
+        has_params = True
 
     # Fallback text if no specific params shown
     if not has_params:
@@ -309,18 +296,7 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     if current_main_mode != 'NONE':
         prop_center_on_origin = "sdf_array_center_on_origin"
         row_center_origin = main_arr_col.row()
-        # Only enable the checkbox if the offset is non-zero, otherwise, it's redundant.
-        #current_center_offset = obj.get(cen_r, (0.0, 0.0))
-        #is_offset_non_zero = abs(current_center_offset[0]) > 1e-5 or abs(current_center_offset[1]) > 1e-5
-        #row_center_origin.active = is_offset_non_zero 
         row_center_origin.prop(obj, f'["{prop_center_on_origin}"]', text="Center on Origin")
-        #if not is_offset_non_zero:
-            # If offset is zero, it's already centered. We can indicate the checkbox would have no effect.
-            # Or simply disable it. If disabled, the text below is useful.
-            # If we want to ensure the property is True when offset is zero:
-            # if not is_offset_non_zero and not obj.get(prop_center_on_origin, True):
-            # obj[prop_center_on_origin] = True # Force true if offset is zero
-           # pass # UI will show it disabled
 
     col.separator()
     # Info Text
@@ -340,13 +316,7 @@ class VIEW3D_PT_fieldforge_main(Panel):
     # Optional: @classmethod poll(cls, context) to disable panel if libfive not available?
     @classmethod
     def poll(cls, context):
-        # Check if libfive was loaded successfully (using the global flag from __init__)
-        # Need a way to access this flag. One way is to store it on bpy.types.Scene perhaps?
-        # Or import it directly from the root __init__ if possible.
-        # Let's assume for now it's accessible via `bpy.context.scene.fieldforge_libfive_available` (set in register)
-        # return getattr(context.scene, "fieldforge_libfive_available", False)
-        # Simpler: Just check the lf variable from utils (if set by root __init__)
-        return utils.lf is not None # Check if lf object exists
+        return utils.lf is not None
 
     def draw(self, context):
         layout = self.layout
@@ -368,14 +338,12 @@ class VIEW3D_PT_fieldforge_main(Panel):
         if obj.get(constants.SDF_BOUNDS_MARKER, False):
             layout.label(text=f"Bounds: {obj.name}", icon='MOD_BUILD')
             layout.separator()
-            # Call helper to draw bounds settings
             draw_sdf_bounds_settings(layout, context)
 
         # Check if active object is an SDF Source
         elif utils.is_sdf_source(obj):
             layout.label(text=f"Source: {obj.name}", icon='OBJECT_DATA')
             layout.separator()
-            # Call helper to draw source settings
             draw_sdf_source_info(layout, context)
 
         else:
