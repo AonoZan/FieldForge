@@ -28,8 +28,9 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
     current_state = {
         'bounds_name': bounds_name,
         'scene_settings': {}, # Settings specific to this bounds object
-        'bounds_matrix': bounds_obj.matrix_world.copy(), # Use world matrix
+        'bounds_matrix': bounds_obj.matrix_world.copy(),
         'source_objects': {}, # Dictionary: {obj_name: {matrix: ..., props: {...}}}
+        'group_objects': {}
     }
 
     # Read settings from the bounds object itself into the state dictionary
@@ -74,18 +75,18 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                 props_to_track = {
                     # Core props
                     'sdf_type': sdf_type,
-                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", 0.0),
+                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"]),
                     'sdf_csg_operation': actual_child_obj.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"]),
                     # Interaction Modifiers
                     'sdf_use_clearance': actual_child_obj.get("sdf_use_clearance", False),
-                    'sdf_clearance_offset': actual_child_obj.get("sdf_clearance_offset", 0.05),
-                    'sdf_clearance_keep_original': actual_child_obj.get("sdf_clearance_keep_original", True),
+                    'sdf_clearance_offset': actual_child_obj.get("sdf_clearance_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_clearance_offset"]),
+                    'sdf_clearance_keep_original': actual_child_obj.get("sdf_clearance_keep_original", constants.DEFAULT_SOURCE_SETTINGS["sdf_clearance_keep_original"]),
                     'sdf_use_morph': actual_child_obj.get("sdf_use_morph", False),
-                    'sdf_morph_factor': actual_child_obj.get("sdf_morph_factor", 0.5),
+                    'sdf_morph_factor': actual_child_obj.get("sdf_morph_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_morph_factor"]),
                     'sdf_use_loft': actual_child_obj.get("sdf_use_loft", False),
                     # Shell Modifier
                     'sdf_use_shell': actual_child_obj.get("sdf_use_shell", False),
-                    'sdf_shell_offset': actual_child_obj.get("sdf_shell_offset", 0.1),
+                    'sdf_shell_offset': actual_child_obj.get("sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]),
                     # Array Modifier (Main Mode)
                     'sdf_main_array_mode': actual_child_obj.get("sdf_main_array_mode", 'NONE'),
                     # Linear Array Props (Only relevant if mode is LINEAR, but get anyway for simplicity)
@@ -106,7 +107,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     # Use conditional get based on sdf_type to keep state clean
                     'sdf_text_string': actual_child_obj.get("sdf_text_string") if sdf_type == "text" else None,
                     'sdf_round_radius': actual_child_obj.get("sdf_round_radius") if sdf_type == "rounded_box" else None,
-                    'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth") if sdf_type in {"circle", "ring", "polygon"} else None,
+                    'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth") if sdf_type in {"circle", "ring", "polygon", "text"} else None,
                     'sdf_inner_radius': actual_child_obj.get("sdf_inner_radius") if sdf_type == "ring" else None,
                     'sdf_sides': actual_child_obj.get("sdf_sides") if sdf_type == "polygon" else None,
                     'sdf_torus_major_radius': actual_child_obj.get("sdf_torus_major_radius") if sdf_type == "torus" else None,
@@ -123,6 +124,18 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                 current_state['source_objects'][child_name] = obj_state
 
                 # Add source object to queue to check its children as well
+                queue.append(actual_child_obj)
+
+            # Process SDF Group Objects
+            elif utils.is_sdf_group(actual_child_obj) and is_visible:
+                props_to_track_group = {
+                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_BLEND_GROUP_SETTINGS["sdf_child_blend_factor"]),
+                }
+                group_obj_state = {
+                    'matrix': actual_child_obj.matrix_world.copy(),
+                    'props': props_to_track_group
+                }
+                current_state['group_objects'][child_name] = group_obj_state
                 queue.append(actual_child_obj)
 
             # If it's not a source object but might have children (e.g., a regular Empty group node),
@@ -175,4 +188,19 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
         # Compare properties dict
         if not utils.compare_dicts(current_obj_state.get('props'), cached_obj_state.get('props')):
             return True
+
+    current_group_names = set(current_state.get('group_objects', {}).keys())
+    cached_group_names = set(cached_state.get('group_objects', {}).keys())
+    if current_group_names != cached_group_names:
+        return True
+    current_groups = current_state.get('group_objects', {})
+    cached_groups = cached_state.get('group_objects', {})
+    for obj_name, current_group_obj_state in current_groups.items():
+        cached_group_obj_state = cached_groups.get(obj_name)
+        if not cached_group_obj_state: return True
+        if not utils.compare_matrices(current_group_obj_state.get('matrix'), cached_group_obj_state.get('matrix')):
+            return True
+        if not utils.compare_dicts(current_group_obj_state.get('props'), cached_group_obj_state.get('props')):
+            return True
+            
     return False

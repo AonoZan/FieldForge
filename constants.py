@@ -14,6 +14,8 @@ SDF_RESULT_OBJ_NAME_PROP = "sdf_result_object_name"
 # Marker for SDF Source Empty objects (controllers for individual shapes)
 SDF_PROPERTY_MARKER = "is_sdf_object"
 
+# Marker for SDF Group Empty objects
+SDF_BLEND_GROUP_MARKER = "is_sdf_group"
 
 # --- Caching and Comparison ---
 
@@ -50,14 +52,17 @@ DEFAULT_SETTINGS = {
     "sdf_realtime_update_delay": 0.3, # Inactivity time (seconds) before attempting auto viewport update
     "sdf_minimum_update_interval": 0.5, # Minimum time (seconds) between the *end* of one auto update and the *start* of the next (throttling)
 
-    # --- Blending ---
-    "sdf_global_blend_factor": 0.1, # Default blend factor used when combining direct children of the Bounds object if they aren't Negative/Clearance/Morph
 
     # --- Display and Object Management ---
     "sdf_show_source_empties": True, # Toggle visibility of source Empties AND custom draw outlines
     "sdf_create_result_object": True, # Allow auto-creation of the result mesh object if it's missing during an update
 
     "sdf_discard_mesh_on_save": True, # Don't save generated mesh by default
+}
+
+# Default values for Group Object properties ---
+DEFAULT_BLEND_GROUP_SETTINGS = {
+    "sdf_child_blend_factor": 0.1, # Default blend factor for children of this group
 }
 
 # --- Optional: Default values for Source Object properties ---

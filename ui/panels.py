@@ -64,6 +64,59 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     row_display_options.prop(obj, '["sdf_create_result_object"]', text="Recreate Mesh", toggle=True)
     row_display_options.prop(obj, '["sdf_discard_mesh_on_save"]', text="Discard on Save", toggle=True)
 
+def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Context):
+    """ Draws the UI elements for the SDF Group object properties. """
+    obj = context.object # Assumes active object is an SDF Group
+
+    # --- SDF Type Label (Specific for Group) ---
+    label_type_row = layout.row(align=True)
+    label_type_row.label(text="SDF Type: Group") # Hardcoded type for clarity
+
+    # --- Processing Order and Hierarchy Buttons (Same as for sources) ---
+    if obj.parent:
+        hier_row = layout.row(align=True)
+        current_order_num_raw = obj.get("sdf_processing_order", 0)
+        current_order_display_val = current_order_num_raw
+        try:
+            current_order_display_val = int(current_order_num_raw / 10)
+        except (TypeError, ValueError):
+            current_order_display_val = "N/A"
+        finally:
+            hier_row.label(text=f"Processing Order: {current_order_display_val}")
+
+        can_move_up = False; can_move_down = False
+        sdf_siblings = []
+        for child in obj.parent.children:
+            if (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
+               child.visible_get(view_layer=context.view_layer):
+                sdf_siblings.append(child)
+        
+        if len(sdf_siblings) > 1:
+            def get_sort_key(c):
+                return (c.get("sdf_processing_order", float('inf')), c.name)
+            sdf_siblings.sort(key=get_sort_key)
+            try:
+                idx = sdf_siblings.index(obj)
+                if idx > 0: can_move_up = True
+                if idx < len(sdf_siblings) - 1: can_move_down = True
+            except ValueError: pass
+
+        buttons_sub_row = hier_row.row(align=True)
+        buttons_sub_row.alignment = 'RIGHT'
+        up_button_op_layout = buttons_sub_row.row(align=True)
+        up_button_op_layout.active = can_move_up
+        op_up = up_button_op_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname, text=" ", icon='TRIA_UP')
+        op_up.direction = 'UP'
+        down_button_op_layout = buttons_sub_row.row(align=True)
+        down_button_op_layout.active = can_move_down
+        op_down = down_button_op_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname, text=" ", icon='TRIA_DOWN')
+        op_down.direction = 'DOWN'
+    
+    layout.separator()
+
+    # --- Child Object Blending ---
+    child_blend_prop_row = layout.row(align=True)
+    child_blend_prop_row.prop(obj, '["sdf_child_blend_factor"]', text="Blend Factor")
 
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """
@@ -315,34 +368,49 @@ class VIEW3D_PT_fieldforge_main(Panel):
     # Optional: @classmethod poll(cls, context) to disable panel if libfive not available?
     @classmethod
     def poll(cls, context):
-        return utils.lf is not None
+        return utils.lf is not None # Only show panel if libfive is available
+
+    def draw_header(self, context): # Add a header to the panel
+        layout = self.layout
+        obj = context.object
+        header_text = "FieldForge"
+        icon = 'NONE'
+
+        if obj:
+            if obj.get(constants.SDF_BOUNDS_MARKER, False):
+                header_text = f"Bounds: {obj.name}"
+                icon = 'MOD_BUILD'
+            elif utils.is_sdf_group(obj): # Check for group
+                header_text = f"Group: {obj.name}"
+                icon = 'GROUP' # Or 'OUTLINER_OB_GROUP_INSTANCE'
+            elif utils.is_sdf_source(obj):
+                header_text = f"Source: {obj.name}"
+                icon = 'OBJECT_DATA' # Or more specific based on sdf_type if desired
+        layout.label(text=header_text, icon=icon)
+
 
     def draw(self, context):
         layout = self.layout
         obj = context.object
 
-        # Check again in draw, just in case poll changes
-        if utils.lf is None:
+        if utils.lf is None: # Should be caught by poll, but good safety
             layout.label(text="libfive library not found!", icon='ERROR')
             layout.separator()
             layout.label(text="Check Blender Console.")
-            layout.label(text="Dynamic features disabled.")
             return
 
         if not obj:
             layout.label(text="Select a FieldForge object.", icon='INFO')
             return
 
-        # Check if active object is a Bounds controller
+        # Check object type and call appropriate drawing function
         if obj.get(constants.SDF_BOUNDS_MARKER, False):
             draw_sdf_bounds_settings(layout, context)
-
-        # Check if active object is an SDF Source
+        elif utils.is_sdf_group(obj):
+            draw_sdf_group_settings(layout, context)
         elif utils.is_sdf_source(obj):
             draw_sdf_source_info(layout, context)
-
         else:
-            # Active object is not part of FieldForge system
             layout.label(text="Not a FieldForge object.", icon='QUESTION')
 
 

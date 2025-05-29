@@ -6,7 +6,7 @@ and the Blender dependency graph handler.
 
 import bpy
 import time
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 # Use relative imports assuming this file is in FieldForge/core/
 from .. import constants
@@ -249,41 +249,61 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
     result_obj = None # Define early for use in finally block
 
     try:
-        # Get settings and state info directly from the trigger_state dictionary
-        sdf_settings_state = trigger_state.get('scene_settings')
-        bounds_matrix = trigger_state.get('bounds_matrix') # Matrix at the time state was captured
-        # Read the *current* result object name property from the *current* bounds object.
+        sdf_settings_from_bounds = trigger_state.get('scene_settings')
+        bounds_matrix_at_trigger = trigger_state.get('bounds_matrix')
         result_name = bounds_obj.get(constants.SDF_RESULT_OBJ_NAME_PROP)
 
-        if not sdf_settings_state: raise ValueError("SDF settings missing from trigger state")
-        if not bounds_matrix: raise ValueError("Bounds matrix missing from trigger state")
-        if not result_name: raise ValueError(f"Result object name prop missing from {bounds_name}")
+        if not sdf_settings_from_bounds: raise ValueError("SDF bounds settings missing from trigger state")
+        if not bounds_matrix_at_trigger: raise ValueError("Bounds matrix missing from trigger state")
 
-        # 1. Process Hierarchy using the *current* bounds obj as root
-        # It's important hierarchy traversal uses the live object state,
-        # while transforms/settings use the captured trigger_state.
-        final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings_state)
+        # 1. Process Hierarchy using the *current* bounds_obj as root.
+        #    Pass sdf_settings_from_bounds as the `bounds_settings` argument
+        #    to sdf_logic.process_sdf_hierarchy.
+        final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings_from_bounds)
 
-        if final_combined_shape is None: # Should return lf.emptiness() on error now
+        if final_combined_shape is None:
             final_combined_shape = lf.emptiness()
             print(f"FieldForge WARN: SDF hierarchy processing returned None for {bounds_name}, using empty.")
             mesh_generation_error = True
 
         # 2. Define Meshing Region based on the Bounds object's state at trigger time
-        b_loc = bounds_matrix.translation
-        b_sca_vec = bounds_matrix.to_scale()
-        # Define bounds based on scale - might need refinement (e.g., use bounding box diagonal?)
-        # Using average scale applied to a unit size (e.g., +/- 1.0 from origin before scaling)
-        extent_factor = 1.0 # Base extent for unit cube bounds
-        world_extent = max(1e-6, (abs(b_sca_vec.x) + abs(b_sca_vec.y) + abs(b_sca_vec.z)) / 3.0) * extent_factor
-        xyz_min = tuple(b_loc[i] - world_extent for i in range(3))
-        xyz_max = tuple(b_loc[i] + world_extent for i in range(3))
+        #    Use bounds_matrix_at_trigger here for consistency with the state that triggered the update.
+        b_loc = bounds_matrix_at_trigger.translation
+        b_sca_vec = bounds_matrix_at_trigger.to_scale()
+        extent_factor = 1.0 
+        world_extent_avg = max(1e-6, (abs(b_sca_vec.x) + abs(b_sca_vec.y) + abs(b_sca_vec.z)) / 3.0) * extent_factor
+        
+        # More robust way to define bounds using actual scale components
+        # Ensure bounds are not inverted if scale is negative.
+        # The region should be defined by min/max corners in world space.
+        # If bounds_obj itself is scaled, its local unit cube (-1 to 1 on each axis)
+        # defines the meshing region in its local space. We need to transform these
+        # 8 corner points to world space using bounds_matrix_at_trigger and find the min/max.
+        
+        local_corners = [
+            Vector((-1, -1, -1)), Vector((1, -1, -1)),
+            Vector((-1,  1, -1)), Vector((1,  1, -1)),
+            Vector((-1, -1,  1)), Vector((1, -1,  1)),
+            Vector((-1,  1,  1)), Vector((1,  1,  1)),
+        ]
+        world_corners = [(bounds_matrix_at_trigger @ corner.to_4d()).xyz for corner in local_corners]
 
-        # 3. Select Resolution based on update type and settings from trigger_state
-        resolution = sdf_settings_state.get("sdf_final_resolution", 30)
+        min_x = min(c.x for c in world_corners)
+        max_x = max(c.x for c in world_corners)
+        min_y = min(c.y for c in world_corners)
+        max_y = max(c.y for c in world_corners)
+        min_z = min(c.z for c in world_corners)
+        max_z = max(c.z for c in world_corners)
+
+        xyz_min = (min_x, min_y, min_z)
+        xyz_max = (max_x, max_y, max_z)
+
+
+        # 3. Select Resolution based on update type and settings from sdf_settings_from_bounds
+        resolution = sdf_settings_from_bounds.get("sdf_final_resolution", 30)
         if is_viewport_update:
-            resolution = sdf_settings_state.get("sdf_viewport_resolution", 10)
-        resolution = max(3, resolution) # Ensure minimum resolution
+            resolution = sdf_settings_from_bounds.get("sdf_viewport_resolution", 10)
+        resolution = max(3, int(resolution))
 
         # 4. Generate Mesh using libfive
         mesh_data = None
@@ -292,7 +312,6 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
             gen_start_time = time.time()
             try:
                 mesh_data = final_combined_shape.get_mesh(xyz_min=xyz_min, xyz_max=xyz_max, resolution=resolution)
-                gen_duration = time.time() - gen_start_time
                 if not mesh_data or not mesh_data[0]: # Check if get_mesh returned empty
                      mesh_data = None # Treat as no mesh data
             except Exception as e:
@@ -301,65 +320,82 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
                 mesh_data = None
 
         # 5. Find or Create Result Object
-        result_obj = utils.find_result_object(context, result_name)
-        if not result_obj:
+        if not result_name and utils.get_bounds_setting(bounds_obj, "sdf_create_result_object"):
+            # Auto-generate a result name if empty and creation is allowed
+            # This part might need a more robust naming if bounds_name isn't unique enough as a base
+            base_for_result = bounds_name.replace("_Bounds", "") or "SDF_System"
+            unique_result_name_base = base_for_result + "_Result"
+            i = 1
+            result_name_candidate = unique_result_name_base
+            while result_name_candidate in scene.objects:
+                result_name_candidate = f"{unique_result_name_base}.{i:03d}"
+                i += 1
+            result_name = result_name_candidate
+            bounds_obj[constants.SDF_RESULT_OBJ_NAME_PROP] = result_name # Store the new name
+            print(f"FieldForge: Auto-generated result object name '{result_name}' for {bounds_name}")
+
+
+        result_obj = utils.find_result_object(context, result_name) if result_name else None
+        if not result_obj and result_name: # Name exists but object doesn't
             if utils.get_bounds_setting(bounds_obj, "sdf_create_result_object"):
                 try:
-                    mesh_data_b = bpy.data.meshes.new(name=result_name + "_Mesh")
-                    result_obj = bpy.data.objects.new(result_name, mesh_data_b)
-                    context.collection.objects.link(result_obj) # Link to active collection
-                    result_obj.matrix_world = Matrix.Identity(4) # Place at origin
-                    result_obj.hide_select = True # Make non-selectable by default
-                except Exception as e:
-                    mesh_generation_error = True
-                    raise ValueError(f"Failed to create result object {result_name}: {e}") from e
-            else: # No result obj and creation disabled
-                 if not mesh_generation_error and mesh_data: # We generated data but have nowhere to put it
-                      mesh_generation_error = True
+                    new_mesh_bdata = bpy.data.meshes.new(name=result_name + "_Mesh")
+                    result_obj = bpy.data.objects.new(result_name, new_mesh_bdata)
+                    link_collection = bounds_obj.users_collection[0] if bounds_obj.users_collection else scene.collection
+                    link_collection.objects.link(result_obj)
+                    result_obj.matrix_world = Matrix.Identity(4) 
+                    result_obj.hide_select = True 
+                except Exception as e_create:
+                    mesh_generation_error = True # Mark error if creation fails
+                    print(f"FieldForge Error: Failed to create result object {result_name}: {e_create}")
+                    # Don't raise here, let finally block handle pending flag
+            else: 
+                 if not mesh_generation_error and mesh_data:
+                      mesh_generation_error = True # Error if data generated but no place to put it
                       print(f"FieldForge ERROR: Result obj '{result_name}' not found & auto-create disabled for {bounds_name}, but mesh data was generated.")
-                 mesh_update_successful = True
+                 # If no data and no obj, this is fine (empty result for an empty name slot)
+                 mesh_update_successful = True # Considered success if no data and no object creation expected
 
         # 6. Update Mesh Data
-        if result_obj and not mesh_generation_error:
+        if result_obj and not mesh_generation_error: # Only proceed if obj exists and no prior error
             if result_obj.type != 'MESH':
-                raise TypeError(f"Target '{result_name}' is not a Mesh (type: {result_obj.type}).")
+                # This should ideally not happen if we control creation.
+                print(f"FieldForge ERROR: Target '{result_name}' is not a Mesh (type: {result_obj.type}). Cannot update.")
+                mesh_generation_error = True # Mark as error
+            else:
+                mesh_bdata = result_obj.data # bpy.types.Mesh
+                if mesh_data: 
+                    if mesh_bdata.vertices or mesh_bdata.polygons or mesh_bdata.loops: mesh_bdata.clear_geometry()
+                    try:
+                        mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1]) 
+                        mesh_bdata.update() 
+                        mesh_update_successful = True
+                    except Exception as e_apply:
+                        print(f"FieldForge ERROR: Applying mesh data to '{result_name}' failed: {e_apply}")
+                        if mesh_bdata.vertices: mesh_bdata.clear_geometry(); mesh_bdata.update()
+                        mesh_update_successful = False # Explicitly false
+                        mesh_generation_error = True # This is also a generation/application error
+                else: # No mesh data from libfive (e.g., empty shape or earlier error)
+                    if mesh_bdata.vertices or mesh_bdata.polygons or mesh_bdata.loops: 
+                        mesh_bdata.clear_geometry()
+                        mesh_bdata.update()
+                    mesh_update_successful = True # Success: empty result applied correctly
 
-            mesh = result_obj.data
-            if mesh_data: # We have valid verts/tris
-                if mesh.vertices or mesh.polygons or mesh.loops: mesh.clear_geometry() # Clear previous
-                try:
-                    mesh.from_pydata(mesh_data[0], [], mesh_data[1]) # Verts, Edges (empty), Faces
-                    mesh.update() # Recalculate normals, bounds
-                    mesh_update_successful = True
-                except Exception as e:
-                    print(f"FieldForge ERROR: Applying mesh data to '{result_name}' failed: {e}")
-                    if mesh.vertices: mesh.clear_geometry() # Attempt cleanup
-                    mesh_update_successful = False
-            else: # No mesh data generated (e.g., empty shape or error)
-                if mesh.vertices or mesh.polygons or mesh.loops: # Clear existing geometry if needed
-                    mesh.clear_geometry()
-                    mesh.update()
-                mesh_update_successful = True # Considered success (empty result applied)
-
-    except Exception as e:
-         print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {e}")
-         mesh_generation_error = True
+    except Exception as e_outer:
+         print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {type(e_outer).__name__} - {e_outer}")
+         mesh_generation_error = True # Outer loop error
          mesh_update_successful = False
-         # Attempt to clear result mesh geometry on error
          try:
-             if result_obj and result_obj.type == 'MESH' and (result_obj.data.vertices or result_obj.data.polygons):
+             if result_obj and result_obj.type == 'MESH' and result_obj.data and (result_obj.data.vertices or result_obj.data.polygons):
                  result_obj.data.clear_geometry(); result_obj.data.update()
          except Exception: pass
 
-    # --- Final Steps (Cache, Time, Flags) ---
     finally:
         if not mesh_generation_error and mesh_update_successful:
-            update_sdf_cache(trigger_state, bounds_name) # Update cache ONLY on success
-        # Record finish time regardless of success for throttling
+            update_sdf_cache(trigger_state, bounds_name) 
+        
         _last_update_finish_times[bounds_name] = time.time()
-        # Reset pending flag for this specific bounds object
         _updates_pending[bounds_name] = False
-        end_time = time.time()
 
 
 # --- Scene Update Handler (Dependency Graph) ---

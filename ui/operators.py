@@ -120,15 +120,111 @@ class OBJECT_OT_add_sdf_bounds(Operator):
         tag_redraw_all_view3d() # Force redraw
         return {'FINISHED'}
 
+class OBJECT_OT_add_sdf_group(Operator):
+    """Adds an Empty controller for grouping and blending SDF shapes"""
+    bl_idname = "object.add_sdf_group"
+    bl_label = "Add SDF Group"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    initial_child_blend: FloatProperty(
+        name="Child Blend Factor",
+        description="Blend factor for children parented TO this group",
+        default=constants.DEFAULT_BLEND_GROUP_SETTINGS["sdf_child_blend_factor"],
+        min=0.0, max=5.0, subtype='FACTOR'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        active_obj = context.active_object
+        return utils.lf is not None and active_obj is not None and \
+               (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
+                active_obj.get(constants.SDF_BLEND_GROUP_MARKER, False) or
+                utils.is_sdf_source(active_obj) or
+                utils.find_parent_bounds(active_obj) is not None)
+
+
+    def make_unique_name(self, context, base_name):
+        """ Generates a unique object name. """
+        if base_name not in context.scene.objects: return base_name
+        i = 1; unique_name = f"{base_name}.{i:03d}"
+        while unique_name in context.scene.objects: i += 1; unique_name = f"{base_name}.{i:03d}"
+        return unique_name
+
+    def execute(self, context):
+        target_parent = context.active_object
+        parent_bounds = utils.find_parent_bounds(target_parent)
+
+        parent_bounds = parent_bounds
+        if not parent_bounds:
+            if target_parent.get(constants.SDF_BOUNDS_MARKER, False):
+                parent_bounds = target_parent
+            elif target_parent.get(constants.SDF_BLEND_GROUP_MARKER, False) or utils.is_sdf_source(target_parent):
+                 parent_bounds = utils.find_parent_bounds(target_parent)
+
+        if not parent_bounds:
+            self.report({'ERROR'}, "Could not determine root SDF Bounds for hierarchy. Cannot add Group.")
+            return {'CANCELLED'}
+
+        try:
+            with context.temp_override(window=context.window, area=context.area, region=context.region):
+                bpy.ops.object.empty_add(type='PLAIN_AXES', radius=0, location=context.scene.cursor.location, scale=(1.0, 1.0, 1.0))
+            obj = context.active_object
+            if not obj: raise RuntimeError("Failed to get active object after empty_add for Group.")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to add Group Empty: {e}")
+            return {'CANCELLED'}
+
+        obj.name = self.make_unique_name(context, "FF_Group")
+        obj.parent = target_parent
+        try:
+            obj.matrix_parent_inverse = target_parent.matrix_world.inverted()
+        except ValueError:
+            obj.matrix_parent_inverse.identity()
+            print(f"FieldForge WARN: Could not invert parent matrix for {target_parent.name} when adding Group.")
+
+        obj[constants.SDF_BLEND_GROUP_MARKER] = True
+        obj["sdf_child_blend_factor"] = self.initial_child_blend
+
+        obj.color = (0.2, 1.0, 0.2, 0.8)
+
+        obj["sdf_base_name"] = "Group"
+        obj["sdf_processing_order"] = 99999
+
+        show_visuals = utils.get_bounds_setting(parent_bounds, "sdf_show_source_empties")
+        obj.hide_viewport = not show_visuals
+        obj.hide_render = not show_visuals
+
+        context.view_layer.objects.active = obj
+        for sel_obj in context.selected_objects:
+            if sel_obj != obj: sel_obj.select_set(False)
+        obj.select_set(True)
+
+        if target_parent:
+            utils.normalize_sibling_order_and_names(target_parent)
+        else:
+            obj["sdf_processing_order"] = 0
+
+        self.report({'INFO'}, f"Added SDF Group: {obj.name} under {target_parent.name}")
+
+        ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"add_group")
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
 
 # --- Add Source Base Operator ---
 
-class AddSdfSourceBase(Operator):
+class AddSdfSourceBase(Operator): # Keep existing class definition
     """Base class for adding various SDF source type Empties"""
     bl_options = {'REGISTER', 'UNDO'}
 
-    # Common interaction properties shown in dialog
-    initial_child_blend: FloatProperty(name="Child Blend Factor", description="Blend factor for children parented TO this object", default=0.0, min=0.0, max=5.0, subtype='FACTOR')
+    initial_child_blend: FloatProperty(
+        name="Child Blend Factor",
+        description="Blend factor for children parented TO this object",
+        default=constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"],
+        min=0.0, max=5.0, subtype='FACTOR'
+    )
     initial_csg_operation: EnumProperty(
         name="CSG Operation",
         description="Default CSG operation for this child with its parent",
@@ -149,7 +245,9 @@ class AddSdfSourceBase(Operator):
     def poll(cls, context):
         active_obj = context.active_object
         return utils.lf is not None and active_obj is not None and \
-               (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or utils.find_parent_bounds(active_obj) is not None)
+               (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
+                active_obj.get(constants.SDF_BLEND_GROUP_MARKER, False) or 
+                utils.find_parent_bounds(active_obj) is not None)
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self) # Show options
@@ -164,9 +262,14 @@ class AddSdfSourceBase(Operator):
     def add_sdf_empty(self, context, sdf_type, display_type, name_prefix, props_to_set=None):
         """ Helper method to create and configure the SDF source Empty """
         target_parent = context.active_object
-        parent_bounds = utils.find_parent_bounds(target_parent)
-        if not parent_bounds and target_parent.get(constants.SDF_BOUNDS_MARKER, False): parent_bounds = target_parent
-        if not parent_bounds: self.report({'ERROR'}, "Active object not part of SDF hierarchy."); return {'CANCELLED'}
+        parent_bounds = None
+        if target_parent.get(constants.SDF_BOUNDS_MARKER, False):
+            parent_bounds = target_parent
+        else:
+            parent_bounds = utils.find_parent_bounds(target_parent)
+        if not parent_bounds:
+            self.report({'ERROR'}, "Active object not part of a valid SDF hierarchy (cannot find root Bounds).")
+            return {'CANCELLED'}
 
         try:
             with context.temp_override(window=context.window, area=context.area, region=context.region):
@@ -884,6 +987,7 @@ def start_select_handler_via_timer(max_attempts=5, interval=0.2):
 # --- List of Operators to Register ---
 classes_to_register = (
     OBJECT_OT_add_sdf_bounds,
+    OBJECT_OT_add_sdf_group,
     OBJECT_OT_add_sdf_cube_source,
     OBJECT_OT_add_sdf_sphere_source,
     OBJECT_OT_add_sdf_cylinder_source,
