@@ -46,7 +46,7 @@ def is_sdf_source(obj: bpy.types.Object) -> bool:
 
 def is_sdf_group(obj: bpy.types.Object) -> bool:
     """ Checks if an object is configured as an SDF Group Empty """
-    return obj and obj.type == 'EMPTY' and obj.get(constants.SDF_BLEND_GROUP_MARKER, False)
+    return obj and obj.type == 'EMPTY' and obj.get(constants.SDF_GROUP_MARKER, False)
 
 def is_valid_2d_loft_source(obj: bpy.types.Object) -> bool:
     """Checks if an object is an SDF source and is a 2D type eligible for lofting."""

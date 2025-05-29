@@ -129,7 +129,7 @@ class OBJECT_OT_add_sdf_group(Operator):
     initial_child_blend: FloatProperty(
         name="Child Blend Factor",
         description="Blend factor for children parented TO this group",
-        default=constants.DEFAULT_BLEND_GROUP_SETTINGS["sdf_child_blend_factor"],
+        default=constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"],
         min=0.0, max=5.0, subtype='FACTOR'
     )
 
@@ -138,7 +138,7 @@ class OBJECT_OT_add_sdf_group(Operator):
         active_obj = context.active_object
         return utils.lf is not None and active_obj is not None and \
                (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
-                active_obj.get(constants.SDF_BLEND_GROUP_MARKER, False) or
+                active_obj.get(constants.SDF_GROUP_MARKER, False) or
                 utils.is_sdf_source(active_obj) or
                 utils.find_parent_bounds(active_obj) is not None)
 
@@ -158,7 +158,7 @@ class OBJECT_OT_add_sdf_group(Operator):
         if not parent_bounds:
             if target_parent.get(constants.SDF_BOUNDS_MARKER, False):
                 parent_bounds = target_parent
-            elif target_parent.get(constants.SDF_BLEND_GROUP_MARKER, False) or utils.is_sdf_source(target_parent):
+            elif target_parent.get(constants.SDF_GROUP_MARKER, False) or utils.is_sdf_source(target_parent):
                  parent_bounds = utils.find_parent_bounds(target_parent)
 
         if not parent_bounds:
@@ -182,7 +182,7 @@ class OBJECT_OT_add_sdf_group(Operator):
             obj.matrix_parent_inverse.identity()
             print(f"FieldForge WARN: Could not invert parent matrix for {target_parent.name} when adding Group.")
 
-        obj[constants.SDF_BLEND_GROUP_MARKER] = True
+        obj[constants.SDF_GROUP_MARKER] = True
         obj["sdf_child_blend_factor"] = self.initial_child_blend
 
         obj.color = (0.2, 1.0, 0.2, 0.8)
@@ -246,7 +246,7 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
         active_obj = context.active_object
         return utils.lf is not None and active_obj is not None and \
                (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
-                active_obj.get(constants.SDF_BLEND_GROUP_MARKER, False) or 
+                active_obj.get(constants.SDF_GROUP_MARKER, False) or 
                 utils.find_parent_bounds(active_obj) is not None)
 
     def invoke(self, context, event):

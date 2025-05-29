@@ -54,7 +54,7 @@ class VIEW3D_MT_add_sdf(Menu):
         active_obj = context.active_object
         can_add_source = active_obj is not None and \
                          (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
-                          active_obj.get(constants.SDF_BLEND_GROUP_MARKER, False) or
+                          active_obj.get(constants.SDF_GROUP_MARKER, False) or
                           utils.is_sdf_source(active_obj) or
                           utils.find_parent_bounds(active_obj) is not None)
 

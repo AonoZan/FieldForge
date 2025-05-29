@@ -15,7 +15,7 @@ SDF_RESULT_OBJ_NAME_PROP = "sdf_result_object_name"
 SDF_PROPERTY_MARKER = "is_sdf_object"
 
 # Marker for SDF Group Empty objects
-SDF_BLEND_GROUP_MARKER = "is_sdf_group"
+SDF_GROUP_MARKER = "is_sdf_group"
 
 # --- Caching and Comparison ---
 
@@ -61,7 +61,7 @@ DEFAULT_SETTINGS = {
 }
 
 # Default values for Group Object properties ---
-DEFAULT_BLEND_GROUP_SETTINGS = {
+DEFAULT_GROUP_SETTINGS = {
     "sdf_child_blend_factor": 0.1, # Default blend factor for children of this group
 }
 

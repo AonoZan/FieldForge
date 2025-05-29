@@ -129,7 +129,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
             # Process SDF Group Objects
             elif utils.is_sdf_group(actual_child_obj) and is_visible:
                 props_to_track_group = {
-                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_BLEND_GROUP_SETTINGS["sdf_child_blend_factor"]),
+                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]),
                 }
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),

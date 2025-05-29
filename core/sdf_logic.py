@@ -295,7 +295,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     if obj_is_sdf_source:
         parent_provides_blend_factor = float(obj.get("sdf_child_blend_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"]))
     elif obj_is_group:
-        parent_provides_blend_factor = float(obj.get("sdf_child_blend_factor", constants.DEFAULT_BLEND_GROUP_SETTINGS["sdf_child_blend_factor"]))
+        parent_provides_blend_factor = float(obj.get("sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]))
 
     children_to_process = []
     for child_candidate in obj.children:
