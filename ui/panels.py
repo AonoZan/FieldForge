@@ -80,7 +80,7 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         can_move_up = False; can_move_down = False
         sdf_siblings = []
         for child in obj.parent.children:
-            if (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
                child.visible_get(view_layer=context.view_layer):
                 sdf_siblings.append(child)
         
@@ -139,11 +139,12 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         can_move_down = False
         sdf_siblings = []
         for child in obj.parent.children:
-            if utils.is_sdf_source(child) and child.visible_get(view_layer=context.view_layer):
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
+               child.visible_get(view_layer=context.view_layer):
                 sdf_siblings.append(child)
         
         if len(sdf_siblings) > 1:
-            def get_sort_key(c): # Actual sort key from your utils/operators
+            def get_sort_key(c):
                 return (c.get("sdf_processing_order", float('inf')), c.name)
             sdf_siblings.sort(key=get_sort_key)
             try:

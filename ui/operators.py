@@ -609,25 +609,28 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        if not obj or not utils.is_sdf_source(obj) or not obj.parent:
+        if not obj or not obj.parent:
             return False
-        return True 
+        if not (utils.is_sdf_source(obj) or utils.is_sdf_group(obj)):
+            return False
+        return True
 
     def execute(self, context):
         obj_to_move = context.active_object
 
-        if not obj_to_move or not utils.is_sdf_source(obj_to_move):
-            self.report({'WARNING'}, "Active object is not a valid SDF source.")
+        if not obj_to_move or not (utils.is_sdf_source(obj_to_move) or utils.is_sdf_group(obj_to_move)):
+            self.report({'WARNING'}, "Active object is not a valid SDF source or group.")
             return {'CANCELLED'}
 
         parent_obj = obj_to_move.parent
         if not parent_obj:
-            self.report({'WARNING'}, "SDF source has no parent.")
+            self.report({'WARNING'}, "SDF item has no parent.")
             return {'CANCELLED'}
 
         sdf_siblings = []
         for child in parent_obj.children:
-            if child and utils.is_sdf_source(child) and child.visible_get(view_layer=context.view_layer):
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
+               child.visible_get(view_layer=context.view_layer):
                 sdf_siblings.append(child)
 
         if not sdf_siblings or obj_to_move not in sdf_siblings:
@@ -646,31 +649,27 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
             return {'CANCELLED'}
 
         swapped_property_values = False
+        target_sibling = None
+
         if self.direction == 'UP':
             if current_index > 0:
-                sibling_above = sdf_siblings[current_index - 1]
-
-                obj_order_val = obj_to_move.get("sdf_processing_order", current_index * 10)
-                above_order_val = sibling_above.get("sdf_processing_order", (current_index - 1) * 10)
-
-                obj_to_move["sdf_processing_order"] = above_order_val
-                sibling_above["sdf_processing_order"] = obj_order_val
-                swapped_property_values = True
-            else:
-                return {'FINISHED'} 
-
-        elif self.direction == 'DOWN':
-            if current_index < len(sdf_siblings) - 1:
-                sibling_below = sdf_siblings[current_index + 1]
-
-                obj_order_val = obj_to_move.get("sdf_processing_order", current_index * 10)
-                below_order_val = sibling_below.get("sdf_processing_order", (current_index + 1) * 10)
-
-                obj_to_move["sdf_processing_order"] = below_order_val
-                sibling_below["sdf_processing_order"] = obj_order_val
-                swapped_property_values = True
+                target_sibling = sdf_siblings[current_index - 1]
             else:
                 return {'FINISHED'}
+        elif self.direction == 'DOWN':
+            if current_index < len(sdf_siblings) - 1:
+                target_sibling = sdf_siblings[current_index + 1]
+            else:
+                return {'FINISHED'}
+
+        if target_sibling:
+            obj_order_val = obj_to_move.get("sdf_processing_order", current_index * 10)
+            target_order_val = target_sibling.get("sdf_processing_order", 
+                                                  (current_index - 1 if self.direction == 'UP' else current_index + 1) * 10)
+
+            obj_to_move["sdf_processing_order"] = target_order_val
+            target_sibling["sdf_processing_order"] = obj_order_val
+            swapped_property_values = True
 
         if swapped_property_values:
             utils.normalize_sibling_order_and_names(parent_obj)
@@ -680,11 +679,9 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
                 root_bounds = parent_obj
 
             if root_bounds:
-                ff_update.check_and_trigger_update(context.scene, root_bounds.name, f"reorder_source_{obj_to_move.name}")
+                ff_update.check_and_trigger_update(context.scene, root_bounds.name, f"reorder_item_{obj_to_move.name}")
 
             tag_redraw_all_view3d()
-            return {'FINISHED'}
-
         return {'FINISHED'}
 # --- Modal Selection/Grab Handler ---
 
