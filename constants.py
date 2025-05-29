@@ -66,6 +66,9 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_group_reflect_x": False,
     "sdf_group_reflect_y": False,
     "sdf_group_reflect_z": False,
+    "sdf_group_symmetry_x": False,
+    "sdf_group_symmetry_y": False,
+    "sdf_group_symmetry_z": False,
 }
 
 # --- Optional: Default values for Source Object properties ---

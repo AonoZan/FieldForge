@@ -716,6 +716,38 @@ class OBJECT_OT_fieldforge_toggle_group_reflection(Operator):
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_toggle_group_symmetry(Operator):
+    """Toggles a symmetry axis for an SDF Group object"""
+    bl_idname = "object.fieldforge_toggle_group_symmetry"
+    bl_label = "Toggle Group Symmetry Axis"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis: EnumProperty(
+        items=[('X', "X", "Symmetrize across local YZ plane (along X axis)"),
+               ('Y', "Y", "Symmetrize across local XZ plane (along Y axis)"),
+               ('Z', "Z", "Symmetrize across local XY plane (along Z axis)")],
+        name="Axis",
+        default='X'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_group(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = f"sdf_group_symmetry_{self.axis.lower()}"
+
+        current_val = obj.get(prop_name, False)
+        obj[prop_name] = not current_val
+
+        parent_bounds = utils.find_parent_bounds(obj)
+        if parent_bounds:
+            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_symmetry_{obj.name}_{self.axis}")
+        
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1035,6 +1067,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_set_csg_mode,
     OBJECT_OT_fieldforge_reorder_source,
     OBJECT_OT_fieldforge_toggle_group_reflection,
+    OBJECT_OT_fieldforge_toggle_group_symmetry,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

@@ -18,6 +18,7 @@ from .operators import (
     OBJECT_OT_fieldforge_set_csg_mode,
     OBJECT_OT_fieldforge_reorder_source,
     OBJECT_OT_fieldforge_toggle_group_reflection,
+    OBJECT_OT_fieldforge_toggle_group_symmetry,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -142,6 +143,37 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         depress=obj.get("sdf_group_reflect_z", False)
     )
     op_reflect_z.axis = 'Z'
+
+    layout.separator()
+
+    # --- Symmetry Controls ---
+    row_symmetry_label = layout.row()
+    row_symmetry_label.label(text="Symmetry (Local Axes):")
+
+    row_symmetry_buttons = layout.row(align=True)
+    # X Symmetry
+    op_symmetry_x = row_symmetry_buttons.operator(
+        OBJECT_OT_fieldforge_toggle_group_symmetry.bl_idname,
+        text="X",
+        depress=obj.get("sdf_group_symmetry_x", False)
+    )
+    op_symmetry_x.axis = 'X'
+
+    # Y Symmetry
+    op_symmetry_y = row_symmetry_buttons.operator(
+        OBJECT_OT_fieldforge_toggle_group_symmetry.bl_idname,
+        text="Y",
+        depress=obj.get("sdf_group_symmetry_y", False)
+    )
+    op_symmetry_y.axis = 'Y'
+
+    # Z Symmetry
+    op_symmetry_z = row_symmetry_buttons.operator(
+        OBJECT_OT_fieldforge_toggle_group_symmetry.bl_idname,
+        text="Z",
+        depress=obj.get("sdf_group_symmetry_z", False)
+    )
+    op_symmetry_z.axis = 'Z'
 
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """

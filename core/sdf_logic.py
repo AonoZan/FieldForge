@@ -215,6 +215,38 @@ def custom_blended_intersection(shape_a, shape_b, blend_factor_m, lf_module):
         try: return lf_module.intersection(shape_a, shape_b)
         except: return lf_module.emptiness()
 
+def blended_symmetric_x(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | None:
+    """
+    Makes a shape reflection and then blends it with original based on blend factor.
+    """
+    if not _lf_imported_ok or shape_in is None or shape_in is lf.emptiness(): return shape_in
+    try:
+        sym_shape = lf.symmetric_x(shape_in)
+        if sym_shape is None or sym_shape is lf.emptiness(): return shape_in
+        s_mirrored = lf.reflect_x(shape_in)
+        return lf.blend_expt_unit(shape_in, s_mirrored, blend_factor)
+    except Exception as e:
+        print(f"FieldForge ERROR (blended_symmetric_x): {e}")
+        return shape_in
+
+def blended_symmetric_y(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | None:
+    if not _lf_imported_ok or shape_in is None or shape_in is lf.emptiness(): return shape_in
+    try:
+        sym_shape = lf.symmetric_y(shape_in)
+        if sym_shape is None or sym_shape is lf.emptiness(): return shape_in
+        s_mirrored = lf.reflect_y(shape_in)
+        return lf.blend_expt_unit(shape_in, s_mirrored, blend_factor)
+    except Exception as e: print(f"FieldForge ERROR (blended_symmetric_y): {e}"); return shape_in
+
+def blended_symmetric_z(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | None:
+    if not _lf_imported_ok or shape_in is None or shape_in is lf.emptiness(): return shape_in
+    try:
+        sym_shape = lf.symmetric_z(shape_in)
+        if sym_shape is None or sym_shape is lf.emptiness(): return shape_in
+        s_mirrored = lf.reflect_z(shape_in)
+        return lf.blend_expt_unit(shape_in, s_mirrored, blend_factor)
+    except Exception as e: print(f"FieldForge ERROR (blended_symmetric_z): {e}"); return shape_in
+
 def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Shape | None:
     context = bpy.context
     if not obj.visible_get(view_layer=context.view_layer):
@@ -430,8 +462,48 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     if reflect_z: reflected_in_local_coords = lf.reflect_z(reflected_in_local_coords)
 
                     current_scene_shape = apply_blender_transform_to_sdf(reflected_in_local_coords, obj.matrix_world.inverted())
-                    if current_scene_shape is None:
-                        current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+
+            # --- Apply Group Symmetry (after reflection) ---
+            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+                symmetry_x = obj.get("sdf_group_symmetry_x", False)
+                symmetry_y = obj.get("sdf_group_symmetry_y", False)
+                symmetry_z = obj.get("sdf_group_symmetry_z", False)
+
+                clamped_blend_symmetry = min(max(0.001, parent_provides_blend_factor), 1.0)
+
+                shape_after_symmetry = current_scene_shape # Start with (potentially) reflected shape
+                if symmetry_x or symmetry_y or symmetry_z:
+                    group_local_coords_shape_for_sym = lf.emptiness() if _lf_imported_ok else None
+                    try:
+                        mat_l2w_sym = obj.matrix_world
+                        X_s, Y_s, Z_s = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                        x_expr_s = mat_l2w_sym[0][0] * X_s + mat_l2w_sym[0][1] * Y_s + mat_l2w_sym[0][2] * Z_s + mat_l2w_sym[0][3]
+                        y_expr_s = mat_l2w_sym[1][0] * X_s + mat_l2w_sym[1][1] * Y_s + mat_l2w_sym[1][2] * Z_s + mat_l2w_sym[1][3]
+                        z_expr_s = mat_l2w_sym[2][0] * X_s + mat_l2w_sym[2][1] * Y_s + mat_l2w_sym[2][2] * Z_s + mat_l2w_sym[2][3]
+                        group_local_coords_shape_for_sym = current_scene_shape.remap(x_expr_s, y_expr_s, z_expr_s)
+                    except Exception as e:
+                        print(f"FieldForge ERROR (Group Symmetry: World to Local for {obj_name}): {e}")
+
+                    if group_local_coords_shape_for_sym is not None and group_local_coords_shape_for_sym is not lf.emptiness():
+                        symmetrized_in_local = group_local_coords_shape_for_sym
+                        
+                        if symmetry_x:
+                            symmetrized_in_local = blended_symmetric_x(symmetrized_in_local, clamped_blend_symmetry)
+                        if symmetry_y:
+                            if symmetrized_in_local is not None and symmetrized_in_local is not lf.emptiness():
+                                symmetrized_in_local = blended_symmetric_y(symmetrized_in_local, clamped_blend_symmetry)
+                            else:
+                                symmetrized_in_local = group_local_coords_shape_for_sym
+                        if symmetry_z:
+                            if symmetrized_in_local is not None and symmetrized_in_local is not lf.emptiness():
+                                symmetrized_in_local = blended_symmetric_z(symmetrized_in_local, clamped_blend_symmetry)
+                            else:
+                                symmetrized_in_local = group_local_coords_shape_for_sym
+                        
+                        shape_after_symmetry = apply_blender_transform_to_sdf(symmetrized_in_local, obj.matrix_world.inverted())
+                        if shape_after_symmetry is None: shape_after_symmetry = lf.emptiness() if _lf_imported_ok else None
+                
+                current_scene_shape = shape_after_symmetry
 
     if current_scene_shape is None and _lf_imported_ok:
         return lf.emptiness()
