@@ -25,13 +25,6 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     """ Draws the UI elements for the Bounds object settings. """
     obj = context.object # Assumes the active object IS the Bounds object
 
-    # # --- Blending Factor ---
-    # row_blend = layout.row(align=True)
-    # row_blend.label(text="SDF Modifications:")
-    # row_blend = layout.row(align=True)
-    # row_blend.prop(obj, '["sdf_global_blend_factor"]', text="Blending Factor")
-    # layout.separator()
-
     # --- Resolution and Update Controls ---
     row_res_label = layout.row(align=True)
     row_res_label.label(text="Resolution:")
