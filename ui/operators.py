@@ -683,6 +683,39 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
 
             tag_redraw_all_view3d()
         return {'FINISHED'}
+
+class OBJECT_OT_fieldforge_toggle_group_reflection(Operator):
+    """Toggles a reflection axis for an SDF Group object"""
+    bl_idname = "object.fieldforge_toggle_group_reflection"
+    bl_label = "Toggle Group Reflection Axis"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis: EnumProperty(
+        items=[('X', "X", "Reflect on local X axis"),
+               ('Y', "Y", "Reflect on local Y axis"),
+               ('Z', "Z", "Reflect on local Z axis")],
+        name="Axis",
+        default='X'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_group(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = f"sdf_group_reflect_{self.axis.lower()}"
+
+        current_val = obj.get(prop_name, False)
+        obj[prop_name] = not current_val
+
+        parent_bounds = utils.find_parent_bounds(obj)
+        if parent_bounds:
+            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_reflection_{obj.name}_{self.axis}")
+        
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1001,6 +1034,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_set_main_array_mode,
     OBJECT_OT_fieldforge_set_csg_mode,
     OBJECT_OT_fieldforge_reorder_source,
+    OBJECT_OT_fieldforge_toggle_group_reflection,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

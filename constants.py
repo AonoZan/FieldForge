@@ -63,6 +63,9 @@ DEFAULT_SETTINGS = {
 # Default values for Group Object properties ---
 DEFAULT_GROUP_SETTINGS = {
     "sdf_child_blend_factor": 0.1, # Default blend factor for children of this group
+    "sdf_group_reflect_x": False,
+    "sdf_group_reflect_y": False,
+    "sdf_group_reflect_z": False,
 }
 
 # --- Optional: Default values for Source Object properties ---
