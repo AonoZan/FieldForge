@@ -837,6 +837,60 @@ class OBJECT_OT_fieldforge_set_group_attract_repel_mode(Operator):
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_toggle_group_twirl(Operator):
+    """Toggles Twirl effect for an SDF Group object"""
+    bl_idname = "object.fieldforge_toggle_group_twirl"
+    bl_label = "Toggle Group Twirl"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_group(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_group_twirl_active"
+        current_val = obj.get(prop_name, False)
+        obj[prop_name] = not current_val
+
+        parent_bounds = utils.find_parent_bounds(obj)
+        if parent_bounds:
+            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_twirl_{obj.name}")
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
+class OBJECT_OT_fieldforge_set_group_twirl_axis(Operator):
+    """Sets the Twirl axis for an SDF Group object"""
+    bl_idname = "object.fieldforge_set_group_twirl_axis"
+    bl_label = "Set Group Twirl Axis"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis: EnumProperty(
+        items=[('X', "X", "Twirl around local X-axis"),
+               ('Y', "Y", "Twirl around local Y-axis"),
+               ('Z', "Z", "Twirl around local Z-axis")],
+        name="Twirl Axis",
+        default='Z'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and utils.is_sdf_group(obj) and obj.get("sdf_group_twirl_active", False)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_group_twirl_axis"
+        current_axis = obj.get(prop_name, 'Z')
+
+        if current_axis != self.axis:
+            obj[prop_name] = self.axis
+            parent_bounds = utils.find_parent_bounds(obj)
+            if parent_bounds:
+                ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_group_twirl_axis_{obj.name}_{self.axis}")
+            tag_redraw_all_view3d()
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1160,6 +1214,8 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_group_taper_z,
     OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
     OBJECT_OT_fieldforge_set_group_attract_repel_mode,
+    OBJECT_OT_fieldforge_toggle_group_twirl,
+    OBJECT_OT_fieldforge_set_group_twirl_axis,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

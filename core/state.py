@@ -150,6 +150,10 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_group_attract_repel_axis_x': actual_child_obj.get("sdf_group_attract_repel_axis_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_x"]),
                     'sdf_group_attract_repel_axis_y': actual_child_obj.get("sdf_group_attract_repel_axis_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_y"]),
                     'sdf_group_attract_repel_axis_z': actual_child_obj.get("sdf_group_attract_repel_axis_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_z"]),
+                    'sdf_group_twirl_active': actual_child_obj.get("sdf_group_twirl_active", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_active"]),
+                    'sdf_group_twirl_axis': actual_child_obj.get("sdf_group_twirl_axis", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_axis"]),
+                    'sdf_group_twirl_amount': actual_child_obj.get("sdf_group_twirl_amount", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_amount"]),
+                    'sdf_group_twirl_radius': actual_child_obj.get("sdf_group_twirl_radius", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_radius"]),
                 }
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),

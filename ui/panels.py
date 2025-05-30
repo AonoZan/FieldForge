@@ -22,6 +22,8 @@ from .operators import (
     OBJECT_OT_fieldforge_toggle_group_taper_z,
     OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
     OBJECT_OT_fieldforge_set_group_attract_repel_mode,
+    OBJECT_OT_fieldforge_toggle_group_twirl,
+    OBJECT_OT_fieldforge_set_group_twirl_axis,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -267,6 +269,37 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     row_ar_axes_toggles.prop(obj, '["sdf_group_attract_repel_axis_x"]', text="X", toggle=True)
     row_ar_axes_toggles.prop(obj, '["sdf_group_attract_repel_axis_y"]', text="Y", toggle=True)
     row_ar_axes_toggles.prop(obj, '["sdf_group_attract_repel_axis_z"]', text="Z", toggle=True)
+
+    # --- Twirl Controls ---
+    twirl_label_row = layout.row()
+    twirl_label_row.label(text="Twirl (Around Axis):")
+
+    row_twirl_enable_axis = layout.row(align=True)
+    is_twirl_active = obj.get("sdf_group_twirl_active", False)
+    
+    op_twirl_toggle = row_twirl_enable_axis.operator(
+        OBJECT_OT_fieldforge_toggle_group_twirl.bl_idname,
+        text="Enable",
+        depress=is_twirl_active
+    )
+
+    # Axis selection buttons (X, Y, Z)
+    row_twirl_axis_buttons = row_twirl_enable_axis.row(align=True)
+    row_twirl_axis_buttons.active = is_twirl_active # Only enable axis choice if twirl is active
+    current_twirl_axis = obj.get("sdf_group_twirl_axis", 'Z')
+
+    op_twirl_ax = row_twirl_axis_buttons.operator(OBJECT_OT_fieldforge_set_group_twirl_axis.bl_idname, text="X", depress=(current_twirl_axis == 'X'))
+    op_twirl_ax.axis = 'X'
+    op_twirl_ay = row_twirl_axis_buttons.operator(OBJECT_OT_fieldforge_set_group_twirl_axis.bl_idname, text="Y", depress=(current_twirl_axis == 'Y'))
+    op_twirl_ay.axis = 'Y'
+    op_twirl_az = row_twirl_axis_buttons.operator(OBJECT_OT_fieldforge_set_group_twirl_axis.bl_idname, text="Z", depress=(current_twirl_axis == 'Z'))
+    op_twirl_az.axis = 'Z'
+    
+    # Parameters: Amount and Radius
+    row_twirl_params = layout.row(align=True)
+    row_twirl_params.active = is_twirl_active
+    row_twirl_params.prop(obj, '["sdf_group_twirl_amount"]', text="Amount") # Consider subtype='ANGLE' if you want degrees display
+    row_twirl_params.prop(obj, '["sdf_group_twirl_radius"]', text="Radius")
 
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """

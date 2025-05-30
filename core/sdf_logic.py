@@ -668,6 +668,56 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
                 current_scene_shape = shape_after_attract_repel
 
+            # --- TWIRL (applied last) ---
+            if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
+                twirl_active = obj.get("sdf_group_twirl_active", False)
+                shape_after_twirl = current_scene_shape
+
+                if twirl_active:
+                    group_local_coords_shape_for_twirl = lf.emptiness() if _lf_imported_ok else None
+                    try: # World to Local
+                        mat_l2w_tw = obj.matrix_world
+                        X_tw, Y_tw, Z_tw = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                        x_expr_tw = mat_l2w_tw[0][0]*X_tw + mat_l2w_tw[0][1]*Y_tw + mat_l2w_tw[0][2]*Z_tw + mat_l2w_tw[0][3]
+                        y_expr_tw = mat_l2w_tw[1][0]*X_tw + mat_l2w_tw[1][1]*Y_tw + mat_l2w_tw[1][2]*Z_tw + mat_l2w_tw[1][3]
+                        z_expr_tw = mat_l2w_tw[2][0]*X_tw + mat_l2w_tw[2][1]*Y_tw + mat_l2w_tw[2][2]*Z_tw + mat_l2w_tw[2][3]
+                        group_local_coords_shape_for_twirl = current_scene_shape.remap(x_expr_tw, y_expr_tw, z_expr_tw)
+                    except Exception as e:
+                        print(f"FieldForge ERROR (Group Twirl: World to Local for {obj_name}): {e}")
+
+                    if not (group_local_coords_shape_for_twirl is None or group_local_coords_shape_for_twirl is lf.emptiness()):
+                        tw_axis = obj.get("sdf_group_twirl_axis", 'Z')
+                        tw_amount = float(obj.get("sdf_group_twirl_amount", 1.5708))
+                        tw_radius = float(obj.get("sdf_group_twirl_radius", 1.0))
+                        tw_radius = max(1e-5, tw_radius) # Ensure positive radius
+
+                        twirled_in_local = None
+                        try:
+                            center_of_twirl = (0.0, 0.0, 0.0) # Group's local origin
+                            if tw_axis == 'X':
+                                if hasattr(lf, 'twirl_axis_x'):
+                                    twirled_in_local = lf.twirl_axis_x(group_local_coords_shape_for_twirl, tw_amount, tw_radius, center_of_twirl)
+                                else: print(f"FF WARN: lf.twirl_axis_x not found for {obj_name}.")
+                            elif tw_axis == 'Y':
+                                if hasattr(lf, 'twirl_axis_y'):
+                                    twirled_in_local = lf.twirl_axis_y(group_local_coords_shape_for_twirl, tw_amount, tw_radius, center_of_twirl)
+                                else: print(f"FF WARN: lf.twirl_axis_y not found for {obj_name}.")
+                            elif tw_axis == 'Z':
+                                if hasattr(lf, 'twirl_axis_z'):
+                                    twirled_in_local = lf.twirl_axis_z(group_local_coords_shape_for_twirl, tw_amount, tw_radius, center_of_twirl)
+                                else: print(f"FF WARN: lf.twirl_axis_z not found for {obj_name}.")
+                            
+                            if not (twirled_in_local is None or twirled_in_local is lf.emptiness()): # If any twirl function was called and returned a shape
+                                shape_after_twirl = apply_blender_transform_to_sdf(twirled_in_local, obj.matrix_world.inverted())
+                                if shape_after_twirl is None: shape_after_twirl = lf.emptiness() if _lf_imported_ok else None
+                            # If twirl function was not found or failed, shape_after_twirl remains the input to this stage
+                        except AttributeError as ae:
+                            print(f"FieldForge WARN: Twirl function for axis {tw_axis} not found or error during call: {ae}")
+                        except Exception as e_tw:
+                            print(f"FieldForge ERROR (Group Twirling {obj_name}): {e_tw}")
+                
+                current_scene_shape = shape_after_twirl
+
     if current_scene_shape is None and _lf_imported_ok:
         return lf.emptiness()
     return current_scene_shape

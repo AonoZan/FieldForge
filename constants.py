@@ -88,6 +88,10 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_group_attract_repel_axis_x": True,
     "sdf_group_attract_repel_axis_y": True,
     "sdf_group_attract_repel_axis_z": True,
+    "sdf_group_twirl_active": False,
+    "sdf_group_twirl_axis": 'Z',
+    "sdf_group_twirl_amount": 1.5708,
+    "sdf_group_twirl_radius": 1.0,
 }
 
 # --- Optional: Default values for Source Object properties ---
