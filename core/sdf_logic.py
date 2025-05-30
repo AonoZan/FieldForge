@@ -204,7 +204,9 @@ def combine_shapes(shape_a, shape_b, blend_factor) -> lf.Shape | None:
         return lf.emptiness()
 
 def custom_blended_intersection(shape_a, shape_b, blend_factor_m, lf_module):
-    if shape_a is lf_module.emptiness() or shape_b is lf_module.emptiness(): return lf_module.emptiness()
+    if (shape_a is None or shape_a is lf_module.emptiness()) or \
+       (shape_b is None or shape_b is lf_module.emptiness()):
+       return lf_module.emptiness()
     try:
         inv_a = lf_module.inverse(shape_a)
         inv_b = lf_module.inverse(shape_b)
@@ -262,13 +264,13 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
         
         sdf_type = obj.get("sdf_type", "")
         is_2d_shape_for_extrude = sdf_type in {"circle", "ring", "polygon", "text"}
-        if is_2d_shape_for_extrude and (unit_shape_modified_by_own_ops is not None and unit_shape_modified_by_own_ops is not lf.emptiness()):
+        if is_2d_shape_for_extrude and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
             depth = obj.get("sdf_extrusion_depth", constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"])
             if float(depth) > 1e-5:
                 try: unit_shape_modified_by_own_ops = lf.extrude_z(unit_shape_modified_by_own_ops, 0, abs(float(depth)))
                 except Exception as e: print(f"FieldForge ERROR (extrude_z for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
 
-        if obj.get("sdf_use_shell", False) and (unit_shape_modified_by_own_ops is not None and unit_shape_modified_by_own_ops is not lf.emptiness()):
+        if obj.get("sdf_use_shell", False) and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
             offset = float(obj.get("sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]))
             if abs(offset) > 1e-5:
                 try:
@@ -279,7 +281,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
         array_mode = obj.get("sdf_main_array_mode", 'NONE')
         center_on_origin = obj.get("sdf_array_center_on_origin", True)
-        if array_mode != 'NONE' and (unit_shape_modified_by_own_ops is not None and unit_shape_modified_by_own_ops is not lf.emptiness()):
+        if array_mode != 'NONE' and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
             current_shape_before_array = unit_shape_modified_by_own_ops
             if array_mode == 'LINEAR':
                 active_x=obj.get("sdf_array_active_x",0); active_y=obj.get("sdf_array_active_y",0) and active_x; active_z=obj.get("sdf_array_active_z",0) and active_y
@@ -299,7 +301,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         total_offset_x=(nx-1)*dx_val if active_x and nx>1 else 0; total_offset_y=(ny-1)*dy_val if active_y and ny>1 else 0; total_offset_z=(nz-1)*dz_val if active_z and nz>1 else 0
                         center_shift_x=-total_offset_x/2.0; center_shift_y=-total_offset_y/2.0; center_shift_z=-total_offset_z/2.0
                         if abs(center_shift_x)>1e-6 or abs(center_shift_y)>1e-6 or abs(center_shift_z)>1e-6:
-                            if (unit_shape_modified_by_own_ops is not None and unit_shape_modified_by_own_ops is not lf.emptiness()):
+                            if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
                                 X,Y,Z=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
                                 unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X-center_shift_x,Y-center_shift_y,Z-center_shift_z)
                 except Exception as e: print(f"FieldForge ERROR (Linear Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
@@ -311,12 +313,12 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     try:
                         unit_shape_modified_by_own_ops=lf.array_polar_z(current_shape_before_array,count,center_xy_pivot)
                         if center_on_origin and (abs(center_xy_pivot[0])>1e-6 or abs(center_xy_pivot[1])>1e-6):
-                            if (unit_shape_modified_by_own_ops is not None and unit_shape_modified_by_own_ops is not lf.emptiness()):
+                            if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
                                 X,Y,Z=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
                                 unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X+center_xy_pivot[0],Y+center_xy_pivot[1],Z)
                     except Exception as e: print(f"FieldForge ERROR (Radial Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
 
-        if (unit_shape_modified_by_own_ops is not None and unit_shape_modified_by_own_ops is not lf.emptiness()):
+        if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
             try:
                 current_scene_shape = apply_blender_transform_to_sdf(unit_shape_modified_by_own_ops, obj.matrix_world.inverted())
             except Exception as e:
@@ -370,7 +372,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     if abs(relative_profile_scale - 1.0) > 1e-5:
                         scaled_child_2d_profile = lf.scale(child_2d_unit_profile_for_loft, (relative_profile_scale, relative_profile_scale, 1.0))
                     lofted_shape_local_to_obj = lf.loft(parent_2d_unit_profile_for_loft, scaled_child_2d_profile, 0, height)
-                    if (lofted_shape_local_to_obj is not None and lofted_shape_local_to_obj is not lf.emptiness()):
+                    if not (lofted_shape_local_to_obj is None or lofted_shape_local_to_obj is lf.emptiness()):
                         lofted_contribution_world = apply_blender_transform_to_sdf(lofted_shape_local_to_obj, obj.matrix_world.inverted())
                 except Exception as e:
                     print(f"FieldForge ERROR (lofting {obj_name} to {child_name}): {e}")
@@ -412,10 +414,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         current_scene_shape = lf.intersection(current_scene_shape, processed_child_subtree_world)
                 except Exception as e: print(f"FieldForge ERROR (intersecting {child_name} with {obj_name}): {e}"); current_scene_shape = lf.emptiness() if _lf_imported_ok else None
             elif child_csg_op_type == "DIFFERENCE":
-                if (current_scene_shape is None or current_scene_shape is lf.emptiness()) or \
-                   (processed_child_subtree_world is None or processed_child_subtree_world is lf.emptiness()):
-                    pass 
-                else:
+                if not ((current_scene_shape is None or current_scene_shape is lf.emptiness()) or \
+                   (processed_child_subtree_world is None or processed_child_subtree_world is lf.emptiness())):
                     try:
                         blend_radius_for_difference = parent_provides_blend_factor
                         if blend_radius_for_difference > constants.CACHE_PRECISION:
@@ -433,7 +433,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
         elif utils.is_sdf_group(child) or (child.type == 'EMPTY' and not child.get(constants.SDF_BOUNDS_MARKER)):
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, parent_provides_blend_factor)
     if obj_is_group:
-        if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+        if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
             reflect_x = obj.get("sdf_group_reflect_x", False)
             reflect_y = obj.get("sdf_group_reflect_y", False)
             reflect_z = obj.get("sdf_group_reflect_z", False)
@@ -454,8 +454,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
                 except Exception as e:
                     print(f"FieldForge ERROR (Group Reflect: World to Local for {obj_name}): {e}")
-                
-                if group_local_coords_shape is not None and group_local_coords_shape is not lf.emptiness():
+
+                if not (group_local_coords_shape is None or group_local_coords_shape is lf.emptiness()):
                     reflected_in_local_coords = group_local_coords_shape
                     if reflect_x: reflected_in_local_coords = lf.reflect_x(reflected_in_local_coords)
                     if reflect_y: reflected_in_local_coords = lf.reflect_y(reflected_in_local_coords)
@@ -464,7 +464,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     current_scene_shape = apply_blender_transform_to_sdf(reflected_in_local_coords, obj.matrix_world.inverted())
 
             # --- Apply Group Symmetry (after reflection) ---
-            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+            if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
                 symmetry_x = obj.get("sdf_group_symmetry_x", False)
                 symmetry_y = obj.get("sdf_group_symmetry_y", False)
                 symmetry_z = obj.get("sdf_group_symmetry_z", False)
@@ -484,7 +484,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     except Exception as e:
                         print(f"FieldForge ERROR (Group Symmetry: World to Local for {obj_name}): {e}")
 
-                    if group_local_coords_shape_for_sym is not None and group_local_coords_shape_for_sym is not lf.emptiness():
+                    if not (group_local_coords_shape_for_sym is None or group_local_coords_shape_for_sym is lf.emptiness()):
                         symmetrized_in_local = group_local_coords_shape_for_sym
                         
                         if symmetry_x:
@@ -506,7 +506,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 current_scene_shape = shape_after_symmetry
 
             # --- TAPER (applied to the result of symmetry) ---
-            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+            if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
                 taper_z_active = obj.get("sdf_group_taper_z_active", False)
                 shape_after_taper = current_scene_shape
 
@@ -522,7 +522,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     except Exception as e:
                         print(f"FieldForge ERROR (Group Taper: World to Local for {obj_name}): {e}")
 
-                    if group_local_coords_shape_for_taper is not None and group_local_coords_shape_for_taper is not lf.emptiness():
+                    if not (group_local_coords_shape_for_taper is None or group_local_coords_shape_for_taper is lf.emptiness()):
                         taper_height = float(obj.get("sdf_group_taper_z_height", 1.0))
                         taper_scale_at_top = float(obj.get("sdf_group_taper_z_factor", 0.5))
                         taper_base_scale = float(obj.get("sdf_group_taper_z_base_scale", 1.0))
@@ -551,7 +551,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 current_scene_shape = shape_after_taper
 
             # --- SHEAR X by Y (applied to the result of taper) ---
-            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+            if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
                 shear_x_by_y_active = obj.get("sdf_group_shear_x_by_y_active", False)
                 shape_after_shear = current_scene_shape
 
@@ -567,7 +567,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     except Exception as e:
                         print(f"FieldForge ERROR (Group Shear XbyY: World to Local for {obj_name}): {e}")
 
-                    if group_local_coords_shape_for_shear is not None and group_local_coords_shape_for_shear is not lf.emptiness():
+                    if not (group_local_coords_shape_for_shear is None or group_local_coords_shape_for_shear is lf.emptiness()):
                         shear_height = float(obj.get("sdf_group_shear_x_by_y_height", 1.0))
                         shear_offset = float(obj.get("sdf_group_shear_x_by_y_offset", 0.5))
                         shear_base_offset = float(obj.get("sdf_group_shear_x_by_y_base_offset", 0.0))
@@ -593,14 +593,13 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                             shape_after_shear = apply_blender_transform_to_sdf(sheared_in_local, obj.matrix_world.inverted())
                             if shape_after_shear is None:
                                 shape_after_shear = lf.emptiness() if _lf_imported_ok else None
-                            print(f"FieldForge WARN: lf.shear_x_y not found. Is libfive stdlib up to date or correctly wrapped? Error: {ae}")
                         except Exception as e_shear:
                             print(f"FieldForge ERROR (Group Shearing XbyY for {obj_name}): {e_shear}")
 
                 current_scene_shape = shape_after_shear
 
             # --- ATTRACT/REPEL ---
-            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+            if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
                 ar_mode = obj.get("sdf_group_attract_repel_mode", 'NONE')
                 shape_after_attract_repel = current_scene_shape
 
@@ -616,7 +615,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     except Exception as e:
                         print(f"FieldForge ERROR (Group Attract/Repel: World to Local for {obj_name}): {e}")
 
-                    if group_local_coords_shape_for_ar is not None and group_local_coords_shape_for_ar is not lf.emptiness():
+                    if not (group_local_coords_shape_for_ar is None or group_local_coords_shape_for_ar is lf.emptiness()):
                         ar_radius_val = float(obj.get("sdf_group_attract_repel_radius", 0.5))
                         ar_exaggerate_val = float(obj.get("sdf_group_attract_repel_exaggerate", 1.0))
 
