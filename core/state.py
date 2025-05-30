@@ -140,6 +140,10 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_group_taper_z_factor': actual_child_obj.get("sdf_group_taper_z_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_factor"]),
                     'sdf_group_taper_z_height': actual_child_obj.get("sdf_group_taper_z_height", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_height"]),
                     'sdf_group_taper_z_base_scale': actual_child_obj.get("sdf_group_taper_z_base_scale", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_base_scale"]),
+                    'sdf_group_shear_x_by_y_active': actual_child_obj.get("sdf_group_shear_x_by_y_active", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_active"]),
+                    'sdf_group_shear_x_by_y_offset': actual_child_obj.get("sdf_group_shear_x_by_y_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_offset"]),
+                    'sdf_group_shear_x_by_y_base_offset': actual_child_obj.get("sdf_group_shear_x_by_y_base_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_base_offset"]),
+                    'sdf_group_shear_x_by_y_height': actual_child_obj.get("sdf_group_shear_x_by_y_height", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_height"]),
                 }
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),

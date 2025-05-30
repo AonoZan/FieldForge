@@ -550,6 +550,55 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 
                 current_scene_shape = shape_after_taper
 
+            # --- SHEAR X by Y (applied to the result of taper) ---
+            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+                shear_x_by_y_active = obj.get("sdf_group_shear_x_by_y_active", False)
+                shape_after_shear = current_scene_shape
+
+                if shear_x_by_y_active:
+                    group_local_coords_shape_for_shear = lf.emptiness() if _lf_imported_ok else None
+                    try:
+                        mat_l2w_shear = obj.matrix_world
+                        X_sh, Y_sh, Z_sh = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                        x_expr_sh = mat_l2w_shear[0][0]*X_sh + mat_l2w_shear[0][1]*Y_sh + mat_l2w_shear[0][2]*Z_sh + mat_l2w_shear[0][3]
+                        y_expr_sh = mat_l2w_shear[1][0]*X_sh + mat_l2w_shear[1][1]*Y_sh + mat_l2w_shear[1][2]*Z_sh + mat_l2w_shear[1][3]
+                        z_expr_sh = mat_l2w_shear[2][0]*X_sh + mat_l2w_shear[2][1]*Y_sh + mat_l2w_shear[2][2]*Z_sh + mat_l2w_shear[2][3]
+                        group_local_coords_shape_for_shear = current_scene_shape.remap(x_expr_sh, y_expr_sh, z_expr_sh)
+                    except Exception as e:
+                        print(f"FieldForge ERROR (Group Shear XbyY: World to Local for {obj_name}): {e}")
+
+                    if group_local_coords_shape_for_shear is not None and group_local_coords_shape_for_shear is not lf.emptiness():
+                        shear_height = float(obj.get("sdf_group_shear_x_by_y_height", 1.0))
+                        shear_offset = float(obj.get("sdf_group_shear_x_by_y_offset", 0.5))
+                        shear_base_offset = float(obj.get("sdf_group_shear_x_by_y_base_offset", 0.0))
+
+                        shear_height = max(1e-5, shear_height)
+
+                        try:
+                            if hasattr(lf, 'shear_x_y'):
+                                sheared_in_local = lf.shear_x_y(
+                                    group_local_coords_shape_for_shear,
+                                    (0.0, 0.0),
+                                    shear_height,
+                                    shear_offset,
+                                    shear_base_offset
+                                )
+                            else:
+                                print(f"FieldForge INFO: lf.shear_x_y not found, using direct remap for group {obj_name}.")
+                                X_remap, Y_remap, Z_remap = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                                f_tree = Y_remap / shear_height
+                                x_final_remap = X_remap - (shear_base_offset * (1.0 - f_tree)) - (shear_offset * f_tree)
+                                sheared_in_local = group_local_coords_shape_for_shear.remap(x_final_remap, Y_remap, Z_remap)
+
+                            shape_after_shear = apply_blender_transform_to_sdf(sheared_in_local, obj.matrix_world.inverted())
+                            if shape_after_shear is None:
+                                shape_after_shear = lf.emptiness() if _lf_imported_ok else None
+                            print(f"FieldForge WARN: lf.shear_x_y not found. Is libfive stdlib up to date or correctly wrapped? Error: {ae}")
+                        except Exception as e_shear:
+                            print(f"FieldForge ERROR (Group Shearing XbyY for {obj_name}): {e_shear}")
+
+                current_scene_shape = shape_after_shear
+
     if current_scene_shape is None and _lf_imported_ok:
         return lf.emptiness()
     return current_scene_shape

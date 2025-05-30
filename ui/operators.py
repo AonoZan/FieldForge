@@ -780,6 +780,30 @@ class OBJECT_OT_fieldforge_toggle_group_taper_z(Operator):
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_toggle_group_shear_x_by_y(Operator):
+    """Toggles X by Y shear for an SDF Group object"""
+    bl_idname = "object.fieldforge_toggle_group_shear_x_by_y"
+    bl_label = "Toggle Group X by Y Shear"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_group(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_group_shear_x_by_y_active"
+
+        current_val = obj.get(prop_name, False)
+        obj[prop_name] = not current_val
+
+        parent_bounds = utils.find_parent_bounds(obj)
+        if parent_bounds:
+            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_shear_x_by_y_{obj.name}")
+        
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1101,6 +1125,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_group_reflection,
     OBJECT_OT_fieldforge_toggle_group_symmetry,
     OBJECT_OT_fieldforge_toggle_group_taper_z,
+    OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

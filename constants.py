@@ -73,6 +73,10 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_group_taper_z_factor": 0.5,
     "sdf_group_taper_z_height": 1.0,
     "sdf_group_taper_z_base_scale": 1.0,
+    "sdf_group_shear_x_by_y_active": False,
+    "sdf_group_shear_x_by_y_offset": 0.5,
+    "sdf_group_shear_x_by_y_base_offset": 0.0,
+    "sdf_group_shear_x_by_y_height": 1.0,
 }
 
 # --- Optional: Default values for Source Object properties ---

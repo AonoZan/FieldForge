@@ -20,6 +20,7 @@ from .operators import (
     OBJECT_OT_fieldforge_toggle_group_reflection,
     OBJECT_OT_fieldforge_toggle_group_symmetry,
     OBJECT_OT_fieldforge_toggle_group_taper_z,
+    OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -200,6 +201,32 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         taper_base_scale_sub_row = layout.row(align=True)
         taper_base_scale_sub_row.active = is_taper_z_active
         taper_base_scale_sub_row.prop(obj, '["sdf_group_taper_z_base_scale"]', text="Base Scale")
+
+    # --- Shear Controls (Shear X by Y) ---
+    shear_label_row = layout.row()
+    shear_label_row.label(text="Shear (X by Y):")
+
+    row_shear_x_by_y = layout.row(align=True)
+    is_shear_x_by_y_active = obj.get("sdf_group_shear_x_by_y_active", False)
+    
+    op_shear_toggle = row_shear_x_by_y.operator(
+        OBJECT_OT_fieldforge_toggle_group_shear_x_by_y.bl_idname,
+        text="Enable",
+        depress=is_shear_x_by_y_active
+    )
+    
+    shear_offset_sub_row = row_shear_x_by_y.row(align=True)
+    shear_offset_sub_row.active = is_shear_x_by_y_active
+    shear_offset_sub_row.prop(obj, '["sdf_group_shear_x_by_y_offset"]', text="Offset")
+
+    if is_shear_x_by_y_active:
+        shear_base_offset_row = layout.row(align=True)
+        shear_base_offset_row.active = is_shear_x_by_y_active
+        shear_base_offset_row.prop(obj, '["sdf_group_shear_x_by_y_base_offset"]', text="Base Offset")
+        
+        shear_height_row = layout.row(align=True)
+        shear_height_row.active = is_shear_x_by_y_active
+        shear_height_row.prop(obj, '["sdf_group_shear_x_by_y_height"]', text="Height (Y)")
 
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """
