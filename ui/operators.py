@@ -183,7 +183,15 @@ class OBJECT_OT_add_sdf_group(Operator):
             print(f"FieldForge WARN: Could not invert parent matrix for {target_parent.name} when adding Group.")
 
         obj[constants.SDF_GROUP_MARKER] = True
-        obj["sdf_child_blend_factor"] = self.initial_child_blend
+
+        for key, value in constants.DEFAULT_GROUP_SETTINGS.items():
+            try:
+                if key == "sdf_child_blend_factor":
+                    obj[key] = self.initial_child_blend
+                else:
+                    obj[key] = value
+            except TypeError as e:
+                 print(f"FieldForge WARN: Could not set default group property '{key}' on {obj.name}: {e}. Value: {value}")
 
         obj.color = (0.2, 1.0, 0.2, 0.8)
 
@@ -748,6 +756,30 @@ class OBJECT_OT_fieldforge_toggle_group_symmetry(Operator):
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_toggle_group_taper_z(Operator):
+    """Toggles Z-axis taper for an SDF Group object"""
+    bl_idname = "object.fieldforge_toggle_group_taper_z"
+    bl_label = "Toggle Group Z-Axis Taper"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_group(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_group_taper_z_active"
+
+        current_val = obj.get(prop_name, False)
+        obj[prop_name] = not current_val
+
+        parent_bounds = utils.find_parent_bounds(obj)
+        if parent_bounds:
+            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_taper_z_{obj.name}")
+        
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1068,6 +1100,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_reorder_source,
     OBJECT_OT_fieldforge_toggle_group_reflection,
     OBJECT_OT_fieldforge_toggle_group_symmetry,
+    OBJECT_OT_fieldforge_toggle_group_taper_z,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

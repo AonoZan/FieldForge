@@ -136,6 +136,10 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_group_symmetry_x': actual_child_obj.get("sdf_group_symmetry_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_x"]),
                     'sdf_group_symmetry_y': actual_child_obj.get("sdf_group_symmetry_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_y"]),
                     'sdf_group_symmetry_z': actual_child_obj.get("sdf_group_symmetry_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_z"]),
+                    'sdf_group_taper_z_active': actual_child_obj.get("sdf_group_taper_z_active", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_active"]),
+                    'sdf_group_taper_z_factor': actual_child_obj.get("sdf_group_taper_z_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_factor"]),
+                    'sdf_group_taper_z_height': actual_child_obj.get("sdf_group_taper_z_height", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_height"]),
+                    'sdf_group_taper_z_base_scale': actual_child_obj.get("sdf_group_taper_z_base_scale", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_base_scale"]),
                 }
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),

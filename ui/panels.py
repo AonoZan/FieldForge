@@ -19,6 +19,7 @@ from .operators import (
     OBJECT_OT_fieldforge_reorder_source,
     OBJECT_OT_fieldforge_toggle_group_reflection,
     OBJECT_OT_fieldforge_toggle_group_symmetry,
+    OBJECT_OT_fieldforge_toggle_group_taper_z,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -174,6 +175,31 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         depress=obj.get("sdf_group_symmetry_z", False)
     )
     op_symmetry_z.axis = 'Z'
+
+    # --- Taper Controls (for taper_xy_z) ---
+    taper_label_row = layout.row()
+    taper_label_row.label(text="Taper (Axial along Z):")
+
+    row_taper_z = layout.row(align=True)
+    is_taper_z_active = obj.get("sdf_group_taper_z_active", False)
+
+    op_taper_z_toggle = row_taper_z.operator(
+        OBJECT_OT_fieldforge_toggle_group_taper_z.bl_idname,
+        text="Enable",
+        depress=is_taper_z_active
+    )
+
+    taper_factor_sub_row = row_taper_z.row(align=True)
+    taper_factor_sub_row.active = is_taper_z_active
+    taper_factor_sub_row.prop(obj, '["sdf_group_taper_z_factor"]', text="Factor")
+
+    if is_taper_z_active:
+        taper_height_sub_row = layout.row(align=True)
+        taper_height_sub_row.active = is_taper_z_active
+        taper_height_sub_row.prop(obj, '["sdf_group_taper_z_height"]', text="Height")
+        taper_base_scale_sub_row = layout.row(align=True)
+        taper_base_scale_sub_row.active = is_taper_z_active
+        taper_base_scale_sub_row.prop(obj, '["sdf_group_taper_z_base_scale"]', text="Base Scale")
 
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """

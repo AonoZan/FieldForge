@@ -502,8 +502,53 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         
                         shape_after_symmetry = apply_blender_transform_to_sdf(symmetrized_in_local, obj.matrix_world.inverted())
                         if shape_after_symmetry is None: shape_after_symmetry = lf.emptiness() if _lf_imported_ok else None
-                
+
                 current_scene_shape = shape_after_symmetry
+
+            # --- TAPER (applied to the result of symmetry) ---
+            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+                taper_z_active = obj.get("sdf_group_taper_z_active", False)
+                shape_after_taper = current_scene_shape
+
+                if taper_z_active:
+                    group_local_coords_shape_for_taper = lf.emptiness() if _lf_imported_ok else None
+                    try:
+                        mat_l2w_taper = obj.matrix_world
+                        X_t, Y_t, Z_t = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                        x_expr_t = mat_l2w_taper[0][0] * X_t + mat_l2w_taper[0][1] * Y_t + mat_l2w_taper[0][2] * Z_t + mat_l2w_taper[0][3]
+                        y_expr_t = mat_l2w_taper[1][0] * X_t + mat_l2w_taper[1][1] * Y_t + mat_l2w_taper[1][2] * Z_t + mat_l2w_taper[1][3]
+                        z_expr_t = mat_l2w_taper[2][0] * X_t + mat_l2w_taper[2][1] * Y_t + mat_l2w_taper[2][2] * Z_t + mat_l2w_taper[2][3]
+                        group_local_coords_shape_for_taper = current_scene_shape.remap(x_expr_t, y_expr_t, z_expr_t)
+                    except Exception as e:
+                        print(f"FieldForge ERROR (Group Taper: World to Local for {obj_name}): {e}")
+
+                    if group_local_coords_shape_for_taper is not None and group_local_coords_shape_for_taper is not lf.emptiness():
+                        taper_height = float(obj.get("sdf_group_taper_z_height", 1.0))
+                        taper_scale_at_top = float(obj.get("sdf_group_taper_z_factor", 0.5))
+                        taper_base_scale = float(obj.get("sdf_group_taper_z_base_scale", 1.0))
+                        
+                        taper_height = max(1e-5, taper_height)
+                        taper_scale_at_top = max(0.0, taper_scale_at_top)
+                        taper_base_scale = max(1e-5, taper_base_scale)
+
+                        try:
+                            tapered_in_local = lf.taper_xy_z(
+                                group_local_coords_shape_for_taper,
+                                (0.0, 0.0, 0.0),
+                                taper_height,
+                                taper_scale_at_top,
+                                taper_base_scale
+                            )
+                            
+                            shape_after_taper = apply_blender_transform_to_sdf(tapered_in_local, obj.matrix_world.inverted())
+                            if shape_after_taper is None:
+                                shape_after_taper = lf.emptiness() if _lf_imported_ok else None
+                        except AttributeError:
+                            print(f"FieldForge WARN: lf.taper_xy_z not found. Is libfive stdlib up to date or correctly wrapped?")
+                        except Exception as e_taper:
+                            print(f"FieldForge ERROR (Group Tapering {obj_name}): {e_taper}")
+                
+                current_scene_shape = shape_after_taper
 
     if current_scene_shape is None and _lf_imported_ok:
         return lf.emptiness()
