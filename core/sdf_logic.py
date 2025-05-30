@@ -599,6 +599,75 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
                 current_scene_shape = shape_after_shear
 
+            # --- ATTRACT/REPEL ---
+            if current_scene_shape is not None and current_scene_shape is not lf.emptiness():
+                ar_mode = obj.get("sdf_group_attract_repel_mode", 'NONE')
+                shape_after_attract_repel = current_scene_shape
+
+                if ar_mode != 'NONE':
+                    group_local_coords_shape_for_ar = lf.emptiness() if _lf_imported_ok else None
+                    try:
+                        mat_l2w_ar = obj.matrix_world
+                        X_ar, Y_ar, Z_ar = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                        x_expr_ar = mat_l2w_ar[0][0]*X_ar + mat_l2w_ar[0][1]*Y_ar + mat_l2w_ar[0][2]*Z_ar + mat_l2w_ar[0][3]
+                        y_expr_ar = mat_l2w_ar[1][0]*X_ar + mat_l2w_ar[1][1]*Y_ar + mat_l2w_ar[1][2]*Z_ar + mat_l2w_ar[1][3]
+                        z_expr_ar = mat_l2w_ar[2][0]*X_ar + mat_l2w_ar[2][1]*Y_ar + mat_l2w_ar[2][2]*Z_ar + mat_l2w_ar[2][3]
+                        group_local_coords_shape_for_ar = current_scene_shape.remap(x_expr_ar, y_expr_ar, z_expr_ar)
+                    except Exception as e:
+                        print(f"FieldForge ERROR (Group Attract/Repel: World to Local for {obj_name}): {e}")
+
+                    if group_local_coords_shape_for_ar is not None and group_local_coords_shape_for_ar is not lf.emptiness():
+                        ar_radius_val = float(obj.get("sdf_group_attract_repel_radius", 0.5))
+                        ar_exaggerate_val = float(obj.get("sdf_group_attract_repel_exaggerate", 1.0))
+
+                        ar_radius_val = max(1e-5, ar_radius_val)
+                        ar_exaggerate_val = max(0.0, ar_exaggerate_val)
+
+                        locus_local = (0.0, 0.0, 0.0)
+
+                        use_x = obj.get("sdf_group_attract_repel_axis_x", True)
+                        use_y = obj.get("sdf_group_attract_repel_axis_y", True)
+                        use_z = obj.get("sdf_group_attract_repel_axis_z", True)
+
+                        selected_func = None
+
+                        if ar_mode == 'ATTRACT':
+                            if use_x and use_y and use_z: selected_func = getattr(lf, 'attract', None)
+                            elif use_x and use_y:         selected_func = getattr(lf, 'attract_xy', None)
+                            elif use_x and use_z:         selected_func = getattr(lf, 'attract_xz', None)
+                            elif use_y and use_z:         selected_func = getattr(lf, 'attract_yz', None)
+                            elif use_x:                   selected_func = getattr(lf, 'attract_x', None)
+                            elif use_y:                   selected_func = getattr(lf, 'attract_y', None)
+                            elif use_z:                   selected_func = getattr(lf, 'attract_z', None)
+                        elif ar_mode == 'REPEL':
+                            if use_x and use_y and use_z: selected_func = getattr(lf, 'repel', None)
+                            elif use_x and use_y:         selected_func = getattr(lf, 'repel_xy', None)
+                            elif use_x and use_z:         selected_func = getattr(lf, 'repel_xz', None)
+                            elif use_y and use_z:         selected_func = getattr(lf, 'repel_yz', None)
+                            elif use_x:                   selected_func = getattr(lf, 'repel_x', None)
+                            elif use_y:                   selected_func = getattr(lf, 'repel_y', None)
+                            elif use_z:                   selected_func = getattr(lf, 'repel_z', None)
+
+                        ar_in_local = group_local_coords_shape_for_ar
+                        if selected_func:
+                            try:
+                                ar_in_local = selected_func(
+                                    group_local_coords_shape_for_ar,
+                                    locus_local,
+                                    ar_radius_val,
+                                    ar_exaggerate_val
+                                )
+                            except Exception as e_ar_call:
+                                print(f"FieldForge ERROR calling {selected_func.__name__} for {obj_name}: {e_ar_call}")
+                        elif use_x or use_y or use_z:
+                             print(f"FieldForge WARN: No specific attract/repel function found for the combination of active axes on {obj_name}. Effect might be incorrect or skipped.")
+
+                        shape_after_attract_repel = apply_blender_transform_to_sdf(ar_in_local, obj.matrix_world.inverted())
+                        if shape_after_attract_repel is None:
+                            shape_after_attract_repel = lf.emptiness() if _lf_imported_ok else None
+
+                current_scene_shape = shape_after_attract_repel
+
     if current_scene_shape is None and _lf_imported_ok:
         return lf.emptiness()
     return current_scene_shape

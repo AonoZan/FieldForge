@@ -21,6 +21,7 @@ from .operators import (
     OBJECT_OT_fieldforge_toggle_group_symmetry,
     OBJECT_OT_fieldforge_toggle_group_taper_z,
     OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
+    OBJECT_OT_fieldforge_set_group_attract_repel_mode,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -227,6 +228,45 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         shear_height_row = layout.row(align=True)
         shear_height_row.active = is_shear_x_by_y_active
         shear_height_row.prop(obj, '["sdf_group_shear_x_by_y_height"]', text="Height (Y)")
+
+    # --- Attract/Repel Controls ---
+    attract_repel_label_row = layout.row()
+    attract_repel_label_row.label(text="Attract/Repel:")
+
+    row_attract_repel_mode = layout.row(align=True)
+    current_ar_mode = obj.get("sdf_group_attract_repel_mode", 'NONE')
+    
+    op_ar_none = row_attract_repel_mode.operator(
+        OBJECT_OT_fieldforge_set_group_attract_repel_mode.bl_idname,
+        text="None", depress=(current_ar_mode == 'NONE'))
+    op_ar_none.mode = 'NONE'
+    
+    op_ar_attract = row_attract_repel_mode.operator(
+        OBJECT_OT_fieldforge_set_group_attract_repel_mode.bl_idname,
+        text="Attract", depress=(current_ar_mode == 'ATTRACT'))
+    op_ar_attract.mode = 'ATTRACT'
+
+    op_ar_repel = row_attract_repel_mode.operator(
+        OBJECT_OT_fieldforge_set_group_attract_repel_mode.bl_idname,
+        text="Repel", depress=(current_ar_mode == 'REPEL'))
+    op_ar_repel.mode = 'REPEL'
+
+    params_active = (current_ar_mode != 'NONE')
+
+    row_ar_params1 = layout.row(align=True)
+    row_ar_params1.active = params_active
+    row_ar_params1.prop(obj, '["sdf_group_attract_repel_radius"]', text="Radius")
+    row_ar_params1.prop(obj, '["sdf_group_attract_repel_exaggerate"]', text="Strength")
+
+    row_ar_axes_label = layout.row()
+    row_ar_axes_label.active = params_active
+    row_ar_axes_label.label(text="Affected Axes:")
+    
+    row_ar_axes_toggles = layout.row(align=True)
+    row_ar_axes_toggles.active = params_active
+    row_ar_axes_toggles.prop(obj, '["sdf_group_attract_repel_axis_x"]', text="X", toggle=True)
+    row_ar_axes_toggles.prop(obj, '["sdf_group_attract_repel_axis_y"]', text="Y", toggle=True)
+    row_ar_axes_toggles.prop(obj, '["sdf_group_attract_repel_axis_z"]', text="Z", toggle=True)
 
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """

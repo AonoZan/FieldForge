@@ -804,6 +804,39 @@ class OBJECT_OT_fieldforge_toggle_group_shear_x_by_y(Operator):
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_set_group_attract_repel_mode(Operator):
+    """Sets the Attract/Repel mode for an SDF Group object"""
+    bl_idname = "object.fieldforge_set_group_attract_repel_mode"
+    bl_label = "Set Group Attract/Repel Mode"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    mode: EnumProperty(
+        items=[('NONE', "None", "No attraction or repulsion"),
+               ('ATTRACT', "Attract", "Attract shape towards group origin"),
+               ('REPEL', "Repel", "Repel shape from group origin")],
+        name="Mode",
+        default='NONE'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and utils.is_sdf_group(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_group_attract_repel_mode"
+
+        current_mode = obj.get(prop_name, 'NONE')
+        if current_mode != self.mode:
+            obj[prop_name] = self.mode
+
+            parent_bounds = utils.find_parent_bounds(obj)
+            if parent_bounds:
+                ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_group_attract_repel_mode_{obj.name}_{self.mode}")
+            
+            tag_redraw_all_view3d()
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1126,6 +1159,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_group_symmetry,
     OBJECT_OT_fieldforge_toggle_group_taper_z,
     OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
+    OBJECT_OT_fieldforge_set_group_attract_repel_mode,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

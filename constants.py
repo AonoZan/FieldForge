@@ -17,6 +17,11 @@ SDF_PROPERTY_MARKER = "is_sdf_object"
 # Marker for SDF Group Empty objects
 SDF_GROUP_MARKER = "is_sdf_group"
 
+# Axis constants on Python side for C++
+AXIS_X_BIT = 1
+AXIS_Y_BIT = 2
+AXIS_Z_BIT = 4
+
 # --- Caching and Comparison ---
 
 # Tolerance for floating-point comparisons in caching state changes
@@ -77,6 +82,12 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_group_shear_x_by_y_offset": 0.5,
     "sdf_group_shear_x_by_y_base_offset": 0.0,
     "sdf_group_shear_x_by_y_height": 1.0,
+    "sdf_group_attract_repel_mode": 'NONE',
+    "sdf_group_attract_repel_radius": 0.5,
+    "sdf_group_attract_repel_exaggerate": 1.0,
+    "sdf_group_attract_repel_axis_x": True,
+    "sdf_group_attract_repel_axis_y": True,
+    "sdf_group_attract_repel_axis_z": True,
 }
 
 # --- Optional: Default values for Source Object properties ---

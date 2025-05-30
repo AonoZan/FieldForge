@@ -144,6 +144,12 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_group_shear_x_by_y_offset': actual_child_obj.get("sdf_group_shear_x_by_y_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_offset"]),
                     'sdf_group_shear_x_by_y_base_offset': actual_child_obj.get("sdf_group_shear_x_by_y_base_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_base_offset"]),
                     'sdf_group_shear_x_by_y_height': actual_child_obj.get("sdf_group_shear_x_by_y_height", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_height"]),
+                    'sdf_group_attract_repel_mode': actual_child_obj.get("sdf_group_attract_repel_mode", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_mode"]),
+                    'sdf_group_attract_repel_radius': actual_child_obj.get("sdf_group_attract_repel_radius", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_radius"]),
+                    'sdf_group_attract_repel_exaggerate': actual_child_obj.get("sdf_group_attract_repel_exaggerate", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_exaggerate"]),
+                    'sdf_group_attract_repel_axis_x': actual_child_obj.get("sdf_group_attract_repel_axis_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_x"]),
+                    'sdf_group_attract_repel_axis_y': actual_child_obj.get("sdf_group_attract_repel_axis_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_y"]),
+                    'sdf_group_attract_repel_axis_z': actual_child_obj.get("sdf_group_attract_repel_axis_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_z"]),
                 }
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),
