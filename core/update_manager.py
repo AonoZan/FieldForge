@@ -380,6 +380,15 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
                         mesh_bdata.clear_geometry()
                         mesh_bdata.update()
                     mesh_update_successful = True # Success: empty result applied correctly
+                if mesh_update_successful and result_obj.data and hasattr(result_obj.data, 'polygons'):
+                    try:
+                        smooth_shade_setting = sdf_settings_from_bounds.get("sdf_result_smooth_shade", True) # Get from trigger_state
+                        if len(result_obj.data.polygons) > 0: # Only if there are polygons
+                            for poly in result_obj.data.polygons:
+                                poly.use_smooth = smooth_shade_setting
+                            result_obj.data.update() # Update mesh after changing polygon smooth flags
+                    except Exception as e_smooth:
+                        print(f"FieldForge WARN: Could not apply smooth shading to {result_name}: {e_smooth}")
 
     except Exception as e_outer:
          print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {type(e_outer).__name__} - {e_outer}")
