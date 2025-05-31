@@ -390,7 +390,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
             if use_morph:
                 morph_factor = float(child.get("sdf_morph_factor", 0.5))
-                try: current_scene_shape = lf.blend_expt_unit(processed_child_subtree_world, current_scene_shape, morph_factor)
+                try: current_scene_shape = lf.morph(processed_child_subtree_world, current_scene_shape, morph_factor)
                 except Exception as e: print(f"FieldForge ERROR (morphing {obj_name} with {child_name}): {e}")
             elif use_clearance:
                 offset_val = float(child.get("sdf_clearance_offset", 0.05))
