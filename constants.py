@@ -64,6 +64,7 @@ DEFAULT_SETTINGS = {
 
     "sdf_discard_mesh_on_save": True, # Don't save generated mesh by default
     "sdf_result_smooth_shade": True,
+    "sdf_result_material_name": "",
 }
 
 # Default values for Group Object properties ---

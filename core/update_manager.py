@@ -389,6 +389,28 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
                             result_obj.data.update() # Update mesh after changing polygon smooth flags
                     except Exception as e_smooth:
                         print(f"FieldForge WARN: Could not apply smooth shading to {result_name}: {e_smooth}")
+                if mesh_update_successful and result_obj: # Ensure result_obj exists
+                    try:
+                        mat_name_to_assign = sdf_settings_from_bounds.get("sdf_result_material_name", "")
+                        if mat_name_to_assign: # If a material name is specified
+                            material_to_assign = bpy.data.materials.get(mat_name_to_assign)
+                            if material_to_assign:
+                                if result_obj.data.materials: # If there are material slots
+                                    if not result_obj.data.materials[0] or result_obj.data.materials[0].name != material_to_assign.name :
+                                        result_obj.data.materials[0] = material_to_assign
+                                else: # No material slots, append one
+                                    result_obj.data.materials.append(material_to_assign)
+                            else:
+                                # Material name specified but not found, clear if a different one was assigned
+                                if result_obj.data.materials and result_obj.data.materials[0] is not None:
+                                    print(f"FieldForge WARN: Material '{mat_name_to_assign}' not found for {result_name}. Clearing existing material.")
+                                    result_obj.data.materials.clear() # Or result_obj.data.materials[0] = None if you want to keep the slot
+                                # If no material was previously assigned, do nothing if new one not found.
+                        else: # No material name specified, ensure no material is assigned
+                            if result_obj.data.materials:
+                                result_obj.data.materials.clear() # Remove all materials from the object's mesh data
+                    except Exception as e_mat: # pragma: no cover
+                        print(f"FieldForge WARN: Could not assign material to {result_name}: {e_mat}")
 
     except Exception as e_outer:
          print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {type(e_outer).__name__} - {e_outer}")

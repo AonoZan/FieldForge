@@ -45,6 +45,14 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
 
     layout.separator()
 
+    # --- Material Assignment ---
+    row_material_label = layout.row()
+    row_material_label.label(text="Result Material:")
+
+    layout.prop_search(obj, '["sdf_result_material_name"]', bpy.data, "materials", text="")
+
+    layout.separator()
+
     # --- Update Timing ---
     row_timing_label = layout.row()
     row_timing_label.label(text="Update Timing:")
