@@ -59,12 +59,11 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     row_display_options = layout.row()
     row_display_options.label(text="Options:")
 
-    row_display_options = layout.row(align=True)
-    row_display_options.prop(obj, '["sdf_show_source_empties"]', text="Show Visuals", toggle=True)
-    row_display_options.prop(obj, '["sdf_create_result_object"]', text="Recreate Mesh", toggle=True)
-    row_save_shade_props = layout.row(align=True)
-    row_save_shade_props.prop(obj, '["sdf_discard_mesh_on_save"]', text="Discard on Save", toggle=True)
-    row_save_shade_props.prop(obj, '["sdf_result_smooth_shade"]', text="Smooth Shade", toggle=True) 
+    col_options = layout.column(align=True)
+    col_options.prop(obj, '["sdf_show_source_empties"]', text="Show Visuals")
+    col_options.prop(obj, '["sdf_create_result_object"]', text="Recreate Mesh if Missing")
+    col_options.prop(obj, '["sdf_discard_mesh_on_save"]', text="Discard Mesh on Save")
+    col_options.prop(obj, '["sdf_result_smooth_shade"]', text="Smooth Shade Result")
 
 def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Group object properties. """
