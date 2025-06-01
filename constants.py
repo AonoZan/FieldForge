@@ -106,6 +106,18 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_group_twirl_axis": 'Z',
     "sdf_group_twirl_amount": 1.5708,
     "sdf_group_twirl_radius": 1.0,
+    "sdf_main_array_mode": 'NONE',
+    "sdf_array_active_x": False,
+    "sdf_array_active_y": False,
+    "sdf_array_active_z": False,
+    "sdf_array_count_x": 2,
+    "sdf_array_count_y": 2,
+    "sdf_array_count_z": 2,
+    "sdf_array_delta_x": 1.0,
+    "sdf_array_delta_y": 1.0,
+    "sdf_array_delta_z": 1.0,
+    "sdf_radial_count": 6,
+    "sdf_radial_center": (0.0, 0.0),
 }
 
 # --- Optional: Default values for Source Object properties ---

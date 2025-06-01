@@ -155,6 +155,18 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_group_twirl_axis': actual_child_obj.get("sdf_group_twirl_axis", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_axis"]),
                     'sdf_group_twirl_amount': actual_child_obj.get("sdf_group_twirl_amount", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_amount"]),
                     'sdf_group_twirl_radius': actual_child_obj.get("sdf_group_twirl_radius", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_radius"]),
+                    'sdf_main_array_mode': actual_child_obj.get("sdf_main_array_mode", constants.DEFAULT_GROUP_SETTINGS["sdf_main_array_mode"]),
+                    'sdf_array_active_x': actual_child_obj.get("sdf_array_active_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_active_x"]),
+                    'sdf_array_active_y': actual_child_obj.get("sdf_array_active_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_active_y"]),
+                    'sdf_array_active_z': actual_child_obj.get("sdf_array_active_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_active_z"]),
+                    'sdf_array_count_x': actual_child_obj.get("sdf_array_count_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_x"]),
+                    'sdf_array_count_y': actual_child_obj.get("sdf_array_count_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_y"]),
+                    'sdf_array_count_z': actual_child_obj.get("sdf_array_count_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_z"]),
+                    'sdf_array_delta_x': actual_child_obj.get("sdf_array_delta_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_delta_x"]),
+                    'sdf_array_delta_y': actual_child_obj.get("sdf_array_delta_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_delta_y"]),
+                    'sdf_array_delta_z': actual_child_obj.get("sdf_array_delta_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_delta_z"]),
+                    'sdf_radial_count': actual_child_obj.get("sdf_radial_count", constants.DEFAULT_GROUP_SETTINGS["sdf_radial_count"]),
+                    'sdf_radial_center': tuple(actual_child_obj.get("sdf_radial_center", constants.DEFAULT_GROUP_SETTINGS["sdf_radial_center"])),
                 }
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),

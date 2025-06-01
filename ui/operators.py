@@ -628,7 +628,9 @@ class OBJECT_OT_fieldforge_toggle_array_axis(Operator):
     bl_options = {'REGISTER', 'UNDO'}
     axis: EnumProperty(items=[('X',"X","X"), ('Y',"Y","Y"), ('Z',"Z","Z")], name="Axis", default='X')
     @classmethod
-    def poll(cls, context): return context.active_object and utils.is_sdf_source(context.active_object)
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and (utils.is_sdf_source(obj) or utils.is_sdf_group(obj))
     def execute(self, context):
         obj = context.active_object; act_x="sdf_array_active_x"; act_y="sdf_array_active_y"; act_z="sdf_array_active_z"
         is_x=obj.get(act_x,False); is_y=obj.get(act_y,False); is_z=obj.get(act_z,False); changed = False
@@ -656,7 +658,9 @@ class OBJECT_OT_fieldforge_set_main_array_mode(Operator):
     bl_options = {'REGISTER', 'UNDO'}
     main_mode: EnumProperty(items=[('NONE',"None","None"), ('LINEAR',"Linear","Linear"), ('RADIAL',"Radial","Radial")], name="Main Array Mode", default='NONE')
     @classmethod
-    def poll(cls, context): return context.active_object and utils.is_sdf_source(context.active_object)
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and (utils.is_sdf_source(obj) or utils.is_sdf_group(obj))
     def execute(self, context):
         obj = context.active_object; prop_name = "sdf_main_array_mode"
         current_mode = obj.get(prop_name, 'NONE'); changed = False

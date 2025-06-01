@@ -269,6 +269,13 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     parent_is_canvas = False
     if obj.parent and obj.parent.get(constants.SDF_CANVAS_MARKER, False):
         parent_is_canvas = True
+    
+    parent_array_mode = 'NONE'
+    is_obj_an_arraying_group = False
+    if obj_is_group:
+        parent_array_mode = obj.get("sdf_main_array_mode", 'NONE')
+        if parent_array_mode != 'NONE':
+            is_obj_an_arraying_group = True
 
     if obj_is_sdf_source and not obj_is_canvas:
         sdf_type = obj.get("sdf_type", "")
@@ -477,9 +484,87 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             current_scene_shape = combine_shapes(current_scene_shape, lofted_contribution_world, parent_provides_blend_factor)
             continue
 
-        processed_child_subtree_world = process_sdf_hierarchy(child, bounds_settings)
-        if (processed_child_subtree_world is None or processed_child_subtree_world is lf.emptiness()):
+        child_world_shape = process_sdf_hierarchy(child, bounds_settings)
+        if child_world_shape is None or child_world_shape is lf.emptiness():
             continue
+        final_child_contribution_world = child_world_shape
+
+        # --- Apply Group-Level Array TO THIS CHILD if 'obj' is an arraying Group ---
+        if is_obj_an_arraying_group:
+            child_shape_in_obj_local_space = lf.emptiness()
+            try:
+                mat_l2w_obj = obj.matrix_world
+                X_cl, Y_cl, Z_cl = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+                x_expr_cl = mat_l2w_obj[0][0]*X_cl + mat_l2w_obj[0][1]*Y_cl + mat_l2w_obj[0][2]*Z_cl + mat_l2w_obj[0][3]
+                y_expr_cl = mat_l2w_obj[1][0]*X_cl + mat_l2w_obj[1][1]*Y_cl + mat_l2w_obj[1][2]*Z_cl + mat_l2w_obj[1][3]
+                z_expr_cl = mat_l2w_obj[2][0]*X_cl + mat_l2w_obj[2][1]*Y_cl + mat_l2w_obj[2][2]*Z_cl + mat_l2w_obj[2][3]
+                child_shape_in_obj_local_space = child_world_shape.remap(x_expr_cl, y_expr_cl, z_expr_cl)
+            except Exception as e:
+                print(f"FF ERROR (Group Array Child: World to Local for {child.name} under {obj_name}): {e}")
+                child_shape_in_obj_local_space = lf.emptiness()
+
+            if not (child_shape_in_obj_local_space is None or child_shape_in_obj_local_space is lf.emptiness()):
+                arrayed_child_local = child_shape_in_obj_local_space # Base for arraying this child
+
+                if parent_array_mode == 'LINEAR':
+                    active_x = obj.get("sdf_array_active_x", False)
+                    active_y = obj.get("sdf_array_active_y", False) and active_x
+                    active_z = obj.get("sdf_array_active_z", False) and active_y
+
+                    active_xs, active_ys, active_zs = obj.scale
+
+                    child_local_pos_in_obj = (obj.matrix_world.inverted() @ child.matrix_world).translation
+
+                    nx = max(1, int(obj.get("sdf_array_count_x", 2))) if active_x else 1
+                    ny = max(1, int(obj.get("sdf_array_count_y", 2))) if active_y else 1
+                    nz = max(1, int(obj.get("sdf_array_count_z", 2))) if active_z else 1
+
+                    dx_val = (child_local_pos_in_obj.x * 2.0 / (nx-1)) if (active_x and nx > 1) else 0
+                    dy_val = (child_local_pos_in_obj.y * 2.0 / (ny-1)) if (active_y and ny > 1) else 0
+                    dz_val = (child_local_pos_in_obj.z * 2.0 / (nz-1)) if (active_z and nz > 1) else 0
+
+                    default_small_delta = 1.0
+                    if active_x and nx > 1 and abs(dx_val) < 1e-5: dx_val = default_small_delta * (1 if child_local_pos_in_obj.x >=0 else -1) if abs(child_local_pos_in_obj.x) <1e-5 else dx_val
+                    if active_y and ny > 1 and abs(dy_val) < 1e-5: dy_val = default_small_delta * (1 if child_local_pos_in_obj.y >=0 else -1) if abs(child_local_pos_in_obj.y) <1e-5 else dy_val
+                    if active_z and nz > 1 and abs(dz_val) < 1e-5: dz_val = default_small_delta * (1 if child_local_pos_in_obj.z >=0 else -1) if abs(child_local_pos_in_obj.z) <1e-5 else dz_val
+
+                    array_applied_to_child = False
+                    try:
+                        if active_z:
+                            if nx > 1 or ny > 1 or nz > 1: arrayed_child_local = lf.array_xyz(child_shape_in_obj_local_space, nx, ny, nz, (dx_val, dy_val, dz_val)); array_applied_to_child=True
+                        elif active_y:
+                            if nx > 1 or ny > 1: arrayed_child_local = lf.array_xy(child_shape_in_obj_local_space, nx, ny, (dx_val, dy_val)); array_applied_to_child=True
+                        elif active_x:
+                            if nx > 1: arrayed_child_local = lf.array_x(child_shape_in_obj_local_space, nx, dx_val); array_applied_to_child=True
+                        
+                        if array_applied_to_child:
+                                center_shift_x = -(dx_val*(nx-1))
+                                center_shift_y = -(dy_val*(ny-1))
+                                center_shift_z = -(dz_val*(nz-1))
+                                if abs(center_shift_x)>1e-6 or abs(center_shift_y)>1e-6 or abs(center_shift_z)>1e-6:
+                                    X_arr_c,Y_arr_c,Z_arr_c=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+                                    arrayed_child_local=arrayed_child_local.remap(X_arr_c-center_shift_x,Y_arr_c-center_shift_y,Z_arr_c-center_shift_z)
+
+                    except Exception as e_arr_child_lin: print(f"FF ERROR (Group Child Linear Array for {child.name}): {e_arr_child_lin}")
+                
+                elif parent_array_mode == 'RADIAL':
+                    count_rad = max(1, int(obj.get("sdf_radial_count", 1)))
+                    center_prop_rad = obj.get("sdf_radial_center", (0.0,0.0))
+                    if count_rad > 1:
+                        try: center_xy_pivot_rad = (float(center_prop_rad[0]), float(center_prop_rad[1]))
+                        except: center_xy_pivot_rad = (0.0,0.0)
+                        try:
+                            arrayed_child_local = lf.array_polar_z(child_shape_in_obj_local_space, count_rad, center_xy_pivot_rad)
+                            if (abs(center_xy_pivot_rad[0])>1e-6 or abs(center_xy_pivot_rad[1])>1e-6):
+                                X_rad_c,Y_rad_c,Z_rad_c=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+                                arrayed_child_local=arrayed_child_local.remap(X_rad_c+center_xy_pivot_rad[0],Y_rad_c+center_xy_pivot_rad[1],Z_rad_c)
+                        except Exception as e_rad_arr_child: print(f"FF ERROR (Group Child Radial Array for {child.name}): {e_rad_arr_child}")
+                if not (arrayed_child_local is None or arrayed_child_local is lf.emptiness()):
+                    final_child_contribution_world = apply_blender_transform_to_sdf(arrayed_child_local, obj.matrix_world.inverted())
+                else:
+                    final_child_contribution_world = lf.emptiness() if _lf_imported_ok else None
+
+        processed_child_subtree_world = final_child_contribution_world
 
         if utils.is_sdf_source(child):
             use_morph = child.get("sdf_use_morph", False)
@@ -814,6 +899,74 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                             print(f"FieldForge ERROR (Group Twirling {obj_name}): {e_tw}")
                 
                 current_scene_shape = shape_after_twirl
+
+            # shape_to_operate_on_world = current_scene_shape 
+            
+            # # 1. Transform the combined children's shape from World to Group's Local Space
+            # shape_in_group_local_space = lf.emptiness() if _lf_imported_ok else None
+            # try:
+            #     mat_l2w_group = obj.matrix_world # Group's local to world matrix
+            #     X_gl, Y_gl, Z_gl = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+            #     # Remap args for transforming world shape to local: P_world = M_l2w * P_local => P_local = M_l2w_inv * P_world
+            #     # So, for shape_in_group_local_space(P_local) = shape_to_operate_on_world(M_l2w_group * P_local)
+            #     x_expr_gl = mat_l2w_group[0][0]*X_gl + mat_l2w_group[0][1]*Y_gl + mat_l2w_group[0][2]*Z_gl + mat_l2w_group[0][3]
+            #     y_expr_gl = mat_l2w_group[1][0]*X_gl + mat_l2w_group[1][1]*Y_gl + mat_l2w_group[1][2]*Z_gl + mat_l2w_group[1][3]
+            #     z_expr_gl = mat_l2w_group[2][0]*X_gl + mat_l2w_group[2][1]*Y_gl + mat_l2w_group[2][2]*Z_gl + mat_l2w_group[2][3]
+            #     shape_in_group_local_space = shape_to_operate_on_world.remap(x_expr_gl, y_expr_gl, z_expr_gl)
+            # except Exception as e: # pragma: no cover
+            #     print(f"FieldForge ERROR (Group Ops: World to Local for {obj_name}): {e}")
+            #     shape_in_group_local_space = lf.emptiness() # Fallback
+            
+            # array_mode = obj.get("sdf_main_array_mode", 'NONE')
+
+            # shape_after_group_array_local = shape_in_group_local_space # Start with non-arrayed local shape
+
+            # if array_mode != 'NONE':
+            #     center_array_on_group_origin = obj.get("sdf_array_center_on_origin", True)
+            #     # Linear Array
+            #     if array_mode == 'LINEAR':
+            #         # ... (get linear array params: active_x/y/z, nx/y/z, dx/y/z_val from 'obj') ...
+            #         active_x=obj.get("sdf_array_active_x",False); nx=max(1,int(obj.get("sdf_array_count_x",2))) if active_x else 1; dx_val=float(obj.get("sdf_array_delta_x",1)) if active_x else 0
+            #         active_y=obj.get("sdf_array_active_y",False) and active_x; ny=max(1,int(obj.get("sdf_array_count_y",2))) if active_y else 1; dy_val=float(obj.get("sdf_array_delta_y",1)) if active_y else 0
+            #         active_z=obj.get("sdf_array_active_z",False) and active_y; nz=max(1,int(obj.get("sdf_array_count_z",2))) if active_z else 1; dz_val=float(obj.get("sdf_array_delta_z",1)) if active_z else 0
+            #         array_applied_group = False
+            #         try:
+            #             if active_z:
+            #                 if nx>1 or ny>1 or nz>1: shape_after_group_array_local=lf.array_xyz(shape_in_group_local_space,nx,ny,nz,(dx_val,dy_val,dz_val)); array_applied_group=True
+            #             elif active_y:
+            #                 if nx>1 or ny>1: shape_after_group_array_local=lf.array_xy(shape_in_group_local_space,nx,ny,(dx_val,dy_val)); array_applied_group=True
+            #             elif active_x:
+            #                 if nx>1: shape_after_group_array_local=lf.array_x(shape_in_group_local_space,nx,dx_val); array_applied_group=True
+                        
+            #             if array_applied_group and center_array_on_group_origin:
+            #                 # ... (centering logic for linear array - same as for sources, but on shape_after_group_array_local) ...
+            #                 total_offset_x=(nx-1)*dx_val if active_x and nx>1 else 0; total_offset_y=(ny-1)*dy_val if active_y and ny>1 else 0; total_offset_z=(nz-1)*dz_val if active_z and nz>1 else 0
+            #                 center_shift_x=-total_offset_x/2.0; center_shift_y=-total_offset_y/2.0; center_shift_z=-total_offset_z/2.0
+            #                 if abs(center_shift_x)>1e-6 or abs(center_shift_y)>1e-6 or abs(center_shift_z)>1e-6:
+            #                     X_arr,Y_arr,Z_arr=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+            #                     shape_after_group_array_local=shape_after_group_array_local.remap(X_arr-center_shift_x,Y_arr-center_shift_y,Z_arr-center_shift_z)
+            #         except Exception as e_arr_group: print(f"FF ERROR (Group Linear Array for {obj_name}): {e_arr_group}") # pragma: no cover
+                
+            #     # Radial Array
+            #     elif array_mode == 'RADIAL':
+            #         # ... (get radial array params: count, center_prop from 'obj') ...
+            #         count_rad=max(1,int(obj.get("sdf_radial_count",1))); center_prop_rad=obj.get("sdf_radial_center",(0.0,0.0))
+            #         if count_rad > 1:
+            #             try: center_xy_pivot_rad=(float(center_prop_rad[0]),float(center_prop_rad[1]))
+            #             except: center_xy_pivot_rad=(0.0,0.0) # pragma: no cover
+            #             try:
+            #                 shape_after_group_array_local=lf.array_polar_z(shape_in_group_local_space,count_rad,center_xy_pivot_rad)
+            #                 if center_array_on_group_origin and (abs(center_xy_pivot_rad[0])>1e-6 or abs(center_xy_pivot_rad[1])>1e-6):
+            #                     # Shift result back if pivot was not (0,0) but we want overall array centered
+            #                     X_rad,Y_rad,Z_rad=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+            #                     shape_after_group_array_local=shape_after_group_array_local.remap(X_rad+center_xy_pivot_rad[0],Y_rad+center_xy_pivot_rad[1],Z_rad)
+            #             except Exception as e_rad_arr_group: print(f"FF ERROR (Group Radial Array for {obj_name}): {e_rad_arr_group}") # pragma: no cover
+            
+            # # This shape_after_group_array_local is now the base for other local group ops
+            # shape_in_group_local_space = shape_after_group_array_local
+            
+            # current_scene_shape = shape_in_group_local_space
+
 
     if current_scene_shape is None and _lf_imported_ok:
         return lf.emptiness()

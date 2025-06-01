@@ -312,6 +312,61 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     row_twirl_params.prop(obj, '["sdf_group_twirl_amount"]', text="Amount") # Consider subtype='ANGLE' if you want degrees display
     row_twirl_params.prop(obj, '["sdf_group_twirl_radius"]', text="Radius")
 
+    # --- Array Modifier for Group ---
+    array_label_row = layout.row(align=True)
+    array_label_row.label(text="Array Modifier (Group Content):")
+    
+    current_main_array_mode = obj.get("sdf_main_array_mode", 'NONE')
+    array_mode_buttons_row = layout.row(align=True)
+    op_array_none = array_mode_buttons_row.operator(OBJECT_OT_fieldforge_set_main_array_mode.bl_idname, text="None", depress=(current_main_array_mode == 'NONE'))
+    op_array_none.main_mode = 'NONE'
+    op_array_linear = array_mode_buttons_row.operator(OBJECT_OT_fieldforge_set_main_array_mode.bl_idname, text="Linear", depress=(current_main_array_mode == 'LINEAR'))
+    op_array_linear.main_mode = 'LINEAR'
+    op_array_radial = array_mode_buttons_row.operator(OBJECT_OT_fieldforge_set_main_array_mode.bl_idname, text="Radial", depress=(current_main_array_mode == 'RADIAL'))
+    op_array_radial.main_mode = 'RADIAL'
+    
+    layout.separator()
+
+    if current_main_array_mode == 'LINEAR':
+        ax_prop = "sdf_array_active_x"; dx_prop = "sdf_array_delta_x"; cx_prop = "sdf_array_count_x"
+        is_ax_active = obj.get(ax_prop, False)
+        linear_x_row = layout.row(align=True)
+        op_toggle_x = linear_x_row.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="X", depress=is_ax_active)
+        op_toggle_x.axis = 'X'
+        linear_x_params_sub_row = linear_x_row.row(align=True)
+        linear_x_params_sub_row.active = is_ax_active
+        linear_x_params_sub_row.prop(obj, f'["{dx_prop}"]', text="Delta")
+        linear_x_params_sub_row.prop(obj, f'["{cx_prop}"]', text="Count")
+
+        ay_prop = "sdf_array_active_y"; dy_prop = "sdf_array_delta_y"; cy_prop = "sdf_array_count_y"
+        is_ay_active = obj.get(ay_prop, False)
+        linear_y_row = layout.row(align=True)
+        linear_y_row.active = is_ax_active
+        op_toggle_y = linear_y_row.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="Y", depress=is_ay_active)
+        op_toggle_y.axis = 'Y'
+        linear_y_params_sub_row = linear_y_row.row(align=True)
+        linear_y_params_sub_row.active = is_ay_active
+        linear_y_params_sub_row.prop(obj, f'["{dy_prop}"]', text="Delta")
+        linear_y_params_sub_row.prop(obj, f'["{cy_prop}"]', text="Count")
+
+        az_prop = "sdf_array_active_z"; dz_prop = "sdf_array_delta_z"; cz_prop = "sdf_array_count_z"
+        is_az_active = obj.get(az_prop, False)
+        linear_z_row = layout.row(align=True)
+        linear_z_row.active = is_ay_active
+        op_toggle_z = linear_z_row.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="Z", depress=is_az_active)
+        op_toggle_z.axis = 'Z'
+        linear_z_params_sub_row = linear_z_row.row(align=True)
+        linear_z_params_sub_row.active = is_az_active
+        linear_z_params_sub_row.prop(obj, f'["{dz_prop}"]', text="Delta")
+        linear_z_params_sub_row.prop(obj, f'["{cz_prop}"]', text="Count")
+
+    elif current_main_array_mode == 'RADIAL':
+        radial_count_row = layout.row(align=True)
+        radial_count_row.prop(obj, '["sdf_radial_count"]', text="Count")
+        
+        radial_center_row = layout.row(align=True)
+        radial_center_row.prop(obj, '["sdf_radial_center"]', text="Pivot Offset (XY)")
+
 def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Source object properties. """
     obj = context.object
