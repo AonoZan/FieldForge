@@ -66,7 +66,7 @@ DEFAULT_SETTINGS = {
     "sdf_create_result_object": True, # Allow auto-creation of the result mesh object if it's missing during an update
 
     "sdf_discard_mesh_on_save": True, # Don't save generated mesh by default
-    "sdf_result_smooth_shade": True,
+    "sdf_result_auto_smooth_angle": 44.9,
     "sdf_result_material_name": "",
 }
 

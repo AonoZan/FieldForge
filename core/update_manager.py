@@ -6,6 +6,7 @@ and the Blender dependency graph handler.
 
 import bpy
 import time
+import math
 from mathutils import Matrix, Vector
 
 # Use relative imports assuming this file is in FieldForge/core/
@@ -382,13 +383,84 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
                     mesh_update_successful = True # Success: empty result applied correctly
                 if mesh_update_successful and result_obj.data and hasattr(result_obj.data, 'polygons'):
                     try:
-                        smooth_shade_setting = sdf_settings_from_bounds.get("sdf_result_smooth_shade", True) # Get from trigger_state
                         if len(result_obj.data.polygons) > 0: # Only if there are polygons
                             for poly in result_obj.data.polygons:
-                                poly.use_smooth = smooth_shade_setting
+                                poly.use_smooth = True
                             result_obj.data.update() # Update mesh after changing polygon smooth flags
                     except Exception as e_smooth:
                         print(f"FieldForge WARN: Could not apply smooth shading to {result_name}: {e_smooth}")
+                
+                # --- Apply Smooth Shading & Auto Smooth Angle via Modifier ---
+                if mesh_update_successful and result_obj and result_obj.type == 'MESH' and result_obj.data:
+                    mesh_data_block = result_obj.data
+                    addon_modifier_name = "FieldForge_Smooth_By_Angle"
+                    angle_input_identifier = "Input_1" 
+
+                    try:
+                        if len(mesh_data_block.polygons) > 0:
+                            for poly in mesh_data_block.polygons:
+                                poly.use_smooth = True
+
+                        auto_smooth_angle_deg = sdf_settings_from_bounds.get(
+                            "sdf_result_auto_smooth_angle", 
+                            constants.DEFAULT_SETTINGS["sdf_result_auto_smooth_angle"]
+                        )
+                        auto_smooth_angle_deg = float(auto_smooth_angle_deg)
+                        auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
+                        existing_modifier = result_obj.modifiers.get(addon_modifier_name)
+                        
+                        if existing_modifier and existing_modifier.type == 'NODES':
+                            try:
+                                if angle_input_identifier in existing_modifier:
+                                    if abs(existing_modifier[angle_input_identifier] - auto_smooth_angle_rad) > 1e-5:
+                                        existing_modifier[angle_input_identifier] = auto_smooth_angle_rad
+                                else:
+                                    print(f"FieldForge WARN: Input '{angle_input_identifier}' not found on existing modifier '{addon_modifier_name}' for {result_name}. Recreating.")
+                                    bpy.ops.object.modifier_remove({'object': result_obj}, modifier=existing_modifier.name)
+                                    existing_modifier = None
+                            except (KeyError, TypeError, SystemError) as e_mod_update:
+                                print(f"FieldForge WARN: Failed to update '{angle_input_identifier}' on '{addon_modifier_name}' for {result_name}. Recreating. Error: {e_mod_update}")
+                                bpy.ops.object.modifier_remove({'object': result_obj}, modifier=existing_modifier.name)
+                                existing_modifier = None 
+
+                        if not existing_modifier:
+                            current_active = context.view_layer.objects.active
+                            current_selected_names = [o.name for o in context.selected_objects]
+                            bpy.ops.object.select_all(action='DESELECT')
+                            result_obj.select_set(True); context.view_layer.objects.active = result_obj
+                            try:
+                                bpy.ops.object.modifier_add_node_group(
+                                    asset_library_type='ESSENTIALS',
+                                    asset_library_identifier="Essentials", 
+                                    relative_asset_identifier="geometry_nodes/smooth_by_angle.blend/NodeTree/Smooth by Angle"
+                                )
+                                new_modifier = result_obj.modifiers[-1]
+                                new_modifier.name = addon_modifier_name
+                                if angle_input_identifier in new_modifier:
+                                    new_modifier[angle_input_identifier] = auto_smooth_angle_rad
+                                else:
+                                    print(f"FieldForge ERROR: Newly added 'Smooth by Angle' for {result_name} no input '{angle_input_identifier}'.")
+                            except RuntimeError as e_mod_add:
+                                print(f"FieldForge ERROR: Failed to add 'Smooth by Angle' modifier to {result_name}: {e_mod_add}")
+                            finally:
+                                if context.view_layer.objects.active == result_obj: result_obj.select_set(False)
+                                for name in current_selected_names:
+                                    obj_to_reselect = context.scene.objects.get(name)
+                                    if obj_to_reselect:
+                                        try: obj_to_reselect.select_set(True)
+                                        except ReferenceError: pass 
+                                try: 
+                                    if current_active and current_active.name in context.scene.objects : 
+                                        context.view_layer.objects.active = current_active
+                                    elif context.selected_objects : 
+                                        context.view_layer.objects.active = context.selected_objects[0]
+                                except ReferenceError: pass 
+
+                        mesh_data_block.update()
+
+                    except Exception as e_smooth_mod:
+                        print(f"FieldForge WARN: Broader error applying smooth shading/modifier to {result_name}: {e_smooth_mod}")
+
                 if mesh_update_successful and result_obj: # Ensure result_obj exists
                     try:
                         mat_name_to_assign = sdf_settings_from_bounds.get("sdf_result_material_name", "")

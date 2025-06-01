@@ -73,7 +73,11 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     col_options.prop(obj, '["sdf_show_source_empties"]', text="Show Visuals")
     col_options.prop(obj, '["sdf_create_result_object"]', text="Recreate Mesh if Missing")
     col_options.prop(obj, '["sdf_discard_mesh_on_save"]', text="Discard Mesh on Save")
-    col_options.prop(obj, '["sdf_result_smooth_shade"]', text="Smooth Shade Result")
+
+    # Auto Smooth Angle setting
+    row_smooth_angle = layout.row(align=True)
+    row_smooth_angle.label(text="Smooth Angle:")
+    row_smooth_angle.prop(obj, '["sdf_result_auto_smooth_angle"]', text="")
 
 def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Group object properties. """
