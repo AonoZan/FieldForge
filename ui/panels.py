@@ -17,7 +17,6 @@ from .operators import (
     OBJECT_OT_fieldforge_set_main_array_mode,
     OBJECT_OT_fieldforge_set_csg_mode,
     OBJECT_OT_fieldforge_reorder_source,
-    OBJECT_OT_fieldforge_toggle_group_reflection,
     OBJECT_OT_fieldforge_toggle_group_symmetry,
     OBJECT_OT_fieldforge_toggle_group_taper_z,
     OBJECT_OT_fieldforge_toggle_group_shear_x_by_y,
@@ -132,37 +131,6 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     # --- Child Object Blending ---
     child_blend_prop_row = layout.row(align=True)
     child_blend_prop_row.prop(obj, '["sdf_child_blend_factor"]', text="Blend Factor")
-
-    layout.separator() # Added separator
-
-    # --- Reflection Controls ---
-    row_reflect_label = layout.row()
-    row_reflect_label.label(text="Reflection (Local Axes):")
-
-    row_reflect_buttons = layout.row(align=True)
-    # X Reflection
-    op_reflect_x = row_reflect_buttons.operator(
-        OBJECT_OT_fieldforge_toggle_group_reflection.bl_idname,
-        text="X",
-        depress=obj.get("sdf_group_reflect_x", False)
-    )
-    op_reflect_x.axis = 'X'
-
-    # Y Reflection
-    op_reflect_y = row_reflect_buttons.operator(
-        OBJECT_OT_fieldforge_toggle_group_reflection.bl_idname,
-        text="Y",
-        depress=obj.get("sdf_group_reflect_y", False)
-    )
-    op_reflect_y.axis = 'Y'
-
-    # Z Reflection
-    op_reflect_z = row_reflect_buttons.operator(
-        OBJECT_OT_fieldforge_toggle_group_reflection.bl_idname,
-        text="Z",
-        depress=obj.get("sdf_group_reflect_z", False)
-    )
-    op_reflect_z.axis = 'Z'
 
     layout.separator()
 

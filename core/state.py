@@ -131,9 +131,6 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
             elif utils.is_sdf_group(actual_child_obj) and is_visible:
                 props_to_track_group = {
                     'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]),
-                    'sdf_group_reflect_x': actual_child_obj.get("sdf_group_reflect_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_reflect_x"]),
-                    'sdf_group_reflect_y': actual_child_obj.get("sdf_group_reflect_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_reflect_y"]),
-                    'sdf_group_reflect_z': actual_child_obj.get("sdf_group_reflect_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_reflect_z"]),
                     'sdf_group_symmetry_x': actual_child_obj.get("sdf_group_symmetry_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_x"]),
                     'sdf_group_symmetry_y': actual_child_obj.get("sdf_group_symmetry_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_y"]),
                     'sdf_group_symmetry_z': actual_child_obj.get("sdf_group_symmetry_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_z"]),

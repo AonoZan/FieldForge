@@ -617,44 +617,15 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, parent_provides_blend_factor)
     if obj_is_group:
         if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
-            reflect_x = obj.get("sdf_group_reflect_x", False)
-            reflect_y = obj.get("sdf_group_reflect_y", False)
-            reflect_z = obj.get("sdf_group_reflect_z", False)
-
-            if reflect_x or reflect_y or reflect_z:
-                
-                group_local_coords_shape = lf.emptiness() if _lf_imported_ok else None
-                
-                try:
-                    mat_l2w = obj.matrix_world
-                    X_arg, Y_arg, Z_arg = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
-
-                    x_expr_for_remap = mat_l2w[0][0] * X_arg + mat_l2w[0][1] * Y_arg + mat_l2w[0][2] * Z_arg + mat_l2w[0][3]
-                    y_expr_for_remap = mat_l2w[1][0] * X_arg + mat_l2w[1][1] * Y_arg + mat_l2w[1][2] * Z_arg + mat_l2w[1][3]
-                    z_expr_for_remap = mat_l2w[2][0] * X_arg + mat_l2w[2][1] * Y_arg + mat_l2w[2][2] * Z_arg + mat_l2w[2][3]
-                    
-                    group_local_coords_shape = current_scene_shape.remap(x_expr_for_remap, y_expr_for_remap, z_expr_for_remap)
-
-                except Exception as e:
-                    print(f"FieldForge ERROR (Group Reflect: World to Local for {obj_name}): {e}")
-
-                if not (group_local_coords_shape is None or group_local_coords_shape is lf.emptiness()):
-                    reflected_in_local_coords = group_local_coords_shape
-                    if reflect_x: reflected_in_local_coords = lf.reflect_x(reflected_in_local_coords)
-                    if reflect_y: reflected_in_local_coords = lf.reflect_y(reflected_in_local_coords)
-                    if reflect_z: reflected_in_local_coords = lf.reflect_z(reflected_in_local_coords)
-
-                    current_scene_shape = apply_blender_transform_to_sdf(reflected_in_local_coords, obj.matrix_world.inverted())
-
-            # --- Apply Group Symmetry (after reflection) ---
             if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
+                # --- Apply Group Symmetry ---
                 symmetry_x = obj.get("sdf_group_symmetry_x", False)
                 symmetry_y = obj.get("sdf_group_symmetry_y", False)
                 symmetry_z = obj.get("sdf_group_symmetry_z", False)
 
                 clamped_blend_symmetry = min(max(0.001, parent_provides_blend_factor), 1.0)
 
-                shape_after_symmetry = current_scene_shape # Start with (potentially) reflected shape
+                shape_after_symmetry = current_scene_shape
                 if symmetry_x or symmetry_y or symmetry_z:
                     group_local_coords_shape_for_sym = lf.emptiness() if _lf_imported_ok else None
                     try:
