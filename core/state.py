@@ -30,6 +30,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
         'scene_settings': {}, # Settings specific to this bounds object
         'bounds_matrix': bounds_obj.matrix_world.copy(),
         'source_objects': {}, # Dictionary: {obj_name: {matrix: ..., props: {...}}}
+        'canvas_objects': {},
         'group_objects': {}
     }
 
@@ -162,6 +163,20 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                 current_state['group_objects'][child_name] = group_obj_state
                 queue.append(actual_child_obj)
 
+            elif actual_child_obj.get(constants.SDF_CANVAS_MARKER, False) and is_visible:
+                props_to_track_canvas = {
+                    'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth", constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"]),
+                    'sdf_canvas_child_blend_factor': actual_child_obj.get("sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]),
+                    'sdf_csg_operation': actual_child_obj.get("sdf_csg_operation", constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"]),
+                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_child_blend_factor"]),
+                }
+                canvas_obj_state = {
+                    'matrix': actual_child_obj.matrix_world.copy(),
+                    'props': props_to_track_canvas
+                }
+                current_state['canvas_objects'][child_name] = canvas_obj_state
+                queue.append(actual_child_obj)
+
             # If it's not a source object but might have children (e.g., a regular Empty group node),
             # still add it to the queue to traverse further down, but only if it's visible.
             elif is_visible and actual_child_obj.children:
@@ -226,5 +241,19 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
             return True
         if not utils.compare_dicts(current_group_obj_state.get('props'), cached_group_obj_state.get('props')):
             return True
-            
+
+    current_canvas_names = set(current_state.get('canvas_objects', {}).keys())
+    cached_canvas_names = set(cached_state.get('canvas_objects', {}).keys())
+    if current_canvas_names != cached_canvas_names:
+        return True
+    current_canvases = current_state.get('canvas_objects', {})
+    cached_canvases = cached_state.get('canvas_objects', {})
+    for obj_name, current_canvas_obj_state in current_canvases.items():
+        cached_canvas_obj_state = cached_canvases.get(obj_name)
+        if not cached_canvas_obj_state: return True # Should be caught by key set check
+        if not utils.compare_matrices(current_canvas_obj_state.get('matrix'), cached_canvas_obj_state.get('matrix')):
+            return True
+        if not utils.compare_dicts(current_canvas_obj_state.get('props'), cached_canvas_obj_state.get('props')):
+            return True
+
     return False

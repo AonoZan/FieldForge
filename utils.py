@@ -48,6 +48,16 @@ def is_sdf_group(obj: bpy.types.Object) -> bool:
     """ Checks if an object is configured as an SDF Group Empty """
     return obj and obj.type == 'EMPTY' and obj.get(constants.SDF_GROUP_MARKER, False)
 
+def is_sdf_canvas(obj: bpy.types.Object) -> bool:
+    """ Checks if an object is configured as an SDF Canvas Empty """
+    return obj and obj.type == 'EMPTY' and obj.get(constants.SDF_CANVAS_MARKER, False)
+
+def is_valid_2d_loft_source(obj: bpy.types.Object) -> bool:
+    if not is_sdf_source(obj):
+        return False
+    sdf_type = obj.get("sdf_type", "")
+    return sdf_type in constants._2D_SHAPE_TYPES
+
 def is_valid_2d_loft_source(obj: bpy.types.Object) -> bool:
     """Checks if an object is an SDF source and is a 2D type eligible for lofting."""
     if not is_sdf_source(obj):

@@ -253,77 +253,144 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     context = bpy.context
     if not obj.visible_get(view_layer=context.view_layer):
         return lf.emptiness()
+    def get_sort_key_for_processing(child_obj_param):
+        order = child_obj_param.get("sdf_processing_order", float('inf'))
+        return (order, child_obj_param.name)
 
     obj_name = obj.name
     obj_is_sdf_source = utils.is_sdf_source(obj)
     obj_is_group = utils.is_sdf_group(obj)
+    obj_is_canvas = obj.get(constants.SDF_CANVAS_MARKER, False)
     current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+    sorted_canvas_children = []
 
-    if obj_is_sdf_source:
-        unit_shape_modified_by_own_ops = reconstruct_shape(obj)
-        
+    parent_is_canvas = False
+    if obj.parent and obj.parent.get(constants.SDF_CANVAS_MARKER, False):
+        parent_is_canvas = True
+
+    if obj_is_sdf_source and not obj_is_canvas:
         sdf_type = obj.get("sdf_type", "")
-        is_2d_shape_for_extrude = sdf_type in {"circle", "ring", "polygon", "text"}
-        if is_2d_shape_for_extrude and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-            depth = obj.get("sdf_extrusion_depth", constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"])
-            if float(depth) > 1e-5:
-                try: unit_shape_modified_by_own_ops = lf.extrude_z(unit_shape_modified_by_own_ops, 0, abs(float(depth)))
-                except Exception as e: print(f"FieldForge ERROR (extrude_z for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
+        if sdf_type in constants._2D_SHAPE_TYPES and parent_is_canvas:
+            current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+        else:
+            unit_shape_modified_by_own_ops = reconstruct_shape(obj)
+            sdf_type = obj.get("sdf_type", "")
+            is_2d_shape_for_extrude = sdf_type in constants._2D_SHAPE_TYPES
+            if is_2d_shape_for_extrude and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                depth = obj.get("sdf_extrusion_depth", constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"])
+                if float(depth) > 1e-5:
+                    try: unit_shape_modified_by_own_ops = lf.extrude_z(unit_shape_modified_by_own_ops, 0, abs(float(depth)))
+                    except Exception as e: print(f"FieldForge ERROR (extrude_z for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
 
-        if obj.get("sdf_use_shell", False) and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-            offset = float(obj.get("sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]))
-            if abs(offset) > 1e-5:
-                try:
-                    outer_surface = lf.offset(unit_shape_modified_by_own_ops, offset)
-                    if offset > 0: unit_shape_modified_by_own_ops = lf.difference(outer_surface, unit_shape_modified_by_own_ops)
-                    else: unit_shape_modified_by_own_ops = lf.difference(unit_shape_modified_by_own_ops, outer_surface)
-                except Exception as e: print(f"FieldForge ERROR (shell for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
-
-        array_mode = obj.get("sdf_main_array_mode", 'NONE')
-        center_on_origin = obj.get("sdf_array_center_on_origin", True)
-        if array_mode != 'NONE' and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-            current_shape_before_array = unit_shape_modified_by_own_ops
-            if array_mode == 'LINEAR':
-                active_x=obj.get("sdf_array_active_x",0); active_y=obj.get("sdf_array_active_y",0) and active_x; active_z=obj.get("sdf_array_active_z",0) and active_y
-                nx=max(1,int(obj.get("sdf_array_count_x",2))) if active_x else 1
-                ny=max(1,int(obj.get("sdf_array_count_y",2))) if active_y else 1
-                nz=max(1,int(obj.get("sdf_array_count_z",2))) if active_z else 1
-                dx_val=float(obj.get("sdf_array_delta_x",1)) if active_x else 0; dy_val=float(obj.get("sdf_array_delta_y",1)) if active_y else 0; dz_val=float(obj.get("sdf_array_delta_z",1)) if active_z else 0
-                array_applied=False
-                try:
-                    if active_z:
-                        if nx>1 or ny>1 or nz>1: unit_shape_modified_by_own_ops=lf.array_xyz(current_shape_before_array,nx,ny,nz,(dx_val,dy_val,dz_val)); array_applied=True
-                    elif active_y:
-                        if nx>1 or ny>1: unit_shape_modified_by_own_ops=lf.array_xy(current_shape_before_array,nx,ny,(dx_val,dy_val)); array_applied=True
-                    elif active_x:
-                        if nx>1: unit_shape_modified_by_own_ops=lf.array_x(current_shape_before_array,nx,dx_val); array_applied=True
-                    if array_applied and center_on_origin:
-                        total_offset_x=(nx-1)*dx_val if active_x and nx>1 else 0; total_offset_y=(ny-1)*dy_val if active_y and ny>1 else 0; total_offset_z=(nz-1)*dz_val if active_z and nz>1 else 0
-                        center_shift_x=-total_offset_x/2.0; center_shift_y=-total_offset_y/2.0; center_shift_z=-total_offset_z/2.0
-                        if abs(center_shift_x)>1e-6 or abs(center_shift_y)>1e-6 or abs(center_shift_z)>1e-6:
-                            if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-                                X,Y,Z=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
-                                unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X-center_shift_x,Y-center_shift_y,Z-center_shift_z)
-                except Exception as e: print(f"FieldForge ERROR (Linear Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
-            elif array_mode == 'RADIAL':
-                count=max(1,int(obj.get("sdf_radial_count",1))); center_prop=obj.get("sdf_radial_center",(0.0,0.0))
-                if count > 1:
-                    try: center_xy_pivot=(float(center_prop[0]),float(center_prop[1]))
-                    except: center_xy_pivot=(0.0,0.0); print(f"FieldForge WARN: Invalid radial center on {obj_name}, using (0,0).")
+            if obj.get("sdf_use_shell", False) and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                offset = float(obj.get("sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]))
+                if abs(offset) > 1e-5:
                     try:
-                        unit_shape_modified_by_own_ops=lf.array_polar_z(current_shape_before_array,count,center_xy_pivot)
-                        if center_on_origin and (abs(center_xy_pivot[0])>1e-6 or abs(center_xy_pivot[1])>1e-6):
-                            if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-                                X,Y,Z=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
-                                unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X+center_xy_pivot[0],Y+center_xy_pivot[1],Z)
-                    except Exception as e: print(f"FieldForge ERROR (Radial Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
+                        outer_surface = lf.offset(unit_shape_modified_by_own_ops, offset)
+                        if offset > 0: unit_shape_modified_by_own_ops = lf.difference(outer_surface, unit_shape_modified_by_own_ops)
+                        else: unit_shape_modified_by_own_ops = lf.difference(unit_shape_modified_by_own_ops, outer_surface)
+                    except Exception as e: print(f"FieldForge ERROR (shell for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
 
-        if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-            try:
-                current_scene_shape = apply_blender_transform_to_sdf(unit_shape_modified_by_own_ops, obj.matrix_world.inverted())
-            except Exception as e:
-                print(f"FieldForge ERROR (transforming self for {obj_name}): {e}")
+            array_mode = obj.get("sdf_main_array_mode", 'NONE')
+            center_on_origin = obj.get("sdf_array_center_on_origin", True)
+            if array_mode != 'NONE' and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                current_shape_before_array = unit_shape_modified_by_own_ops
+                if array_mode == 'LINEAR':
+                    active_x=obj.get("sdf_array_active_x",0); active_y=obj.get("sdf_array_active_y",0) and active_x; active_z=obj.get("sdf_array_active_z",0) and active_y
+                    nx=max(1,int(obj.get("sdf_array_count_x",2))) if active_x else 1
+                    ny=max(1,int(obj.get("sdf_array_count_y",2))) if active_y else 1
+                    nz=max(1,int(obj.get("sdf_array_count_z",2))) if active_z else 1
+                    dx_val=float(obj.get("sdf_array_delta_x",1)) if active_x else 0; dy_val=float(obj.get("sdf_array_delta_y",1)) if active_y else 0; dz_val=float(obj.get("sdf_array_delta_z",1)) if active_z else 0
+                    array_applied=False
+                    try:
+                        if active_z:
+                            if nx>1 or ny>1 or nz>1: unit_shape_modified_by_own_ops=lf.array_xyz(current_shape_before_array,nx,ny,nz,(dx_val,dy_val,dz_val)); array_applied=True
+                        elif active_y:
+                            if nx>1 or ny>1: unit_shape_modified_by_own_ops=lf.array_xy(current_shape_before_array,nx,ny,(dx_val,dy_val)); array_applied=True
+                        elif active_x:
+                            if nx>1: unit_shape_modified_by_own_ops=lf.array_x(current_shape_before_array,nx,dx_val); array_applied=True
+                        if array_applied and center_on_origin:
+                            total_offset_x=(nx-1)*dx_val if active_x and nx>1 else 0; total_offset_y=(ny-1)*dy_val if active_y and ny>1 else 0; total_offset_z=(nz-1)*dz_val if active_z and nz>1 else 0
+                            center_shift_x=-total_offset_x/2.0; center_shift_y=-total_offset_y/2.0; center_shift_z=-total_offset_z/2.0
+                            if abs(center_shift_x)>1e-6 or abs(center_shift_y)>1e-6 or abs(center_shift_z)>1e-6:
+                                if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                                    X,Y,Z=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+                                    unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X-center_shift_x,Y-center_shift_y,Z-center_shift_z)
+                    except Exception as e: print(f"FieldForge ERROR (Linear Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
+                elif array_mode == 'RADIAL':
+                    count=max(1,int(obj.get("sdf_radial_count",1))); center_prop=obj.get("sdf_radial_center",(0.0,0.0))
+                    if count > 1:
+                        try: center_xy_pivot=(float(center_prop[0]),float(center_prop[1]))
+                        except: center_xy_pivot=(0.0,0.0); print(f"FieldForge WARN: Invalid radial center on {obj_name}, using (0,0).")
+                        try:
+                            unit_shape_modified_by_own_ops=lf.array_polar_z(current_shape_before_array,count,center_xy_pivot)
+                            if center_on_origin and (abs(center_xy_pivot[0])>1e-6 or abs(center_xy_pivot[1])>1e-6):
+                                if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                                    X,Y,Z=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+                                    unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X+center_xy_pivot[0],Y+center_xy_pivot[1],Z)
+                        except Exception as e: print(f"FieldForge ERROR (Radial Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
+
+            if not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                try:
+                    current_scene_shape = apply_blender_transform_to_sdf(unit_shape_modified_by_own_ops, obj.matrix_world.inverted())
+                except Exception as e:
+                    print(f"FieldForge ERROR (transforming self for {obj_name}): {e}")
+                    current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+    elif obj_is_canvas:
+        # --- Process Canvas Object ---
+        canvas_2d_shape_local = lf.emptiness() if _lf_imported_ok else None
+        canvas_extrusion_depth = float(obj.get("sdf_extrusion_depth", constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"]))
+        canvas_child_blend = float(obj.get("sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
+        canvas_children_2d = []
+        for child_candidate in obj.children:
+            if child_candidate and child_candidate.visible_get(view_layer=context.view_layer) and \
+               utils.is_sdf_source(child_candidate) and \
+               child_candidate.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                canvas_children_2d.append(child_candidate)
+
+        sorted_canvas_children = sorted(canvas_children_2d, key=get_sort_key_for_processing)
+
+        for canvas_child in sorted_canvas_children:
+            unit_2d_child_shape = reconstruct_shape(canvas_child)
+            if unit_2d_child_shape is None or unit_2d_child_shape is lf.emptiness():
+                continue
+
+            child_shape_in_its_own_local_space = unit_2d_child_shape
+
+            mat_child_relative_to_canvas = obj.matrix_world.inverted() @ canvas_child.matrix_world
+            mat_child_relative_to_canvas_inv = mat_child_relative_to_canvas.inverted()
+
+            X, Y, Z_dummy = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
+
+            x_in_child_local = mat_child_relative_to_canvas_inv[0][0] * X + mat_child_relative_to_canvas_inv[0][1] * Y + mat_child_relative_to_canvas_inv[0][3]
+            y_in_child_local = mat_child_relative_to_canvas_inv[1][0] * X + mat_child_relative_to_canvas_inv[1][1] * Y + mat_child_relative_to_canvas_inv[1][3]
+
+            child_2d_shape_in_canvas_local_xy = unit_2d_child_shape.remap(x_in_child_local, y_in_child_local, Z_dummy)
+
+            if child_2d_shape_in_canvas_local_xy is None or child_2d_shape_in_canvas_local_xy is lf.emptiness():
+                continue
+
+            child_csg_op = canvas_child.get("sdf_csg_operation", "UNION")
+            canvas_child_blend = float(canvas_child.get("sdf_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
+
+            if child_csg_op == "UNION":
+                canvas_2d_shape_local = combine_shapes(canvas_2d_shape_local, child_2d_shape_in_canvas_local_xy, canvas_child_blend)
+            elif child_csg_op == "DIFFERENCE":
+                canvas_2d_shape_local = lf.blend_difference(canvas_2d_shape_local, child_2d_shape_in_canvas_local_xy, canvas_child_blend)
+            elif child_csg_op == "INTERSECT":
+                canvas_2d_shape_local = custom_blended_intersection(canvas_2d_shape_local, child_2d_shape_in_canvas_local_xy, canvas_child_blend, lf)
+
+        if not (canvas_2d_shape_local is None or canvas_2d_shape_local is lf.emptiness()):
+            if canvas_extrusion_depth > 1e-5:
+                try:
+                    extruded_canvas_shape_local = lf.extrude_z(canvas_2d_shape_local, 0, canvas_extrusion_depth)
+                    current_scene_shape = apply_blender_transform_to_sdf(extruded_canvas_shape_local, obj.matrix_world.inverted())
+                except Exception as e:
+                    current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+            else:
                 current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+        else:
+            current_scene_shape = lf.emptiness() if _lf_imported_ok else None
     
     parent_provides_blend_factor = 0.0
     if obj_is_sdf_source:
@@ -337,11 +404,17 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             if utils.is_sdf_source(child_candidate) or \
                utils.is_sdf_group(child_candidate) or \
                (child_candidate.type == 'EMPTY' and not child_candidate.get(constants.SDF_BOUNDS_MARKER)):
+                if obj_is_canvas:
+                    is_processed_2d_child_of_canvas = False
+                    if utils.is_sdf_source(child_candidate) and child_candidate.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                        if child_candidate.parent == obj:
+                             is_processed_2d_child_of_canvas = True
+                    
+                    if is_processed_2d_child_of_canvas:
+                        continue
+                
                 children_to_process.append(child_candidate)
 
-    def get_sort_key_for_processing(child_obj_param):
-        order = child_obj_param.get("sdf_processing_order", float('inf'))
-        return (order, child_obj_param.name)
     sorted_children = sorted(children_to_process, key=get_sort_key_for_processing)
 
     for child in sorted_children:

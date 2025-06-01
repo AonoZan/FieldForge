@@ -221,6 +221,108 @@ class OBJECT_OT_add_sdf_group(Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
+class OBJECT_OT_add_sdf_canvas(Operator):
+    """Adds an Empty controller for 2D SDF shape composition and extrusion (Canvas)"""
+    bl_idname = "object.add_sdf_canvas"
+    bl_label = "Add SDF Canvas"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    initial_extrusion_depth: FloatProperty(
+        name="Extrusion Depth",
+        default=constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"],
+        min=0.001, subtype='DISTANCE', unit='LENGTH'
+    )
+    # Properties for how this Canvas (as an extruded 3D object) interacts with its parent
+    initial_parent_csg_operation: EnumProperty(
+        name="Parent CSG Operation",
+        description="CSG operation for this extruded Canvas with its parent",
+        items=[('UNION', "Union", "Add to parent shape"), ('DIFFERENCE', "Difference", "Subtract from parent"),
+               ('INTERSECT', "Intersect", "Intersect with parent"), ('NONE', "None", "No direct CSG")],
+        default=constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"]
+    )
+    initial_parent_child_blend: FloatProperty(
+        name="Parent Blend Factor",
+        description="Blend factor for this extruded Canvas with its parent",
+        default=constants.DEFAULT_CANVAS_SETTINGS["sdf_child_blend_factor"],
+        min=0.0, max=5.0, subtype='FACTOR'
+    )
+
+    @classmethod
+    def poll(cls, context):
+        active_obj = context.active_object
+        return utils.lf is not None and active_obj is not None and \
+               (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
+                active_obj.get(constants.SDF_GROUP_MARKER, False) or
+                utils.is_sdf_source(active_obj) or
+                active_obj.get(constants.SDF_CANVAS_MARKER, False) or
+                utils.find_parent_bounds(active_obj) is not None)
+
+
+    def make_unique_name(self, context, base_name):
+        if base_name not in context.scene.objects: return base_name
+        i = 1; unique_name = f"{base_name}.{i:03d}"
+        while unique_name in context.scene.objects: i += 1; unique_name = f"{base_name}.{i:03d}"
+        return unique_name
+
+    def execute(self, context):
+        target_parent = context.active_object
+        if target_parent.get(constants.SDF_CANVAS_MARKER, False):
+            self.report({'ERROR'}, "Cannot add a Canvas as a direct child of another Canvas.")
+            return {'CANCELLED'}
+
+        parent_bounds = utils.find_parent_bounds(target_parent)
+        if not parent_bounds and target_parent.get(constants.SDF_BOUNDS_MARKER, False):
+            parent_bounds = target_parent
+        
+        if not parent_bounds:
+            self.report({'ERROR'}, "Could not determine root SDF Bounds. Select valid parent.")
+            return {'CANCELLED'}
+
+        try:
+            with context.temp_override(window=context.window, area=context.area, region=context.region):
+                bpy.ops.object.empty_add(type='PLAIN_AXES', radius=0, location=context.scene.cursor.location, scale=(1.0, 1.0, 1.0))
+            obj = context.active_object
+            if not obj: raise RuntimeError("Failed to get active object after empty_add for Canvas.")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to add Canvas Empty: {e}")
+            return {'CANCELLED'}
+
+        obj.name = self.make_unique_name(context, "FF_Canvas")
+        obj.parent = target_parent
+        try: obj.matrix_parent_inverse = target_parent.matrix_world.inverted()
+        except ValueError: obj.matrix_parent_inverse.identity()
+
+        obj[constants.SDF_CANVAS_MARKER] = True
+        obj["sdf_extrusion_depth"] = self.initial_extrusion_depth
+        obj["sdf_canvas_child_blend_factor"] = constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]
+        obj["sdf_csg_operation"] = self.initial_parent_csg_operation
+        obj["sdf_child_blend_factor"] = self.initial_parent_child_blend
+        
+        obj.color = (0.8, 0.8, 0.2, 0.8)
+
+        obj["sdf_base_name"] = "Canvas"
+        obj["sdf_processing_order"] = 99998
+
+        show_visuals = utils.get_bounds_setting(parent_bounds, "sdf_show_source_empties")
+        obj.hide_viewport = not show_visuals
+        obj.hide_render = not show_visuals
+
+        context.view_layer.objects.active = obj
+        for sel_obj in context.selected_objects:
+            if sel_obj != obj: sel_obj.select_set(False)
+        obj.select_set(True)
+
+        if target_parent: utils.normalize_sibling_order_and_names(target_parent)
+        else: obj["sdf_processing_order"] = 0
+
+        self.report({'INFO'}, f"Added SDF Canvas: {obj.name} under {target_parent.name}")
+        ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"add_canvas")
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
 # --- Add Source Base Operator ---
 
 class AddSdfSourceBase(Operator): # Keep existing class definition
@@ -279,9 +381,24 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
             self.report({'ERROR'}, "Active object not part of a valid SDF hierarchy (cannot find root Bounds).")
             return {'CANCELLED'}
 
+        is_parent_canvas = target_parent.get(constants.SDF_CANVAS_MARKER, False)
+        is_2d_shape_being_added = sdf_type in constants._2D_SHAPE_TYPES
+
+        initial_location = context.scene.cursor.location
+        initial_rotation = (0, 0, 0)
+
+        if is_parent_canvas and is_2d_shape_being_added:
+            initial_location = target_parent.matrix_world.translation
+            initial_rotation = (0,0,0)
         try:
             with context.temp_override(window=context.window, area=context.area, region=context.region):
-                 bpy.ops.object.empty_add(type=display_type, radius=0, location=context.scene.cursor.location, scale=(1.0, 1.0, 1.0))
+                 bpy.ops.object.empty_add(
+                     type=display_type,
+                     radius=0,
+                     location=initial_location,
+                     rotation=target_parent.matrix_world.to_euler() if is_parent_canvas and is_2d_shape_being_added else (0,0,0),
+                     scale=(1.0, 1.0, 1.0)
+                 )
             obj = context.active_object
             if not obj: raise RuntimeError("Failed to get active object after empty_add.")
         except Exception as e:
@@ -1193,6 +1310,7 @@ def start_select_handler_via_timer(max_attempts=5, interval=0.2):
 classes_to_register = (
     OBJECT_OT_add_sdf_bounds,
     OBJECT_OT_add_sdf_group,
+    OBJECT_OT_add_sdf_canvas,
     OBJECT_OT_add_sdf_cube_source,
     OBJECT_OT_add_sdf_sphere_source,
     OBJECT_OT_add_sdf_cylinder_source,

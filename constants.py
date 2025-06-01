@@ -16,11 +16,14 @@ SDF_PROPERTY_MARKER = "is_sdf_object"
 
 # Marker for SDF Group Empty objects
 SDF_GROUP_MARKER = "is_sdf_group"
+SDF_CANVAS_MARKER = "is_sdf_canvas" 
 
 # Axis constants on Python side for C++
 AXIS_X_BIT = 1
 AXIS_Y_BIT = 2
 AXIS_Z_BIT = 4
+
+_2D_SHAPE_TYPES = {"circle", "ring", "polygon", "text"}
 
 # --- Caching and Comparison ---
 
@@ -65,6 +68,14 @@ DEFAULT_SETTINGS = {
     "sdf_discard_mesh_on_save": True, # Don't save generated mesh by default
     "sdf_result_smooth_shade": True,
     "sdf_result_material_name": "",
+}
+
+# Default values for Canvas Object properties ---
+DEFAULT_CANVAS_SETTINGS = {
+    "sdf_extrusion_depth": 0.1,
+    "sdf_canvas_child_blend_factor": 0.0,
+    "sdf_child_blend_factor": 0.0,
+    "sdf_csg_operation": "UNION",
 }
 
 # Default values for Group Object properties ---

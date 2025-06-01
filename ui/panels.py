@@ -24,6 +24,7 @@ from .operators import (
     OBJECT_OT_fieldforge_set_group_attract_repel_mode,
     OBJECT_OT_fieldforge_toggle_group_twirl,
     OBJECT_OT_fieldforge_set_group_twirl_axis,
+    OBJECT_OT_add_sdf_canvas,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -315,9 +316,17 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     obj = context.object
     sdf_type = obj.get("sdf_type", "Unknown")
 
+    parent_obj = obj.parent
+    parent_is_canvas = False
+    if parent_obj and parent_obj.get(constants.SDF_CANVAS_MARKER, False) and sdf_type in constants._2D_SHAPE_TYPES:
+        parent_is_canvas = True
+
     # --- SDF Type Label ---
     label_type_row = layout.row(align=True)
-    label_type_row.label(text=f"SDF Type: {sdf_type.capitalize()}")
+    if parent_is_canvas:
+        label_type_row.label(text="(Canvas Element)", icon='INFO')
+    else:
+        label_type_row.label(text=f"SDF Type: {sdf_type.capitalize()}")
 
     # --- Processing Order and Hierarchy Buttons ---
     if obj.parent:
@@ -367,17 +376,19 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
 
     layout.separator()
 
-    # --- Interaction Mode ---
+    ## --- Interaction Mode (CSG with parent/canvas) ---
     interact_label_row = layout.row(align=True)
-    interact_label_row.label(text="Interaction Mode:")
+    interact_label_row.label(text="CSG Operation with Parent/Canvas:") # Clarify label
 
     use_loft = obj.get("sdf_use_loft", False)
     use_morph = obj.get("sdf_use_morph", False) and not use_loft
     use_clearance = obj.get("sdf_use_clearance", False) and not use_loft and not use_morph
     csg_active = not use_loft and not use_morph and not use_clearance
     
+
+    # CSG buttons are ALWAYS active, as they define how this 2D shape interacts
+    # within the Canvas, or how this 3D shape (if not child of canvas) interacts with its 3D parent.
     row_csg_buttons = layout.row(align=True)
-    row_csg_buttons.active = csg_active
     current_csg_op = obj.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
 
     op_none = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='RADIOBUT_OFF', depress=(current_csg_op == 'NONE'))
@@ -390,12 +401,14 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     op_diff.csg_mode = 'DIFFERENCE'
 
 
-    # Loft Toggle - only for relevant 2D shapes (as per original addon logic)
-    if sdf_type in ["circle", "polygon", "ring", "text"]:
-        row_loft_toggle = layout.row(align=True)
+    col_3d_mods = layout.column()
+    col_3d_mods.active = not parent_is_canvas # Disable this whole column if parent is canvas
+
+    if sdf_type in constants._2D_SHAPE_TYPES: # Loft only for 2D types
+        row_loft_toggle = col_3d_mods.row(align=True)
         row_loft_toggle.prop(obj, '["sdf_use_loft"]', text="Use Loft", toggle=True, icon='IPO_LINEAR')
         
-    row_morph_controls = layout.row(align=True)
+    row_morph_controls = col_3d_mods.row(align=True)
     row_morph_controls.active = not use_loft
     row_morph_controls.prop(obj, '["sdf_use_morph"]', text="Morph", toggle=True, icon='MOD_SIMPLEDEFORM')
     morph_factor_sub_row = row_morph_controls.row(align=True)
@@ -409,9 +422,17 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     clearance_offset_sub_row.active = obj.get("sdf_use_clearance", False) and not use_loft and not use_morph
     clearance_offset_sub_row.prop(obj, '["sdf_clearance_offset"]', text="Offset")
 
-    if use_clearance and not use_loft and not use_morph:
-        row_clearance_keep_orig = layout.row(align=True)
+    if obj.get("sdf_use_clearance", False) and not obj.get("sdf_use_loft", False) and not obj.get("sdf_use_morph", False):
+        row_clearance_keep_orig = col_3d_mods.row(align=True) # Still under col_3d_mods
         row_clearance_keep_orig.prop(obj, '["sdf_clearance_keep_original"]', text="Keep Original Shape")
+
+    col_3d_mods.separator() # Separator within the 3D mods block
+
+    # Extrusion Depth (for the source itself, if it's 2D and NOT under a Canvas)
+    if sdf_type in constants._2D_SHAPE_TYPES: # Check if it's a type that *can* be extruded
+        extrude_row_source = col_3d_mods.row(align=True)
+        extrude_row_source.prop(obj, '["sdf_extrusion_depth"]', text="Self Extrusion Depth")
+        col_3d_mods.separator()
     
     layout.separator()
 
@@ -547,6 +568,54 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         array_center_origin_row = layout.row(align=True)
         array_center_origin_row.prop(obj, '["sdf_array_center_on_origin"]', text="Center on Origin")
 
+def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Context):
+    obj = context.object # Assumes active object is the Canvas
+
+    label_type_row = layout.row(align=True)
+    label_type_row.label(text="SDF Type: 2D Canvas")
+
+    if obj.parent: # Processing order for its position in the 3D hierarchy
+        # ... (Copy processing order UI from draw_sdf_group_settings or draw_sdf_source_info) ...
+        hier_row = layout.row(align=True)
+        current_order_num_raw = obj.get("sdf_processing_order", 0)
+        current_order_display_val = current_order_num_raw
+        try: current_order_display_val = int(current_order_num_raw / 10)
+        except (TypeError, ValueError): current_order_display_val = "N/A"
+        finally: hier_row.label(text=f"Processing Order (3D): {current_order_display_val}")
+        # ... (Up/Down buttons for reordering among its 3D siblings) ...
+        can_move_up = False; can_move_down = False; sdf_siblings = []
+        for child in obj.parent.children:
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child) or child.get(constants.SDF_CANVAS_MARKER)) and child.visible_get(view_layer=context.view_layer): sdf_siblings.append(child)
+        if len(sdf_siblings)>1:
+            def get_sort_key(c): return (c.get("sdf_processing_order",float('inf')),c.name)
+            sdf_siblings.sort(key=get_sort_key)
+            try: idx=sdf_siblings.index(obj);
+            except ValueError: pass
+            else:
+                if idx>0: can_move_up=True
+                if idx<len(sdf_siblings)-1: can_move_down=True
+        buttons_sub_row=hier_row.row(align=True); buttons_sub_row.alignment='RIGHT'
+        up_button_op_layout=buttons_sub_row.row(align=True); up_button_op_layout.active=can_move_up
+        op_up=up_button_op_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname,text=" ",icon='TRIA_UP'); op_up.direction='UP'
+        down_button_op_layout=buttons_sub_row.row(align=True); down_button_op_layout.active=can_move_down
+        op_down=down_button_op_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname,text=" ",icon='TRIA_DOWN'); op_down.direction='DOWN'
+
+
+    layout.separator()
+    layout.label(text="2D Composition:")
+    layout.prop(obj, '["sdf_canvas_child_blend_factor"]', text="2D Child Blend")
+    
+    layout.separator()
+    layout.label(text="3D Output:")
+    layout.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+
+    # CSG operation of this Canvas (as an extruded 3D object) with its parent
+    layout.label(text="Interaction with Parent (3D):")
+    row_csg_parent = layout.row(align=True)
+    # Simplified: direct prop editing for CSG for now, or use OBJECT_OT_fieldforge_set_csg_mode if it can target any object.
+    # For now, direct prop for simplicity, assuming "sdf_csg_operation" is the standard key.
+    row_csg_parent.prop(obj, '["sdf_csg_operation"]', text="CSG with Parent")
+    row_csg_parent.prop(obj, '["sdf_child_blend_factor"]', text="Blend with Parent")
 
 # --- Main Panel Class ---
 
@@ -576,6 +645,8 @@ class VIEW3D_PT_fieldforge_main(Panel):
             elif utils.is_sdf_group(obj): # Check for group
                 header_text = f"Group: {obj.name}"
                 icon = 'GROUP' # Or 'OUTLINER_OB_GROUP_INSTANCE'
+            elif obj.get(constants.SDF_CANVAS_MARKER, False):
+                header_text = f"Canvas: {obj.name}"; icon = 'OUTLINER_OB_SURFACE'
             elif utils.is_sdf_source(obj):
                 header_text = f"Source: {obj.name}"
                 icon = 'OBJECT_DATA' # Or more specific based on sdf_type if desired
@@ -601,6 +672,8 @@ class VIEW3D_PT_fieldforge_main(Panel):
             draw_sdf_bounds_settings(layout, context)
         elif utils.is_sdf_group(obj):
             draw_sdf_group_settings(layout, context)
+        elif obj.get(constants.SDF_CANVAS_MARKER, False):
+            draw_sdf_canvas_settings(layout, context)
         elif utils.is_sdf_source(obj):
             draw_sdf_source_info(layout, context)
         else:
