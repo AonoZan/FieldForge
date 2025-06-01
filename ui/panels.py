@@ -328,17 +328,16 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     layout.separator()
 
     if current_main_array_mode == 'LINEAR':
-        ax_prop = "sdf_array_active_x"; dx_prop = "sdf_array_delta_x"; cx_prop = "sdf_array_count_x"
+        ax_prop = "sdf_array_active_x"; cx_prop = "sdf_array_count_x"
         is_ax_active = obj.get(ax_prop, False)
         linear_x_row = layout.row(align=True)
         op_toggle_x = linear_x_row.operator(OBJECT_OT_fieldforge_toggle_array_axis.bl_idname, text="X", depress=is_ax_active)
         op_toggle_x.axis = 'X'
         linear_x_params_sub_row = linear_x_row.row(align=True)
         linear_x_params_sub_row.active = is_ax_active
-        linear_x_params_sub_row.prop(obj, f'["{dx_prop}"]', text="Delta")
         linear_x_params_sub_row.prop(obj, f'["{cx_prop}"]', text="Count")
 
-        ay_prop = "sdf_array_active_y"; dy_prop = "sdf_array_delta_y"; cy_prop = "sdf_array_count_y"
+        ay_prop = "sdf_array_active_y"; cy_prop = "sdf_array_count_y"
         is_ay_active = obj.get(ay_prop, False)
         linear_y_row = layout.row(align=True)
         linear_y_row.active = is_ax_active
@@ -346,10 +345,9 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         op_toggle_y.axis = 'Y'
         linear_y_params_sub_row = linear_y_row.row(align=True)
         linear_y_params_sub_row.active = is_ay_active
-        linear_y_params_sub_row.prop(obj, f'["{dy_prop}"]', text="Delta")
         linear_y_params_sub_row.prop(obj, f'["{cy_prop}"]', text="Count")
 
-        az_prop = "sdf_array_active_z"; dz_prop = "sdf_array_delta_z"; cz_prop = "sdf_array_count_z"
+        az_prop = "sdf_array_active_z"; cz_prop = "sdf_array_count_z"
         is_az_active = obj.get(az_prop, False)
         linear_z_row = layout.row(align=True)
         linear_z_row.active = is_ay_active
@@ -357,7 +355,6 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         op_toggle_z.axis = 'Z'
         linear_z_params_sub_row = linear_z_row.row(align=True)
         linear_z_params_sub_row.active = is_az_active
-        linear_z_params_sub_row.prop(obj, f'["{dz_prop}"]', text="Delta")
         linear_z_params_sub_row.prop(obj, f'["{cz_prop}"]', text="Count")
 
     elif current_main_array_mode == 'RADIAL':

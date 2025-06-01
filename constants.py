@@ -113,9 +113,6 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_array_count_x": 2,
     "sdf_array_count_y": 2,
     "sdf_array_count_z": 2,
-    "sdf_array_delta_x": 1.0,
-    "sdf_array_delta_y": 1.0,
-    "sdf_array_delta_z": 1.0,
     "sdf_radial_count": 6,
     "sdf_radial_center": (0.0, 0.0),
 }

@@ -162,9 +162,6 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_array_count_x': actual_child_obj.get("sdf_array_count_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_x"]),
                     'sdf_array_count_y': actual_child_obj.get("sdf_array_count_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_y"]),
                     'sdf_array_count_z': actual_child_obj.get("sdf_array_count_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_z"]),
-                    'sdf_array_delta_x': actual_child_obj.get("sdf_array_delta_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_delta_x"]),
-                    'sdf_array_delta_y': actual_child_obj.get("sdf_array_delta_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_delta_y"]),
-                    'sdf_array_delta_z': actual_child_obj.get("sdf_array_delta_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_delta_z"]),
                     'sdf_radial_count': actual_child_obj.get("sdf_radial_count", constants.DEFAULT_GROUP_SETTINGS["sdf_radial_count"]),
                     'sdf_radial_center': tuple(actual_child_obj.get("sdf_radial_center", constants.DEFAULT_GROUP_SETTINGS["sdf_radial_center"])),
                 }
