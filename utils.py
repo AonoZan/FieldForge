@@ -378,18 +378,18 @@ def get_base_name_from_sdf_object(obj: bpy.types.Object) -> str:
     parts_prefix = name_to_process.split("_", 1)
     if len(parts_prefix) > 1 and parts_prefix[0].isdigit() and len(parts_prefix[0]) == 3:
         if parts_prefix[1]:
-             if not parts_prefix[1] and is_sdf_group(obj):
-                 return "Group"
-             return parts_prefix[1]
-        elif is_sdf_group(obj):
-            return "Group"
+             name_to_process = parts_prefix[1]
+        elif is_sdf_group(obj): return "Group"
+        elif is_sdf_canvas(obj): return "Canvas"
 
-    if is_sdf_group(obj) and name_to_process.startswith("FF_Group"):
-        return "Group"
-    if is_sdf_group(obj) and (name_to_process == obj.name or name_to_process == ""):
-        return "Group"
+    if is_sdf_group(obj) and name_to_process.startswith("FF_Group"): return "Group"
+    if is_sdf_canvas(obj) and name_to_process.startswith("FF_Canvas"): return "Canvas"
 
-    return name_to_process
+    if not name_to_process or name_to_process == obj.name:
+        if is_sdf_group(obj): return "Group"
+        if obj.get(constants.SDF_CANVAS_MARKER, False): return "Canvas"
+
+    return name_to_process if name_to_process else "SDF_Item"
 
 
 def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
@@ -405,9 +405,23 @@ def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
     context = bpy.context
 
     sdf_children = []
+    parent_is_canvas = is_sdf_canvas(parent_obj)
+
     for child in parent_obj.children:
-        if child and (is_sdf_source(child) or is_sdf_group(child)) and \
-           child.visible_get(view_layer=context.view_layer):
+        if not (child and child.visible_get(view_layer=context.view_layer)):
+            continue
+
+        is_relevant_child_for_norm = False
+        if parent_is_canvas:
+            if is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                is_relevant_child_for_norm = True
+        else:
+            if is_sdf_source(child) or \
+               is_sdf_group(child) or \
+               is_sdf_canvas(child):
+                is_relevant_child_for_norm = True
+        
+        if is_relevant_child_for_norm:
             sdf_children.append(child)
 
     if not sdf_children:
@@ -419,39 +433,27 @@ def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
     sdf_children.sort(key=sort_key_for_normalization)
 
     temp_name_map = {}
-    for i, child_obj in enumerate(sdf_children):
-        original_name = child_obj.name
-        temp_name = f"_TEMP_FF_{uuid.uuid4().hex[:12]}"
-        try:
-            child_obj.name = temp_name
-            temp_name_map[temp_name] = child_obj
-        except Exception as e:
-            print(f"FieldForge WARN: Could not rename {original_name} to temp name {temp_name}: {e}")
-            temp_name_map[original_name] = child_obj
-
     final_renamed_children = []
     for i, original_sorted_child_ref in enumerate(sdf_children):
         child_obj_found = None
-        for temp_n, obj_ref in temp_name_map.items():
-            if obj_ref == original_sorted_child_ref:
+        for temp_n, obj_ref_map in temp_name_map.items():
+            if obj_ref_map == original_sorted_child_ref:
                 try:
                     child_obj_found = bpy.data.objects[temp_n]
-                    if child_obj_found != obj_ref:
-                        child_obj_found = None
                 except KeyError:
-                    pass
+                    child_obj_found = None
                 break
 
         if not child_obj_found:
             try:
                 current_name_of_original_ref = original_sorted_child_ref.name
                 child_obj_found = bpy.data.objects[current_name_of_original_ref]
-                if child_obj_found != original_sorted_child_ref:
-                    child_obj_found = None
             except (KeyError, ReferenceError):
                 print(f"FieldForge WARN: Object {original_sorted_child_ref} (or its name) seems to be gone before final rename.")
                 continue
-        
+
+        if child_obj_found != original_sorted_child_ref:
+                    child_obj_found = None
         if not child_obj_found:
              print(f"FieldForge WARN: Could not re-find object for final rename: {original_sorted_child_ref.name}")
              continue
@@ -466,6 +468,8 @@ def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
         base_name_to_use = child_obj_found.get("sdf_base_name", "SDF_Item")
         if is_sdf_group(child_obj_found) and base_name_to_use == "SDF_Item":
             base_name_to_use = "Group"
+        elif is_sdf_canvas(child_obj_found) and base_name_to_use == "SDF_Item":
+            base_name_to_use = "Canvas"
 
         new_name_candidate = f"{new_order:03d}_{base_name_to_use}"
         final_new_name = new_name_candidate

@@ -264,6 +264,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     current_scene_shape = lf.emptiness() if _lf_imported_ok else None
     sorted_canvas_children = []
 
+    use_revolve = False
+
     parent_is_canvas = False
     if obj.parent and obj.parent.get(constants.SDF_CANVAS_MARKER, False):
         parent_is_canvas = True
@@ -341,6 +343,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
         canvas_2d_shape_local = lf.emptiness() if _lf_imported_ok else None
         canvas_extrusion_depth = float(obj.get("sdf_extrusion_depth", constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"]))
         canvas_child_blend = float(obj.get("sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
+        use_revolve = obj.get("sdf_canvas_use_revolve", False)
         canvas_children_2d = []
         for child_candidate in obj.children:
             if child_candidate and child_candidate.visible_get(view_layer=context.view_layer) and \
@@ -381,14 +384,36 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 canvas_2d_shape_local = custom_blended_intersection(canvas_2d_shape_local, child_2d_shape_in_canvas_local_xy, canvas_child_blend, lf)
 
         if not (canvas_2d_shape_local is None or canvas_2d_shape_local is lf.emptiness()):
-            if canvas_extrusion_depth > 1e-5:
+            generated_3d_shape_local = lf.emptiness() if _lf_imported_ok else None
+
+            if use_revolve:
                 try:
-                    extruded_canvas_shape_local = lf.extrude_z(canvas_2d_shape_local, 0, canvas_extrusion_depth)
-                    current_scene_shape = apply_blender_transform_to_sdf(extruded_canvas_shape_local, obj.matrix_world.inverted())
+                    X_coord = libfive_shape_module.Shape.X()
+                    positive_x_half_space = X_coord
+
+                    profile_to_revolve = lf.intersection(canvas_2d_shape_local, positive_x_half_space)
+
+                    if not (profile_to_revolve is None or profile_to_revolve is lf.emptiness()):
+                        if hasattr(lf, 'revolve_y'):
+                            generated_3d_shape_local = lf.revolve_y(profile_to_revolve)
+                        else:
+                            print(f"FieldForge WARN: lf.revolve_y not found for Canvas {obj_name}. Skipping revolve.")
+                            generated_3d_shape_local = lf.emptiness()
+                    else:
+                        generated_3d_shape_local = lf.emptiness()
+
                 except Exception as e:
-                    current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+                    print(f"FieldForge ERROR (Canvas Revolve for {obj_name}): {e}")
+                    generated_3d_shape_local = lf.emptiness() if _lf_imported_ok else None
             else:
-                current_scene_shape = lf.emptiness() if _lf_imported_ok else None
+                if canvas_extrusion_depth > 1e-5:
+                    try:
+                        generated_3d_shape_local = lf.extrude_z(canvas_2d_shape_local, 0, canvas_extrusion_depth)
+                    except Exception as e:
+                        generated_3d_shape_local = lf.emptiness() if _lf_imported_ok else None
+
+            if not (generated_3d_shape_local is None or generated_3d_shape_local is lf.emptiness()):
+                current_scene_shape = apply_blender_transform_to_sdf(generated_3d_shape_local, obj.matrix_world.inverted())
         else:
             current_scene_shape = lf.emptiness() if _lf_imported_ok else None
     

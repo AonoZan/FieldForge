@@ -25,6 +25,7 @@ from .operators import (
     OBJECT_OT_fieldforge_toggle_group_twirl,
     OBJECT_OT_fieldforge_set_group_twirl_axis,
     OBJECT_OT_add_sdf_canvas,
+    OBJECT_OT_fieldforge_toggle_canvas_revolve,
 )
 
 # --- UI Drawing Helper Functions ---
@@ -97,7 +98,7 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         can_move_up = False; can_move_down = False
         sdf_siblings = []
         for child in obj.parent.children:
-            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child) or utils.is_sdf_canvas(child)) and \
                child.visible_get(view_layer=context.view_layer):
                 sdf_siblings.append(child)
         
@@ -331,34 +332,42 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     # --- Processing Order and Hierarchy Buttons ---
     if obj.parent:
         hier_row = layout.row(align=True)
-        
-        # Label for processing order
         current_order_num_raw = obj.get("sdf_processing_order", 0)
         current_order_display_val = current_order_num_raw
-        try:
-            current_order_display_val = int(current_order_num_raw / 10)
-        except (TypeError, ValueError):
-            current_order_display_val = "N/A"
-        finally:
-            hier_row.label(text=f"Processing Order: {current_order_display_val}")
-
-        # Determine if Up/Down buttons should be active
-        can_move_up = False
-        can_move_down = False
-        sdf_siblings = []
-        for child in obj.parent.children:
-            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
-               child.visible_get(view_layer=context.view_layer):
-                sdf_siblings.append(child)
         
-        if len(sdf_siblings) > 1:
-            def get_sort_key(c):
-                return (c.get("sdf_processing_order", float('inf')), c.name)
-            sdf_siblings.sort(key=get_sort_key)
+        order_label = "Processing Order (3D):"
+        if parent_is_canvas:
+            order_label = "Order in Canvas (2D):"
+        hier_row.label(text=f"{order_label} {current_order_display_val}")
+
+        can_move_up = False; can_move_down = False
+        sdf_siblings_for_reorder = []
+
+        for sibling_candidate in obj.parent.children: 
+            if not (sibling_candidate and sibling_candidate.visible_get(view_layer=context.view_layer)):
+                continue
+
+            is_relevant_sibling = False
+            if parent_is_canvas:
+                if utils.is_sdf_source(sibling_candidate) and \
+                sibling_candidate.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                    is_relevant_sibling = True
+            else:
+                if utils.is_sdf_source(sibling_candidate) or \
+                utils.is_sdf_group(sibling_candidate) or \
+                sibling_candidate.get(constants.SDF_CANVAS_MARKER, False):
+                    is_relevant_sibling = True
+            
+            if is_relevant_sibling:
+                sdf_siblings_for_reorder.append(sibling_candidate)
+        
+        if len(sdf_siblings_for_reorder) > 1:
+            def get_sort_key_panel(c): return (c.get("sdf_processing_order", float('inf')), c.name)
+            sdf_siblings_for_reorder.sort(key=get_sort_key_panel)
             try:
-                idx = sdf_siblings.index(obj)
+                idx = sdf_siblings_for_reorder.index(obj)
                 if idx > 0: can_move_up = True
-                if idx < len(sdf_siblings) - 1: can_move_down = True
+                if idx < len(sdf_siblings_for_reorder) - 1: can_move_down = True
             except ValueError: pass
 
         buttons_sub_row = hier_row.row(align=True)
@@ -574,18 +583,15 @@ def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     label_type_row = layout.row(align=True)
     label_type_row.label(text="SDF Type: 2D Canvas")
 
-    if obj.parent: # Processing order for its position in the 3D hierarchy
-        # ... (Copy processing order UI from draw_sdf_group_settings or draw_sdf_source_info) ...
+    if obj.parent: 
         hier_row = layout.row(align=True)
-        current_order_num_raw = obj.get("sdf_processing_order", 0)
-        current_order_display_val = current_order_num_raw
-        try: current_order_display_val = int(current_order_num_raw / 10)
-        except (TypeError, ValueError): current_order_display_val = "N/A"
+        current_order_num_raw = obj.get("sdf_processing_order",0); current_order_display_val = current_order_num_raw
+        try: current_order_display_val = int(current_order_num_raw/10)
+        except (TypeError,ValueError): current_order_display_val = "N/A"
         finally: hier_row.label(text=f"Processing Order (3D): {current_order_display_val}")
-        # ... (Up/Down buttons for reordering among its 3D siblings) ...
-        can_move_up = False; can_move_down = False; sdf_siblings = []
+        can_move_up=False; can_move_down=False; sdf_siblings=[]
         for child in obj.parent.children:
-            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child) or child.get(constants.SDF_CANVAS_MARKER)) and child.visible_get(view_layer=context.view_layer): sdf_siblings.append(child)
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child) or utils.is_sdf_canvas(child)) and child.visible_get(view_layer=context.view_layer): sdf_siblings.append(child)
         if len(sdf_siblings)>1:
             def get_sort_key(c): return (c.get("sdf_processing_order",float('inf')),c.name)
             sdf_siblings.sort(key=get_sort_key)
@@ -606,8 +612,36 @@ def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     layout.prop(obj, '["sdf_canvas_child_blend_factor"]', text="2D Child Blend")
     
     layout.separator()
+
     layout.label(text="3D Output:")
-    layout.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+    use_revolve = obj.get("sdf_canvas_use_revolve", False)
+
+    row_output_method = layout.row(align=True)
+
+    extrude_op_layout = row_output_method.row(align=True)
+    extrude_op_layout.active = use_revolve
+    op_extrude_toggle = extrude_op_layout.operator(
+        OBJECT_OT_fieldforge_toggle_canvas_revolve.bl_idname,
+        text="Extrude",
+        depress=not use_revolve
+    )
+    revolve_op_layout = row_output_method.row(align=True)
+    revolve_op_layout.active = not use_revolve
+    op_revolve_toggle = revolve_op_layout.operator(
+        OBJECT_OT_fieldforge_toggle_canvas_revolve.bl_idname,
+        text="Revolve (Y-axis)",
+        depress=use_revolve
+    )
+
+    extrude_depth_row = layout.row(align=True)
+    extrude_depth_row.active = not use_revolve
+    extrude_depth_row.prop(obj, '["sdf_extrusion_depth"]', text="Extrusion Depth")
+
+    if use_revolve:
+        revolve_params_row = layout.row(align=True)
+        revolve_params_row.active = use_revolve
+        revolve_params_row.label(text="Profile: Local Positive X")
+    layout.separator()
 
     # CSG operation of this Canvas (as an extruded 3D object) with its parent
     layout.label(text="Interaction with Parent (3D):")

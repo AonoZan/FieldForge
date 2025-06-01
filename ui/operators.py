@@ -717,9 +717,9 @@ class OBJECT_OT_fieldforge_set_csg_mode(Operator):
 
 # --- Reorder Operator ---
 class OBJECT_OT_fieldforge_reorder_source(Operator):
-    """Moves an SDF source object up or down in its parent's processing order"""
+    """Moves an SDF item (Source, Group, or Canvas) up or down in its parent's processing order"""
     bl_idname = "object.fieldforge_reorder_source"
-    bl_label = "Reorder SDF Source"
+    bl_label = "Reorder SDF Item"
     bl_options = {'REGISTER', 'UNDO'}
 
     direction: EnumProperty(
@@ -736,15 +736,15 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
         obj = context.active_object
         if not obj or not obj.parent:
             return False
-        if not (utils.is_sdf_source(obj) or utils.is_sdf_group(obj)):
+        if not (utils.is_sdf_source(obj) or utils.is_sdf_group(obj) or utils.is_sdf_canvas(obj)):
             return False
         return True
 
     def execute(self, context):
         obj_to_move = context.active_object
 
-        if not obj_to_move or not (utils.is_sdf_source(obj_to_move) or utils.is_sdf_group(obj_to_move)):
-            self.report({'WARNING'}, "Active object is not a valid SDF source or group.")
+        if not obj_to_move or not (utils.is_sdf_source(obj_to_move) or utils.is_sdf_group(obj_to_move) or utils.is_sdf_canvas(obj_to_move)):
+            self.report({'WARNING'}, "Active object is not a valid SDF Source, Group, or Canvas.")
             return {'CANCELLED'}
 
         parent_obj = obj_to_move.parent
@@ -754,7 +754,7 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
 
         sdf_siblings = []
         for child in parent_obj.children:
-            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child)) and \
+            if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child) or utils.is_sdf_canvas(child)) and \
                child.visible_get(view_layer=context.view_layer):
                 sdf_siblings.append(child)
 
@@ -1006,6 +1006,30 @@ class OBJECT_OT_fieldforge_set_group_twirl_axis(Operator):
             if parent_bounds:
                 ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_group_twirl_axis_{obj.name}_{self.axis}")
             tag_redraw_all_view3d()
+        return {'FINISHED'}
+
+class OBJECT_OT_fieldforge_toggle_canvas_revolve(Operator):
+    """Toggles Revolve operation for an SDF Canvas object"""
+    bl_idname = "object.fieldforge_toggle_canvas_revolve"
+    bl_label = "Toggle Canvas Revolve"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and context.active_object.get(constants.SDF_CANVAS_MARKER, False)
+
+    def execute(self, context):
+        obj = context.active_object
+        prop_name = "sdf_canvas_use_revolve"
+
+        current_val = obj.get(prop_name, False)
+        obj[prop_name] = not current_val
+
+        parent_bounds = utils.find_parent_bounds(obj)
+        if parent_bounds:
+            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_canvas_revolve_{obj.name}")
+        
+        tag_redraw_all_view3d()
         return {'FINISHED'}
 
 # --- Modal Selection/Grab Handler ---
@@ -1311,6 +1335,7 @@ classes_to_register = (
     OBJECT_OT_add_sdf_bounds,
     OBJECT_OT_add_sdf_group,
     OBJECT_OT_add_sdf_canvas,
+    OBJECT_OT_fieldforge_toggle_canvas_revolve,
     OBJECT_OT_add_sdf_cube_source,
     OBJECT_OT_add_sdf_sphere_source,
     OBJECT_OT_add_sdf_cylinder_source,

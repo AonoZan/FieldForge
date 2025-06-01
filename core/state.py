@@ -169,6 +169,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                     'sdf_canvas_child_blend_factor': actual_child_obj.get("sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]),
                     'sdf_csg_operation': actual_child_obj.get("sdf_csg_operation", constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"]),
                     'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_child_blend_factor"]),
+                    'sdf_canvas_use_revolve': actual_child_obj.get("sdf_canvas_use_revolve", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_use_revolve"]),
                 }
                 canvas_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),

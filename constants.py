@@ -76,6 +76,7 @@ DEFAULT_CANVAS_SETTINGS = {
     "sdf_canvas_child_blend_factor": 0.0,
     "sdf_child_blend_factor": 0.0,
     "sdf_csg_operation": "UNION",
+    "sdf_canvas_use_revolve": False,
 }
 
 # Default values for Group Object properties ---
