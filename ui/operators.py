@@ -905,7 +905,10 @@ class OBJECT_OT_fieldforge_toggle_group_symmetry(Operator):
         return {'FINISHED'}
 
 class OBJECT_OT_fieldforge_toggle_group_taper_z(Operator):
-    # ... (bl_idname, bl_label, poll method are fine) ...
+    """Toggles Z-axis taper for an SDF Group object"""
+    bl_idname = "object.fieldforge_toggle_group_taper_z"
+    bl_label = "Toggle Group Z-Axis Taper"
+    bl_options = {'REGISTER', 'UNDO'}
     @classmethod
     def poll(cls, context):
         return context.active_object and utils.is_sdf_group(context.active_object)
