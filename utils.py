@@ -4,7 +4,6 @@ General utility and helper functions for the FieldForge addon.
 
 import bpy
 import math
-import uuid
 from mathutils import Vector, Matrix
 
 from . import constants
@@ -39,6 +38,11 @@ def find_parent_bounds(start_obj: bpy.types.Object) -> bpy.types.Object | None:
         count += 1
     return None # Not part of a known bounds hierarchy
 
+
+def is_sdf_bounds(obj: bpy.types.Object) -> bool:
+    """ Checks if an object is configured as an SDF Bounds Empty """
+    return obj and obj.type == 'EMPTY' and obj.get(constants.SDF_BOUNDS_MARKER, False)
+
 def is_sdf_source(obj: bpy.types.Object) -> bool:
     """ Checks if an object is configured as an SDF source Empty """
     # Check object exists, is an EMPTY type, and has the marker property
@@ -53,38 +57,88 @@ def is_sdf_canvas(obj: bpy.types.Object) -> bool:
     return obj and obj.type == 'EMPTY' and obj.get(constants.SDF_CANVAS_MARKER, False)
 
 def is_valid_2d_loft_source(obj: bpy.types.Object) -> bool:
+    """Checks if an object is an SDF source and is a 2D type eligible for lofting."""
     if not is_sdf_source(obj):
         return False
     sdf_type = obj.get("sdf_type", "")
     return sdf_type in constants._2D_SHAPE_TYPES
 
-def is_valid_2d_loft_source(obj: bpy.types.Object) -> bool:
-    """Checks if an object is an SDF source and is a 2D type eligible for lofting."""
-    if not is_sdf_source(obj):
-        return False
-    # Check the sdf_type property associated with 2D shapes
-    sdf_type = obj.get("sdf_type", "")
-    # Expand this set if more 2D base shapes are added later
-    return sdf_type in {"circle", "ring", "polygon"}
+def get_effective_sdf_object(obj: bpy.types.Object) -> bpy.types.Object | None:
+    """
+    If obj is linked, returns its link target if compatible. Otherwise, returns obj itself.
+    Returns None if obj is None or the link target is not found.
+    """
+    if not obj:
+        return None
+    
+    link_target_name = obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+    if not link_target_name:
+        return obj 
 
+    current_context = bpy.context
+    if not hasattr(current_context, 'scene') or not current_context.scene :
+        # Cannot resolve link without a scene context, return obj itself
+        return obj
 
-# --- Settings and Property Helpers ---
+    target_obj = current_context.scene.objects.get(link_target_name)
+    if not target_obj: 
+        return obj 
+
+    if target_obj == obj: 
+        return obj 
+    
+    is_obj_source = is_sdf_source(obj)
+    is_target_source = is_sdf_source(target_obj)
+    is_obj_group = is_sdf_group(obj)
+    is_target_group = is_sdf_group(target_obj)
+    is_obj_canvas = is_sdf_canvas(obj)
+    is_target_canvas = is_sdf_canvas(target_obj)
+    is_obj_bounds = is_sdf_bounds(obj)
+    is_target_bounds = is_sdf_bounds(target_obj)
+
+    compatible_link = False
+    if (is_obj_source and is_target_source) or \
+       (is_obj_group and is_target_group) or \
+       (is_obj_canvas and is_target_canvas) or \
+       (is_obj_bounds and is_target_bounds):
+        compatible_link = True
+    
+    return target_obj if compatible_link else obj
+
+def get_sdf_param(obj: bpy.types.Object, param_key: str, default_value):
+    """
+    Gets an SDF parameter, respecting linking.
+    """
+    effective_obj = get_effective_sdf_object(obj)
+    if not effective_obj: 
+        return default_value
+    return effective_obj.get(param_key, default_value)
+
+def is_sdf_linked(obj: bpy.types.Object) -> bool:
+    if not obj: return False
+    link_target_name = obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+    if link_target_name:
+        current_context = bpy.context
+        if not hasattr(current_context, 'scene') or not current_context.scene : return False
+        target_obj = current_context.scene.objects.get(link_target_name)
+        return target_obj is not None and get_effective_sdf_object(obj) == target_obj and target_obj != obj
+    return False
 
 def get_bounds_setting(bounds_obj: bpy.types.Object, setting_key: str):
     """
-    Safely retrieves a setting from a bounds object's custom properties,
-    falling back to the addon's default settings if the property is missing.
+    Safely retrieves a setting from a bounds object's custom properties.
+    Uses get_sdf_param to respect linking.
     """
     if not bounds_obj or not setting_key:
-        # Return default if object is invalid or key is empty
         return constants.DEFAULT_SETTINGS.get(setting_key)
+    return get_sdf_param(bounds_obj, setting_key, constants.DEFAULT_SETTINGS.get(setting_key))
 
-    # Use .get(key, default) directly on the object (accessing custom props)
-    # The second argument to .get() is the fallback value if the key doesn't exist.
-    return bounds_obj.get(setting_key, constants.DEFAULT_SETTINGS.get(setting_key))
-
-
-# --- Comparison Helpers (for State Caching) ---
+def initiate_settings(obj, defaults):
+    for key, default_value in defaults.items():
+        try:
+            obj[key] = default_value
+        except TypeError as e:
+            print(f"FieldForge WARN: Could not set default property '{key}' on {obj.name}: {e}. Value: {default_value}")
 
 def compare_matrices(mat1: Matrix | None, mat2: Matrix | None, tolerance=constants.CACHE_PRECISION) -> bool:
     """ Compare two 4x4 matrices element-wise with a tolerance for floats. """
@@ -135,9 +189,9 @@ def compare_dicts(dict1: dict | None, dict2: dict | None, tolerance=constants.CA
             if not compare_matrices(val1, val2, tolerance): return False
         elif isinstance(val1, Vector):
              if not compare_vectors(val1, val2, tolerance): return False
-        # Basic type comparisons (int, bool, str, NoneType)
+        elif type(val1) != type(val2):
+            return False
         elif val1 != val2:
-            # This covers int, bool, str comparisons and None vs not-None
             return False
     return True
 
@@ -148,57 +202,44 @@ def create_circle_vertices(center: Vector, right: Vector, up: Vector, radius: fl
     """ Generates world-space vertices for a circle defined by center, orthogonal axes, radius, and segments. """
     if segments < 3: return []
     vertices = []
-    if radius <= 1e-6: # Avoid issues with zero radius
-         return [center] * segments # Return points at center if radius is tiny
+    if radius <= 1e-6: return [center.copy() for _ in range(segments)] if segments > 0 else []
     try:
         for i in range(segments):
             angle = (i / segments) * 2 * math.pi
             offset = (right * math.cos(angle) + up * math.sin(angle)) * radius
             vertices.append(center + offset)
-    except Exception as e:
-        print(f"Error in create_circle_vertices: {e}")
-        return []
+    except Exception: return []
     return vertices
 
 def create_rectangle_vertices(center: Vector, right: Vector, up: Vector, width: float, height: float) -> list[Vector]:
-    """Generates world-space vertices for a rectangle (TR, TL, BL, BR order)."""
     half_w = max(0.0, width / 2.0); half_h = max(0.0, height / 2.0)
-    tr = (right * half_w) + (up * half_h)
-    tl = (-right * half_w) + (up * half_h)
-    bl = (-right * half_w) - (up * half_h)
-    br = (right * half_w) - (up * half_h)
-    return [center + tr, center + tl, center + bl, center + br]
+    tr_offset = (right * half_w) + (up * half_h); tl_offset = (-right * half_w) + (up * half_h)
+    return [center + tr_offset, center + tl_offset, center - tr_offset, center - tl_offset]
 
 def create_unit_circle_vertices_xy(segments: int) -> list[tuple[float, float, float]]:
-    """ Generates local vertices (tuples) for a unit circle (radius 0.5) in the XY plane. """
     if segments < 3: return []
-    vertices = []
-    radius = 0.5
+    vertices = []; radius = 0.5
     for i in range(segments):
         angle = (i / segments) * 2 * math.pi
         vertices.append( (math.cos(angle) * radius, math.sin(angle) * radius, 0.0) )
     return vertices
 
 def create_unit_polygon_vertices_xy(segments: int) -> list[tuple[float, float, float]]:
-    """ Generates local vertices (tuples) for a regular unit polygon (inscribed radius 0.5) in the XY plane. """
     if segments < 3: return []
-    vertices = []; radius = 0.5
-    angle_offset = -math.pi / 2.0 # Vertex down default
-    if segments % 2 == 0: angle_offset += (math.pi / segments) # Flat bottom for even sides
+    vertices = []; radius = 0.5; angle_offset = -math.pi / 2.0 
+    if segments % 2 == 0: angle_offset += (math.pi / segments) 
     for i in range(segments):
         angle = angle_offset + (i / segments) * 2 * math.pi
         vertices.append( (math.cos(angle) * radius, math.sin(angle) * radius, 0.0) )
     return vertices
 
 def create_unit_cylinder_cap_vertices(segments: int) -> tuple[list, list]:
-    """ Generates local vertices (tuples) for top/bottom caps of a unit cylinder (r=0.5, h=1.0, centered). """
     top_verts = []; bot_verts = []; radius = 0.5; half_height = 0.5
     if segments >= 3:
         for i in range(segments):
             angle = (i / segments) * 2 * math.pi
             x = math.cos(angle) * radius; y = math.sin(angle) * radius
-            top_verts.append( (x, y, half_height) )
-            bot_verts.append( (x, y, -half_height) )
+            top_verts.append( (x, y, half_height) ); bot_verts.append( (x, y, -half_height) )
     return top_verts, bot_verts
 
 def create_unit_rounded_rectangle_plane(local_right: Vector, local_up: Vector, draw_radius: float, segments_per_corner: int) -> list[Vector]:
@@ -207,287 +248,188 @@ def create_unit_rounded_rectangle_plane(local_right: Vector, local_up: Vector, d
     centered at origin, in the plane defined by local_right/up.
     draw_radius is the calculated internal radius for drawing (expected 0.0 to 0.5).
     """
-    half_w, half_h = 0.5, 0.5
-    center = Vector((0.0, 0.0, 0.0))
-    radius = max(0.0, min(draw_radius, half_w))
-    effective_corner_radius = min(radius, half_w - 1e-4)
-
-    # If radius is effectively zero, return sharp corners
-    if radius <= 1e-5:
-        tr = center + (local_right * half_w) + (local_up * half_h)
-        tl = center + (-local_right * half_w) + (local_up * half_h)
-        bl = center + (-local_right * half_w) - (local_up * half_h)
-        br = center + (local_right * half_w) - (local_up * half_h)
-        return [tr, tl, bl, br]
-
+    half_w, half_h = 0.5, 0.5; center = Vector((0.0, 0.0, 0.0))
+    effective_corner_radius = min(max(0.0, draw_radius), min(half_w, half_h) - 1e-4)
+    if effective_corner_radius <= 1e-5:
+        tr = center+(local_right*half_w)+(local_up*half_h); tl=center+(-local_right*half_w)+(local_up*half_h)
+        return [tr,tl,center-tr,center-tl] # TR,TL,BL,BR (BL = -tr, BR = -tl)
     if segments_per_corner < 1: segments_per_corner = 1
-    inner_w = half_w - effective_corner_radius
-    inner_h = half_h - effective_corner_radius
-    # Corner centers
-    center_tr = center + (local_right * inner_w) + (local_up * inner_h)
-    center_tl = center + (-local_right * inner_w) + (local_up * inner_h)
-    center_bl = center + (-local_right * inner_w) - (local_up * inner_h)
-    center_br = center + (local_right * inner_w) - (local_up * inner_h)
-    vertices = []
-    delta_angle = (math.pi / 2.0) / segments_per_corner
-    arc_radius = radius
-    # TR corner (0 to pi/2)
-    for i in range(segments_per_corner + 1): angle = i * delta_angle; offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_tr + offset)
-    # TL corner (pi/2 to pi)
-    for i in range(1, segments_per_corner + 1): angle = (math.pi / 2.0) + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_tl + offset)
-    # BL corner (pi to 3pi/2)
-    for i in range(1, segments_per_corner + 1): angle = math.pi + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_bl + offset)
-    # BR corner (3pi/2 to 2pi)
-    for i in range(1, segments_per_corner + 1): angle = (3 * math.pi / 2.0) + (i * delta_angle); offset = (local_right * math.cos(angle) + local_up * math.sin(angle)) * arc_radius; vertices.append(center_br + offset)
-
+    inner_w=half_w-effective_corner_radius; inner_h=half_h-effective_corner_radius
+    c_tr=center+(local_right*inner_w)+(local_up*inner_h); c_tl=center+(-local_right*inner_w)+(local_up*inner_h)
+    c_bl=center+(-local_right*inner_w)-(local_up*inner_h); c_br=center+(local_right*inner_w)-(local_up*inner_h)
+    vertices = []; delta_angle = (math.pi/2.0)/segments_per_corner
+    for i in range(segments_per_corner+1): angle=i*delta_angle; off=(local_right*math.cos(angle)+local_up*math.sin(angle))*effective_corner_radius; vertices.append(c_tr+off)
+    for i in range(1,segments_per_corner+1): angle=(math.pi/2.0)+(i*delta_angle); off=(local_right*math.cos(angle)+local_up*math.sin(angle))*effective_corner_radius; vertices.append(c_tl+off)
+    for i in range(1,segments_per_corner+1): angle=math.pi+(i*delta_angle); off=(local_right*math.cos(angle)+local_up*math.sin(angle))*effective_corner_radius; vertices.append(c_bl+off)
+    for i in range(1,segments_per_corner+1): angle=(3*math.pi/2.0)+(i*delta_angle); off=(local_right*math.cos(angle)+local_up*math.sin(angle))*effective_corner_radius; vertices.append(c_br+off)
     return vertices
 
 # --- Selection Helpers ---
 
 def dist_point_to_segment_2d(p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
     """Calculate the min distance between a 2D point p and a 2D line segment (a, b)."""
-    p_v = Vector(p); a_v = Vector(a); b_v = Vector(b)
-    ab = b_v - a_v; ap = p_v - a_v
-    ab_mag_sq = ab.length_squared
-    if ab_mag_sq < 1e-9: return ap.length # Segment is a point
-    t = ap.dot(ab) / ab_mag_sq # Project p onto line ab
-    # Find closest point on segment
-    if t < 0.0: proj = a_v
-    elif t > 1.0: proj = b_v
-    else: proj = a_v + t * ab
-    return (p_v - proj).length # Distance from p to projection
+    p_v=Vector(p); a_v=Vector(a); b_v=Vector(b); line_vec=b_v-a_v; point_vec=p_v-a_v
+    line_len_sq = line_vec.length_squared
+    if line_len_sq < 1e-9: return point_vec.length 
+    t = point_vec.dot(line_vec)/line_len_sq
+    if t < 0.0: closest = a_v
+    elif t > 1.0: closest = b_v
+    else: closest = a_v + t * line_vec
+    return (p_v - closest).length
 
-def get_blender_select_mouse_bak() -> str:
-    """ Checks user keymap for primary 3D View select button. """
-    # (Implementation from previous answer - finds 'LEFTMOUSE' or 'RIGHTMOUSE')
-    default_button = 'LEFTMOUSE'; found_button = None
-    try:
-        if not bpy.context or not bpy.context.window_manager: return default_button
-        wm = bpy.context.window_manager; kc = wm.keyconfigs.user or wm.keyconfigs.addon or wm.keyconfigs.default
-        if not kc: return default_button; km = kc.keymaps.get('3D View')
-        if not km: return default_button
-        for kmi in km.keymap_items: # Strict Pass
-            if kmi.idname == 'view3d.select' and kmi.value == 'PRESS' and kmi.type in {'LEFTMOUSE', 'RIGHTMOUSE'}:
-                props = kmi.properties
-                is_strict = (getattr(props, 'extend', False)==False and getattr(props, 'deselect_all', False)==False and getattr(props, 'toggle', False)==False and getattr(props, 'center', False)==False and getattr(props, 'enumerate', False)==False and not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey)
-                if is_strict: found_button = kmi.type; break
-        if not found_button: # Relaxed Pass
-             for kmi in km.keymap_items:
-                 if kmi.idname == 'view3d.select' and kmi.value == 'PRESS' and kmi.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey:
-                     found_button = kmi.type; break
-        if found_button: return found_button
-    except Exception: pass # Ignore errors during lookup
-    return default_button # Fallback
 def get_blender_select_mouse() -> str:
     """
     Checks the user's keymap for the primary 3D View object selection button (simple click).
     Prioritizes exact property matches, falls back to simple modifier checks.
     Returns 'LEFTMOUSE' or 'RIGHTMOUSE', defaulting to 'LEFTMOUSE' only if search fails.
     """
-    default_button = 'LEFTMOUSE' # Default ONLY if search logic fails completely
-    found_button = None
-
+    default_button = 'LEFTMOUSE'; found_button = None
     try:
-        if not bpy.context or not bpy.context.window_manager:
-            return default_button
-
-        wm = bpy.context.window_manager
-        # Ensure we get the active config, falling back correctly
-        kc = wm.keyconfigs.user or wm.keyconfigs.addon or wm.keyconfigs.default
-        if not kc: # Should not happen, but safeguard
-             return default_button
+        if not bpy.context or not bpy.context.window_manager: return default_button
+        wm = bpy.context.window_manager; kc = wm.keyconfigs.user or wm.keyconfigs.addon or wm.keyconfigs.default
+        if not kc: return default_button
         km = kc.keymaps.get('3D View')
-        if not km:
-            return default_button
-
-        # --- First Pass: Look for the STRICT match based on properties ---
-        # This prioritizes the keymap item that exactly matches the behavior
-        # of a default single-click select (no toggling, extending, etc.)
+        if not km: return default_button
         for kmi in km.keymap_items:
-            # Filter early for relevant types
-            if kmi.idname == 'view3d.select' and kmi.value == 'PRESS' and kmi.type in {'LEFTMOUSE', 'RIGHTMOUSE'}:
-                props = kmi.properties
-                # Check properties typical of a basic, non-modifier click
-                is_primary_select_strict = (
-                    getattr(props, 'extend', False) == False and
-                    getattr(props, 'deselect_all', False) == False and # Relax this one slightly? No, basic click usually doesn't deselect all.
-                    getattr(props, 'toggle', False) == False and
-                    getattr(props, 'center', False) == False and
-                    getattr(props, 'enumerate', False) == False and
-                    # Check modifiers on the keymap item itself are OFF
-                    not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey
-                )
-
-                if is_primary_select_strict:
-                    # Store the first strict match found and stop this pass
-                    found_button = kmi.type
-                    break
-
-        # --- Second Pass: If no strict match, find ANY mouse click without modifiers ---
-        # This catches cases where properties might be slightly different (like deselect_all=True)
-        # but the user interaction (simple click, no Shift/Ctrl/Alt) is correct.
+            if kmi.idname=='view3d.select' and kmi.value=='PRESS' and kmi.type in {'LEFTMOUSE','RIGHTMOUSE'}:
+                props=kmi.properties
+                is_strict=(not getattr(props,'extend',False) and not getattr(props,'deselect_all',False) and \
+                           not getattr(props,'toggle',False) and not getattr(props,'center',False) and \
+                           not getattr(props,'enumerate',False) and \
+                           not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey)
+                if is_strict: found_button=kmi.type; break
         if not found_button:
-            for kmi in km.keymap_items:
-                 if kmi.idname == 'view3d.select' and \
-                    kmi.value == 'PRESS' and \
-                    kmi.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and \
-                    not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey: # Check modifiers are off
-
-                     # Take the first one found in this relaxed pass
-                     found_button = kmi.type
-                     break # Stop after finding the first relaxed match
-
-        # --- Final Decision ---
-        if found_button:
-            return found_button
-        else:
-            # This case means even the relaxed search failed.
-            print(f"FF Keymap WARN: Could not detect primary select mouse button ('view3d.select' without modifiers). Using default: {default_button}")
-
-    except AttributeError as ae:
-         traceback.print_exc()
-    except Exception as e:
-        traceback.print_exc()
-
-    return default_button
+             for kmi in km.keymap_items:
+                 if kmi.idname=='view3d.select' and kmi.value=='PRESS' and \
+                    kmi.type in {'LEFTMOUSE','RIGHTMOUSE'} and \
+                    not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey:
+                     found_button=kmi.type; break
+        if found_button: return found_button
+    except Exception: pass 
+    return default_button 
 
 def find_and_set_new_active(context: bpy.types.Context, just_deselected_obj: bpy.types.Object):
-    """ Finds new active object after deselection if necessary. """
-    if context.view_layer.objects.active != just_deselected_obj: return
-    selected_objects = context.selected_objects # This list is already updated
+    if not hasattr(context, 'view_layer') or context.view_layer.objects.active != just_deselected_obj: return
+    selected_objects = context.selected_objects 
     new_active = selected_objects[0] if selected_objects else None
-    context.view_layer.objects.active = new_active
+    try: context.view_layer.objects.active = new_active
+    except (ReferenceError, RuntimeError): pass
 
 # --- Hierarchy button (Up/Down) object name Helpers ---
 
 def get_base_name_from_sdf_object(obj: bpy.types.Object) -> str:
-    """
-    Attempts to get a base name for an SDF object, stripping existing numerical prefixes
-    and Blender's .001 duplicate suffixes.
-    It can also use a stored 'sdf_base_name' property if available.
-    """
-    if "sdf_base_name" in obj and obj["sdf_base_name"]:
-        return obj["sdf_base_name"]
+    if not obj: return "SDF_Item"
+    stored_base_name = obj.get("sdf_base_name")
+    if stored_base_name and isinstance(stored_base_name, str) and stored_base_name.strip():
+        return stored_base_name.strip()
 
     name_to_process = obj.name
-    
     parts_suffix = name_to_process.rsplit('.', 1)
     if len(parts_suffix) == 2 and parts_suffix[1].isdigit() and len(parts_suffix[1]) == 3:
         name_to_process = parts_suffix[0]
 
     parts_prefix = name_to_process.split("_", 1)
-    if len(parts_prefix) > 1 and parts_prefix[0].isdigit() and len(parts_prefix[0]) == 3:
-        if parts_prefix[1]:
-             name_to_process = parts_prefix[1]
-        elif is_sdf_group(obj): return "Group"
-        elif is_sdf_canvas(obj): return "Canvas"
+    if len(parts_prefix) > 1 and len(parts_prefix[0]) == 3 and parts_prefix[0].isdigit():
+        name_to_process = parts_prefix[1] if parts_prefix[1] else ""
 
-    if is_sdf_group(obj) and name_to_process.startswith("FF_Group"): return "Group"
-    if is_sdf_canvas(obj) and name_to_process.startswith("FF_Canvas"): return "Canvas"
-
-    if not name_to_process or name_to_process == obj.name:
+    if not name_to_process.strip() or \
+       (name_to_process == obj.name and (name_to_process.startswith("FF_") or name_to_process.lower().startswith("empty"))):
         if is_sdf_group(obj): return "Group"
-        if obj.get(constants.SDF_CANVAS_MARKER, False): return "Canvas"
+        if is_sdf_canvas(obj): return "Canvas"
+        if is_sdf_source(obj):
+            sdf_type = obj.get("sdf_type")
+            if sdf_type and isinstance(sdf_type, str): return sdf_type.capitalize()
+    
+    return name_to_process.strip() if name_to_process.strip() else "SDF_Item"
 
-    return name_to_process if name_to_process else "SDF_Item"
+def update_linkers_globally(context: bpy.types.Context, old_target_name: str, new_target_name: str):
+    """
+    Iterates through all objects in the scene. If an object's SDF link target
+    property matches old_target_name, it's updated to new_target_name.
+    """
+    if old_target_name == new_target_name: return
+    if not hasattr(context, 'scene') or not context.scene: return
 
+    updated_count = 0
+    for obj_iterator in context.scene.objects:
+        if constants.SDF_LINK_TARGET_NAME_PROP in obj_iterator:
+            if obj_iterator.get(constants.SDF_LINK_TARGET_NAME_PROP) == old_target_name:
+                try:
+                    obj_iterator[constants.SDF_LINK_TARGET_NAME_PROP] = new_target_name
+                    updated_count += 1
+                except Exception as e: 
+                    print(f"FieldForge WARN: Failed to update link on {obj_iterator.name} from '{old_target_name}' to '{new_target_name}': {e}")
 
 def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
     """
-    Normalizes the 'sdf_processing_order' property and names for all visible
-    SDF source children of a given parent object.
-    Lower order numbers process first.
-    Names are updated to 'NNN_BaseName'.
+    Normalizes 'sdf_processing_order' and names for relevant SDF children.
+    Updates linkers globally if names change.
     """
-    if not parent_obj:
-        return
-
+    if not parent_obj: return
     context = bpy.context
+    if not hasattr(context, 'scene') or not context.scene or not hasattr(context, 'view_layer'): return
 
-    sdf_children = []
+    sdf_children_refs = []
     parent_is_canvas = is_sdf_canvas(parent_obj)
 
     for child in parent_obj.children:
-        if not (child and child.visible_get(view_layer=context.view_layer)):
-            continue
-
-        is_relevant_child_for_norm = False
+        if not (child and child.visible_get(view_layer=context.view_layer)): continue
+        is_relevant = False
         if parent_is_canvas:
-            if is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES:
-                is_relevant_child_for_norm = True
-        else:
-            if is_sdf_source(child) or \
-               is_sdf_group(child) or \
-               is_sdf_canvas(child):
-                is_relevant_child_for_norm = True
+            if is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES: is_relevant = True
+        elif is_sdf_source(child) or is_sdf_group(child) or is_sdf_canvas(child): is_relevant = True
+        if is_relevant: sdf_children_refs.append(child)
+
+    if not sdf_children_refs: return
+
+    sdf_children_refs.sort(key=lambda c: (c.get("sdf_processing_order", float('inf')), c.name))
+
+    # Pass 1: Set new 'sdf_processing_order' and ensure 'sdf_base_name' is populated.
+    for i, child_obj in enumerate(sdf_children_refs):
+        child_obj["sdf_processing_order"] = i * 10
+        current_base = child_obj.get("sdf_base_name")
+        if not current_base or not isinstance(current_base, str) or not current_base.strip():
+            child_obj["sdf_base_name"] = get_base_name_from_sdf_object(child_obj)
         
-        if is_relevant_child_for_norm:
-            sdf_children.append(child)
+        base_name_val = child_obj.get("sdf_base_name", "SDF_Item")
+        new_base_name = base_name_val
+        if is_sdf_group(child_obj) and base_name_val in ["SDF_Item", "FF_Group", "Empty", "Group_temp"]: new_base_name = "Group"
+        elif is_sdf_canvas(child_obj) and base_name_val in ["SDF_Item", "FF_Canvas", "Empty", "Canvas_temp"]: new_base_name = "Canvas"
+        elif is_sdf_source(child_obj):
+            sdf_type = child_obj.get("sdf_type")
+            # If base name is generic or a temp name, use type
+            if base_name_val in ["SDF_Item", "Empty"] or base_name_val.endswith("_temp"):
+                if sdf_type and isinstance(sdf_type, str): new_base_name = sdf_type.capitalize()
+            elif base_name_val.startswith("FF_") and sdf_type and isinstance(sdf_type, str): # e.g. FF_Cube -> Cube
+                 if base_name_val[3:].lower() == sdf_type.lower(): new_base_name = sdf_type.capitalize()
 
-    if not sdf_children:
-        return
 
-    def sort_key_for_normalization(c):
-        return (c.get("sdf_processing_order", float('inf')), c.name)
+        if child_obj.get("sdf_base_name") != new_base_name : child_obj["sdf_base_name"] = new_base_name
 
-    sdf_children.sort(key=sort_key_for_normalization)
 
-    temp_name_map = {}
-    final_renamed_children = []
-    for i, original_sorted_child_ref in enumerate(sdf_children):
-        child_obj_found = None
-        for temp_n, obj_ref_map in temp_name_map.items():
-            if obj_ref_map == original_sorted_child_ref:
-                try:
-                    child_obj_found = bpy.data.objects[temp_n]
-                except KeyError:
-                    child_obj_found = None
-                break
-
-        if not child_obj_found:
-            try:
-                current_name_of_original_ref = original_sorted_child_ref.name
-                child_obj_found = bpy.data.objects[current_name_of_original_ref]
-            except (KeyError, ReferenceError):
-                print(f"FieldForge WARN: Object {original_sorted_child_ref} (or its name) seems to be gone before final rename.")
-                continue
-
-        if child_obj_found != original_sorted_child_ref:
-                    child_obj_found = None
-        if not child_obj_found:
-             print(f"FieldForge WARN: Could not re-find object for final rename: {original_sorted_child_ref.name}")
-             continue
-
-        new_order = i * 10
-        child_obj_found["sdf_processing_order"] = new_order
-
-        if "sdf_base_name" not in child_obj_found or not child_obj_found["sdf_base_name"]:
-            derived_base_name = get_base_name_from_sdf_object(child_obj_found)
-            child_obj_found["sdf_base_name"] = derived_base_name
-
-        base_name_to_use = child_obj_found.get("sdf_base_name", "SDF_Item")
-        if is_sdf_group(child_obj_found) and base_name_to_use == "SDF_Item":
-            base_name_to_use = "Group"
-        elif is_sdf_canvas(child_obj_found) and base_name_to_use == "SDF_Item":
-            base_name_to_use = "Canvas"
-
-        new_name_candidate = f"{new_order:03d}_{base_name_to_use}"
-        final_new_name = new_name_candidate
-
-        current_name_idx = 0
-        while final_new_name in bpy.data.objects and bpy.data.objects[final_new_name] != child_obj_found:
-            current_name_idx += 1
-            final_new_name = f"{new_name_candidate}.{current_name_idx:03d}"
-
-        if child_obj_found.name != final_new_name:
-            try:
-                child_obj_found.name = final_new_name
+    # Pass 2: Rename objects and log renames.
+    renamed_info = []
+    for child_obj in sdf_children_refs:
+        old_name = child_obj.name
+        base_name = child_obj.get("sdf_base_name", "SDF_Item")
+        order = child_obj.get("sdf_processing_order", 0)
+        desired_name = f"{order:03d}_{base_name}"
+        
+        if child_obj.name != desired_name:
+            try: child_obj.name = desired_name
             except Exception as e:
-                print(f"FieldForge WARN: Could not assign final name {final_new_name} to {child_obj_found.name} (was {child_obj_found.name}): {e}")
-        final_renamed_children.append(child_obj_found)
+                print(f"FieldForge WARN: Could not rename '{old_name}' to '{desired_name}': {e}")
+                continue 
+        
+        actual_new_name = child_obj.name
+        if old_name != actual_new_name:
+            renamed_info.append((old_name, actual_new_name))
 
-    if context.screen:
+    # Pass 3: Update global linkers.
+    if renamed_info:
+        for old_name_log, actual_new_name_log in renamed_info:
+            update_linkers_globally(context, old_name_log, actual_new_name_log)
+
+    if hasattr(context, 'screen') and context.screen:
         for area in context.screen.areas:
-            if area.type == 'OUTLINER':
-                area.tag_redraw()
-                break
+            if area.type == 'OUTLINER': area.tag_redraw(); break

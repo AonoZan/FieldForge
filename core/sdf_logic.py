@@ -50,7 +50,7 @@ def reconstruct_shape(obj) -> lf.Shape | None:
     if not _lf_imported_ok or not obj:
         return lf.emptiness() if _lf_imported_ok else None
 
-    sdf_type = obj.get("sdf_type", "")
+    sdf_type = utils.get_sdf_param(obj, "sdf_type", "")
     shape = None
     unit_radius = 0.5 # Standard radius for shapes like cylinder/cone base/sphere/circle
     unit_height = 1.0 # Standard height for shapes like cylinder/cone
@@ -95,14 +95,14 @@ def reconstruct_shape(obj) -> lf.Shape | None:
         elif sdf_type == "torus":
             default_major = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_major_radius"]
             default_minor = constants.DEFAULT_SOURCE_SETTINGS["sdf_torus_minor_radius"]
-            major_r_prop = obj.get("sdf_torus_major_radius", default_major)
-            minor_r_prop = obj.get("sdf_torus_minor_radius", default_minor)
+            major_r_prop = utils.get_sdf_param(obj, "sdf_torus_major_radius", default_major)
+            minor_r_prop = utils.get_sdf_param(obj, "sdf_torus_minor_radius", default_minor)
             major_r = max(0.01, float(major_r_prop)); minor_r = max(0.005, float(minor_r_prop))
             minor_r = min(minor_r, major_r - 1e-5)
             shape = lf.torus_z(major_r, minor_r, center=(0,0,0))
 
         elif sdf_type == "rounded_box":
-            roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
+            roundness_prop = utils.get_sdf_param(obj, "sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
             internal_sdf_radius = min(roundness_prop, 0.5) * half_size / 0.5
             internal_sdf_radius = min(max(roundness_prop, 0.0), 1.0) * half_size
             effective_prop_value = min(max(roundness_prop, 0.0), 0.5)
@@ -117,16 +117,16 @@ def reconstruct_shape(obj) -> lf.Shape | None:
         elif sdf_type == "circle":
             shape = lf.circle(unit_radius, center=(0, 0))
         elif sdf_type == "ring":
-            inner_r_prop = obj.get("sdf_inner_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_inner_radius"])
+            inner_r_prop = utils.get_sdf_param(obj, "sdf_inner_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_inner_radius"])
             # Ensure inner radius is relative to the unit_radius (0.5)
             safe_inner_r = max(0.0, min(float(inner_r_prop), unit_radius - 1e-5))
             shape = lf.ring(unit_radius, safe_inner_r, center=(0, 0))
         elif sdf_type == "polygon":
-            sides = obj.get("sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"])
+            sides = utils.get_sdf_param(obj, "sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"])
             safe_n = max(3, int(sides))
             shape = lf.polygon(unit_radius, safe_n, center=(0, 0))
         elif sdf_type == "text": # NEW SHAPE
-            text_string = obj.get("sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
+            text_string = utils.get_sdf_param(obj, "sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
             if not text_string.strip(): # If string is empty or only whitespace
                 print(f"FieldForge WARN (reconstruct_shape): Empty text string for {obj.name}. Returning empty shape.")
                 return lf.emptiness()
@@ -260,7 +260,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     obj_name = obj.name
     obj_is_sdf_source = utils.is_sdf_source(obj)
     obj_is_group = utils.is_sdf_group(obj)
-    obj_is_canvas = obj.get(constants.SDF_CANVAS_MARKER, False)
+    obj_is_canvas = utils.get_sdf_param(obj, constants.SDF_CANVAS_MARKER, False)
     current_scene_shape = lf.emptiness() if _lf_imported_ok else None
     sorted_canvas_children = []
 
@@ -273,26 +273,26 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     parent_array_mode = 'NONE'
     is_obj_an_arraying_group = False
     if obj_is_group:
-        parent_array_mode = obj.get("sdf_main_array_mode", 'NONE')
+        parent_array_mode = utils.get_sdf_param(obj, "sdf_main_array_mode", 'NONE')
         if parent_array_mode != 'NONE':
             is_obj_an_arraying_group = True
 
     if obj_is_sdf_source and not obj_is_canvas:
-        sdf_type = obj.get("sdf_type", "")
+        sdf_type = utils.get_sdf_param(obj, "sdf_type", "")
         if sdf_type in constants._2D_SHAPE_TYPES and parent_is_canvas:
             current_scene_shape = lf.emptiness() if _lf_imported_ok else None
         else:
             unit_shape_modified_by_own_ops = reconstruct_shape(obj)
-            sdf_type = obj.get("sdf_type", "")
+            sdf_type = utils.get_sdf_param(obj, "sdf_type", "")
             is_2d_shape_for_extrude = sdf_type in constants._2D_SHAPE_TYPES
             if is_2d_shape_for_extrude and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-                depth = obj.get("sdf_extrusion_depth", constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"])
+                depth = utils.get_sdf_param(obj, "sdf_extrusion_depth", constants.DEFAULT_SOURCE_SETTINGS["sdf_extrusion_depth"])
                 if float(depth) > 1e-5:
                     try: unit_shape_modified_by_own_ops = lf.extrude_z(unit_shape_modified_by_own_ops, 0, abs(float(depth)))
                     except Exception as e: print(f"FieldForge ERROR (extrude_z for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
 
-            if obj.get("sdf_use_shell", False) and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
-                offset = float(obj.get("sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]))
+            if utils.get_sdf_param(obj, "sdf_use_shell", False) and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
+                offset = float(utils.get_sdf_param(obj, "sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]))
                 if abs(offset) > 1e-5:
                     try:
                         outer_surface = lf.offset(unit_shape_modified_by_own_ops, offset)
@@ -300,16 +300,16 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         else: unit_shape_modified_by_own_ops = lf.difference(unit_shape_modified_by_own_ops, outer_surface)
                     except Exception as e: print(f"FieldForge ERROR (shell for {obj_name}): {e}"); unit_shape_modified_by_own_ops = lf.emptiness()
 
-            array_mode = obj.get("sdf_main_array_mode", 'NONE')
-            center_on_origin = obj.get("sdf_array_center_on_origin", True)
+            array_mode = utils.get_sdf_param(obj, "sdf_main_array_mode", 'NONE')
+            center_on_origin = utils.get_sdf_param(obj, "sdf_array_center_on_origin", True)
             if array_mode != 'NONE' and not (unit_shape_modified_by_own_ops is None or unit_shape_modified_by_own_ops is lf.emptiness()):
                 current_shape_before_array = unit_shape_modified_by_own_ops
                 if array_mode == 'LINEAR':
-                    active_x=obj.get("sdf_array_active_x",0); active_y=obj.get("sdf_array_active_y",0) and active_x; active_z=obj.get("sdf_array_active_z",0) and active_y
-                    nx=max(1,int(obj.get("sdf_array_count_x",2))) if active_x else 1
-                    ny=max(1,int(obj.get("sdf_array_count_y",2))) if active_y else 1
-                    nz=max(1,int(obj.get("sdf_array_count_z",2))) if active_z else 1
-                    dx_val=float(obj.get("sdf_array_delta_x",1)) if active_x else 0; dy_val=float(obj.get("sdf_array_delta_y",1)) if active_y else 0; dz_val=float(obj.get("sdf_array_delta_z",1)) if active_z else 0
+                    active_x=utils.get_sdf_param(obj, "sdf_array_active_x",0); active_y=utils.get_sdf_param(obj, "sdf_array_active_y",0) and active_x; active_z=utils.get_sdf_param(obj, "sdf_array_active_z",0) and active_y
+                    nx=max(1,int(utils.get_sdf_param(obj, "sdf_array_count_x",2))) if active_x else 1
+                    ny=max(1,int(utils.get_sdf_param(obj, "sdf_array_count_y",2))) if active_y else 1
+                    nz=max(1,int(utils.get_sdf_param(obj, "sdf_array_count_z",2))) if active_z else 1
+                    dx_val=float(utils.get_sdf_param(obj, "sdf_array_delta_x",1)) if active_x else 0; dy_val=float(utils.get_sdf_param(obj, "sdf_array_delta_y",1)) if active_y else 0; dz_val=float(utils.get_sdf_param(obj, "sdf_array_delta_z",1)) if active_z else 0
                     array_applied=False
                     try:
                         if active_z:
@@ -327,7 +327,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                                     unit_shape_modified_by_own_ops=unit_shape_modified_by_own_ops.remap(X-center_shift_x,Y-center_shift_y,Z-center_shift_z)
                     except Exception as e: print(f"FieldForge ERROR (Linear Array for {obj_name}): {e}"); unit_shape_modified_by_own_ops=current_shape_before_array
                 elif array_mode == 'RADIAL':
-                    count=max(1,int(obj.get("sdf_radial_count",1))); center_prop=obj.get("sdf_radial_center",(0.0,0.0))
+                    count=max(1,int(utils.get_sdf_param(obj, "sdf_radial_count",1))); center_prop=utils.get_sdf_param(obj, "sdf_radial_center",(0.0,0.0))
                     if count > 1:
                         try: center_xy_pivot=(float(center_prop[0]),float(center_prop[1]))
                         except: center_xy_pivot=(0.0,0.0); print(f"FieldForge WARN: Invalid radial center on {obj_name}, using (0,0).")
@@ -348,9 +348,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     elif obj_is_canvas:
         # --- Process Canvas Object ---
         canvas_2d_shape_local = lf.emptiness() if _lf_imported_ok else None
-        canvas_extrusion_depth = float(obj.get("sdf_extrusion_depth", constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"]))
-        canvas_child_blend = float(obj.get("sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
-        use_revolve = obj.get("sdf_canvas_use_revolve", False)
+        canvas_extrusion_depth = float(utils.get_sdf_param(obj, "sdf_extrusion_depth", constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"]))
+        canvas_child_blend = float(utils.get_sdf_param(obj, "sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
+        use_revolve = utils.get_sdf_param(obj, "sdf_canvas_use_revolve", False)
         canvas_children_2d = []
         for child_candidate in obj.children:
             if child_candidate and child_candidate.visible_get(view_layer=context.view_layer) and \
@@ -380,8 +380,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             if child_2d_shape_in_canvas_local_xy is None or child_2d_shape_in_canvas_local_xy is lf.emptiness():
                 continue
 
-            child_csg_op = canvas_child.get("sdf_csg_operation", "UNION")
-            canvas_child_blend = float(canvas_child.get("sdf_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
+            child_csg_op = utils.get_sdf_param(canvas_child, "sdf_csg_operation", "UNION")
+            canvas_child_blend_default = constants.DEFAULT_CANVAS_SETTINGS.get("sdf_canvas_child_blend_factor", 0.0)
+            canvas_child_blend = float(utils.get_sdf_param(canvas_child, "sdf_child_blend_factor", canvas_child_blend_default ))
 
             if child_csg_op == "UNION":
                 canvas_2d_shape_local = combine_shapes(canvas_2d_shape_local, child_2d_shape_in_canvas_local_xy, canvas_child_blend)
@@ -426,9 +427,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     
     parent_provides_blend_factor = 0.0
     if obj_is_sdf_source:
-        parent_provides_blend_factor = float(obj.get("sdf_child_blend_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"]))
+        parent_provides_blend_factor = float(utils.get_sdf_param(obj, "sdf_child_blend_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"]))
     elif obj_is_group:
-        parent_provides_blend_factor = float(obj.get("sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]))
+        parent_provides_blend_factor = float(utils.get_sdf_param(obj, "sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]))
 
     children_to_process = []
     for child_candidate in obj.children:
@@ -453,7 +454,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
         child_name = child.name
         is_current_obj_valid_loft_base = obj_is_sdf_source and \
-                                         obj.get("sdf_use_loft", False) and \
+                                         utils.get_sdf_param(obj, "sdf_use_loft", False) and \
                                          utils.is_valid_2d_loft_source(obj)
         is_child_valid_loft_target = utils.is_sdf_source(child) and \
                                      child.get("sdf_use_loft", False) and \
@@ -507,17 +508,17 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 arrayed_child_local = child_shape_in_obj_local_space # Base for arraying this child
 
                 if parent_array_mode == 'LINEAR':
-                    active_x = obj.get("sdf_array_active_x", False)
-                    active_y = obj.get("sdf_array_active_y", False) and active_x
-                    active_z = obj.get("sdf_array_active_z", False) and active_y
+                    active_x = utils.get_sdf_param(obj, "sdf_array_active_x", False)
+                    active_y = utils.get_sdf_param(obj, "sdf_array_active_y", False) and active_x
+                    active_z = utils.get_sdf_param(obj, "sdf_array_active_z", False) and active_y
 
                     active_xs, active_ys, active_zs = obj.scale
 
                     child_local_pos_in_obj = (obj.matrix_world.inverted() @ child.matrix_world).translation
 
-                    nx = max(1, int(obj.get("sdf_array_count_x", 2))) if active_x else 1
-                    ny = max(1, int(obj.get("sdf_array_count_y", 2))) if active_y else 1
-                    nz = max(1, int(obj.get("sdf_array_count_z", 2))) if active_z else 1
+                    nx = max(1, int(utils.get_sdf_param(obj, "sdf_array_count_x", 2))) if active_x else 1
+                    ny = max(1, int(utils.get_sdf_param(obj, "sdf_array_count_y", 2))) if active_y else 1
+                    nz = max(1, int(utils.get_sdf_param(obj, "sdf_array_count_z", 2))) if active_z else 1
 
                     dx_val = (child_local_pos_in_obj.x * 2.0 / (nx-1)) if (active_x and nx > 1) else 0
                     dy_val = (child_local_pos_in_obj.y * 2.0 / (ny-1)) if (active_y and ny > 1) else 0
@@ -548,8 +549,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     except Exception as e_arr_child_lin: print(f"FF ERROR (Group Child Linear Array for {child.name}): {e_arr_child_lin}")
                 
                 elif parent_array_mode == 'RADIAL':
-                    count_rad = max(1, int(obj.get("sdf_radial_count", 1)))
-                    center_prop_rad = obj.get("sdf_radial_center", (0.0,0.0))
+                    count_rad = max(1, int(utils.get_sdf_param(obj, "sdf_radial_count", 1)))
+                    center_prop_rad = utils.get_sdf_param(obj, "sdf_radial_center", (0.0,0.0))
                     if count_rad > 1:
                         try: center_xy_pivot_rad = (float(center_prop_rad[0]), float(center_prop_rad[1]))
                         except: center_xy_pivot_rad = (0.0,0.0)
@@ -567,17 +568,17 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
         processed_child_subtree_world = final_child_contribution_world
 
         if utils.is_sdf_source(child):
-            use_morph = child.get("sdf_use_morph", False)
-            use_clearance = child.get("sdf_use_clearance", False) and not use_morph
-            child_csg_op_type = child.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
+            use_morph = utils.get_sdf_param(child, "sdf_use_morph", constants.DEFAULT_SOURCE_SETTINGS["sdf_use_morph"])
+            use_clearance = utils.get_sdf_param(child, "sdf_use_clearance", constants.DEFAULT_SOURCE_SETTINGS["sdf_use_clearance"]) and not use_morph
+            child_csg_op_type = utils.get_sdf_param(child, "sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
 
             if use_morph:
-                morph_factor = float(child.get("sdf_morph_factor", 0.5))
+                morph_factor = float(utils.get_sdf_param(child, "sdf_morph_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_morph_factor"]))
                 try: current_scene_shape = lf.morph(processed_child_subtree_world, current_scene_shape, morph_factor)
                 except Exception as e: print(f"FieldForge ERROR (morphing {obj_name} with {child_name}): {e}")
             elif use_clearance:
-                offset_val = float(child.get("sdf_clearance_offset", 0.05))
-                keep_original = child.get("sdf_clearance_keep_original", True)
+                offset_val = float(utils.get_sdf_param(child, "sdf_clearance_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_clearance_offset"]))
+                keep_original = utils.get_sdf_param(child, "sdf_clearance_keep_original", constants.DEFAULT_SOURCE_SETTINGS["sdf_clearance_keep_original"])
                 try:
                     offset_child_shape_for_subtraction = lf.offset(processed_child_subtree_world, offset_val)
                     current_scene_shape = lf.difference(current_scene_shape, offset_child_shape_for_subtraction)
@@ -589,7 +590,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, parent_provides_blend_factor)
             elif child_csg_op_type == "INTERSECT":
                 try:
-                    blend_radius_for_intersect = parent_provides_blend_factor
+                    blend_radius_for_intersect = parent_provides_blend_factor 
                     if blend_radius_for_intersect > constants.CACHE_PRECISION:
                         clamped_blend_intersect = min(max(0.0, blend_radius_for_intersect), 1.0)
                         current_scene_shape = custom_blended_intersection(current_scene_shape, processed_child_subtree_world, clamped_blend_intersect, lf)
@@ -602,7 +603,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     try:
                         blend_radius_for_difference = parent_provides_blend_factor
                         if blend_radius_for_difference > constants.CACHE_PRECISION:
-                            clamped_blend_difference = min(max(0.0, blend_radius_for_difference), 1.0) 
+                            clamped_blend_difference = min(max(0.0, blend_radius_for_difference), 1.0)
                             current_scene_shape = lf.blend_difference(current_scene_shape, processed_child_subtree_world, clamped_blend_difference)
                         else:
                             current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
@@ -610,7 +611,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         print(f"FieldForge ERROR (subtracting {child_name} from {obj_name}): {e}")
                         try: current_scene_shape = lf.difference(current_scene_shape, processed_child_subtree_world)
                         except: pass 
-            else: 
+            else:
                 print(f"FieldForge WARN: Unknown sdf_csg_operation '{child_csg_op_type}' for source {child_name}. Defaulting to union.")
                 current_scene_shape = combine_shapes(current_scene_shape, processed_child_subtree_world, parent_provides_blend_factor)
         elif utils.is_sdf_group(child) or (child.type == 'EMPTY' and not child.get(constants.SDF_BOUNDS_MARKER)):
@@ -619,9 +620,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
         if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
             if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
                 # --- Apply Group Symmetry ---
-                symmetry_x = obj.get("sdf_group_symmetry_x", False)
-                symmetry_y = obj.get("sdf_group_symmetry_y", False)
-                symmetry_z = obj.get("sdf_group_symmetry_z", False)
+                symmetry_x = utils.get_sdf_param(obj, "sdf_group_symmetry_x", False)
+                symmetry_y = utils.get_sdf_param(obj, "sdf_group_symmetry_y", False)
+                symmetry_z = utils.get_sdf_param(obj, "sdf_group_symmetry_z", False)
 
                 clamped_blend_symmetry = min(max(0.001, parent_provides_blend_factor), 1.0)
 
@@ -661,7 +662,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
             # --- TAPER (applied to the result of symmetry) ---
             if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
-                taper_z_active = obj.get("sdf_group_taper_z_active", False)
+                taper_z_active = utils.get_sdf_param(obj, "sdf_group_taper_z_active", False)
                 shape_after_taper = current_scene_shape
 
                 if taper_z_active:
@@ -677,9 +678,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         print(f"FieldForge ERROR (Group Taper: World to Local for {obj_name}): {e}")
 
                     if not (group_local_coords_shape_for_taper is None or group_local_coords_shape_for_taper is lf.emptiness()):
-                        taper_height = float(obj.get("sdf_group_taper_z_height", 1.0))
-                        taper_scale_at_top = float(obj.get("sdf_group_taper_z_factor", 0.5))
-                        taper_base_scale = float(obj.get("sdf_group_taper_z_base_scale", 1.0))
+                        taper_height = float(utils.get_sdf_param(obj, "sdf_group_taper_z_height", 1.0))
+                        taper_scale_at_top = float(utils.get_sdf_param(obj, "sdf_group_taper_z_factor", 0.5))
+                        taper_base_scale = float(utils.get_sdf_param(obj, "sdf_group_taper_z_base_scale", 1.0))
                         
                         taper_height = max(1e-5, taper_height)
                         taper_scale_at_top = max(0.0, taper_scale_at_top)
@@ -706,7 +707,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
             # --- SHEAR X by Y (applied to the result of taper) ---
             if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
-                shear_x_by_y_active = obj.get("sdf_group_shear_x_by_y_active", False)
+                shear_x_by_y_active = utils.get_sdf_param(obj, "sdf_group_shear_x_by_y_active", False)
                 shape_after_shear = current_scene_shape
 
                 if shear_x_by_y_active:
@@ -722,9 +723,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         print(f"FieldForge ERROR (Group Shear XbyY: World to Local for {obj_name}): {e}")
 
                     if not (group_local_coords_shape_for_shear is None or group_local_coords_shape_for_shear is lf.emptiness()):
-                        shear_height = float(obj.get("sdf_group_shear_x_by_y_height", 1.0))
-                        shear_offset = float(obj.get("sdf_group_shear_x_by_y_offset", 0.5))
-                        shear_base_offset = float(obj.get("sdf_group_shear_x_by_y_base_offset", 0.0))
+                        shear_height = float(utils.get_sdf_param(obj, "sdf_group_shear_x_by_y_height", 1.0))
+                        shear_offset = float(utils.get_sdf_param(obj, "sdf_group_shear_x_by_y_offset", 0.5))
+                        shear_base_offset = float(utils.get_sdf_param(obj, "sdf_group_shear_x_by_y_base_offset", 0.0))
 
                         shear_height = max(1e-5, shear_height)
 
@@ -754,7 +755,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
             # --- ATTRACT/REPEL ---
             if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
-                ar_mode = obj.get("sdf_group_attract_repel_mode", 'NONE')
+                ar_mode = utils.get_sdf_param(obj, "sdf_group_attract_repel_mode", 'NONE')
                 shape_after_attract_repel = current_scene_shape
 
                 if ar_mode != 'NONE':
@@ -770,17 +771,17 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         print(f"FieldForge ERROR (Group Attract/Repel: World to Local for {obj_name}): {e}")
 
                     if not (group_local_coords_shape_for_ar is None or group_local_coords_shape_for_ar is lf.emptiness()):
-                        ar_radius_val = float(obj.get("sdf_group_attract_repel_radius", 0.5))
-                        ar_exaggerate_val = float(obj.get("sdf_group_attract_repel_exaggerate", 1.0))
+                        ar_radius_val = float(utils.get_sdf_param(obj, "sdf_group_attract_repel_radius", 0.5))
+                        ar_exaggerate_val = float(utils.get_sdf_param(obj, "sdf_group_attract_repel_exaggerate", 1.0))
 
                         ar_radius_val = max(1e-5, ar_radius_val)
                         ar_exaggerate_val = max(0.0, ar_exaggerate_val)
 
                         locus_local = (0.0, 0.0, 0.0)
 
-                        use_x = obj.get("sdf_group_attract_repel_axis_x", True)
-                        use_y = obj.get("sdf_group_attract_repel_axis_y", True)
-                        use_z = obj.get("sdf_group_attract_repel_axis_z", True)
+                        use_x = utils.get_sdf_param(obj, "sdf_group_attract_repel_axis_x", True)
+                        use_y = utils.get_sdf_param(obj, "sdf_group_attract_repel_axis_y", True)
+                        use_z = utils.get_sdf_param(obj, "sdf_group_attract_repel_axis_z", True)
 
                         selected_func = None
 
@@ -823,7 +824,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
             # --- TWIRL (applied last) ---
             if not (current_scene_shape is None or current_scene_shape is lf.emptiness()):
-                twirl_active = obj.get("sdf_group_twirl_active", False)
+                twirl_active = utils.get_sdf_param(obj, "sdf_group_twirl_active", False)
                 shape_after_twirl = current_scene_shape
 
                 if twirl_active:
@@ -839,9 +840,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         print(f"FieldForge ERROR (Group Twirl: World to Local for {obj_name}): {e}")
 
                     if not (group_local_coords_shape_for_twirl is None or group_local_coords_shape_for_twirl is lf.emptiness()):
-                        tw_axis = obj.get("sdf_group_twirl_axis", 'Z')
-                        tw_amount = float(obj.get("sdf_group_twirl_amount", 1.5708))
-                        tw_radius = float(obj.get("sdf_group_twirl_radius", 1.0))
+                        tw_axis = utils.get_sdf_param(obj, "sdf_group_twirl_axis", 'Z')
+                        tw_amount = float(utils.get_sdf_param(obj, "sdf_group_twirl_amount", 1.5708))
+                        tw_radius = float(utils.get_sdf_param(obj, "sdf_group_twirl_radius", 1.0))
                         tw_radius = max(1e-5, tw_radius) # Ensure positive radius
 
                         twirled_in_local = None

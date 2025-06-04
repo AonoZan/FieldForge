@@ -292,11 +292,9 @@ class OBJECT_OT_add_sdf_canvas(Operator):
         try: obj.matrix_parent_inverse = target_parent.matrix_world.inverted()
         except ValueError: obj.matrix_parent_inverse.identity()
 
+        utils.initiate_settings(obj, constants.DEFAULT_CANVAS_SETTINGS)
+
         obj[constants.SDF_CANVAS_MARKER] = True
-        obj["sdf_extrusion_depth"] = self.initial_extrusion_depth
-        obj["sdf_canvas_child_blend_factor"] = constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]
-        obj["sdf_csg_operation"] = self.initial_parent_csg_operation
-        obj["sdf_child_blend_factor"] = self.initial_parent_child_blend
         
         obj.color = (0.8, 0.8, 0.2, 0.8)
 
@@ -418,6 +416,11 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
         # Determine initial interaction mode (Morph/Clearance override CSG op)
         final_use_morph = self.use_morph
         final_use_clearance = self.use_clearance and not final_use_morph
+
+        utils.initiate_settings(obj, constants.DEFAULT_SOURCE_SETTINGS)
+
+        if hasattr(self, 'initial_child_blend'):
+            obj["sdf_child_blend_factor"] = self.initial_child_blend
         
         obj["sdf_use_morph"] = final_use_morph
         obj["sdf_morph_factor"] = self.initial_morph_factor if final_use_morph else defaults["sdf_morph_factor"]
@@ -630,25 +633,39 @@ class OBJECT_OT_fieldforge_toggle_array_axis(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return obj and (utils.is_sdf_source(obj) or utils.is_sdf_group(obj))
+        return obj and (utils.is_sdf_source(obj) or utils.is_sdf_group(obj)) # Poll on selected obj
+    
     def execute(self, context):
-        obj = context.active_object; act_x="sdf_array_active_x"; act_y="sdf_array_active_y"; act_z="sdf_array_active_z"
-        is_x=obj.get(act_x,False); is_y=obj.get(act_y,False); is_z=obj.get(act_z,False); changed = False
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify: obj_to_modify = selected_obj # Fallback
+
+        act_x="sdf_array_active_x"; act_y="sdf_array_active_y"; act_z="sdf_array_active_z"
+        is_x=obj_to_modify.get(act_x,False); is_y=obj_to_modify.get(act_y,False); is_z=obj_to_modify.get(act_z,False); changed = False
+        
         if self.axis == 'X':
-            new_x = not is_x; obj[act_x]=new_x; changed=True
-            if not new_x:
-                if is_y: obj[act_y]=False; changed=True
-                if is_z: obj[act_z]=False; changed=True
+            new_x = not is_x; obj_to_modify[act_x]=new_x; changed=True
+            if not new_x: # If X is turned off, Y and Z must also turn off
+                if is_y: obj_to_modify[act_y]=False; changed=True
+                if is_z: obj_to_modify[act_z]=False; changed=True
         elif self.axis == 'Y':
             if not is_x: self.report({'WARNING'}, "Activate X axis first to enable Y."); return {'CANCELLED'}
-            new_y = not is_y; obj[act_y]=new_y; changed=True
-            if not new_y and is_z: obj[act_z]=False; changed=True
+            new_y = not is_y; obj_to_modify[act_y]=new_y; changed=True
+            if not new_y and is_z: obj_to_modify[act_z]=False; changed=True # If Y is turned off, Z must also turn off
         elif self.axis == 'Z':
             if not is_x or not is_y: self.report({'WARNING'}, "Activate X and Y axes first to enable Z."); return {'CANCELLED'}
-            obj[act_z] = not is_z; changed=True
+            obj_to_modify[act_z] = not is_z; changed=True
+        
         if changed:
-            parent_bounds = utils.find_parent_bounds(obj)
-            if parent_bounds: ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_array_{obj.name}_{self.axis}")
+            bounds_to_update = set()
+            b1 = utils.find_parent_bounds(selected_obj)
+            if b1: bounds_to_update.add(b1.name)
+            if obj_to_modify != selected_obj:
+                b2 = utils.find_parent_bounds(obj_to_modify)
+                if b2: bounds_to_update.add(b2.name)
+            
+            for bounds_name in bounds_to_update:
+                ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_array_{selected_obj.name}_{self.axis}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -660,19 +677,33 @@ class OBJECT_OT_fieldforge_set_main_array_mode(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return obj and (utils.is_sdf_source(obj) or utils.is_sdf_group(obj))
+        return obj and (utils.is_sdf_source(obj) or utils.is_sdf_group(obj)) # Poll on selected
+        
     def execute(self, context):
-        obj = context.active_object; prop_name = "sdf_main_array_mode"
-        current_mode = obj.get(prop_name, 'NONE'); changed = False
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify: obj_to_modify = selected_obj
+
+        prop_name = "sdf_main_array_mode"
+        current_mode = obj_to_modify.get(prop_name, 'NONE'); changed = False
         if current_mode != self.main_mode:
-            obj[prop_name] = self.main_mode; changed = True
-            if current_mode == 'LINEAR' or self.main_mode == 'NONE':
-                if obj.get("sdf_array_active_x", False): obj["sdf_array_active_x"]=False; changed=True
-                if obj.get("sdf_array_active_y", False): obj["sdf_array_active_y"]=False; changed=True
-                if obj.get("sdf_array_active_z", False): obj["sdf_array_active_z"]=False; changed=True
+            obj_to_modify[prop_name] = self.main_mode; changed = True
+            # If mode changed to None or from Linear, deactivate all linear axes
+            if self.main_mode == 'NONE' or (current_mode == 'LINEAR' and self.main_mode != 'LINEAR'):
+                if obj_to_modify.get("sdf_array_active_x", False): obj_to_modify["sdf_array_active_x"]=False; changed=True
+                if obj_to_modify.get("sdf_array_active_y", False): obj_to_modify["sdf_array_active_y"]=False; changed=True
+                if obj_to_modify.get("sdf_array_active_z", False): obj_to_modify["sdf_array_active_z"]=False; changed=True
+        
         if changed:
-            parent_bounds = utils.find_parent_bounds(obj)
-            if parent_bounds: ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_main_array_{obj.name}_{self.main_mode}")
+            bounds_to_update = set()
+            b1 = utils.find_parent_bounds(selected_obj)
+            if b1: bounds_to_update.add(b1.name)
+            if obj_to_modify != selected_obj:
+                b2 = utils.find_parent_bounds(obj_to_modify)
+                if b2: bounds_to_update.add(b2.name)
+
+            for bounds_name in bounds_to_update:
+                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_main_array_{selected_obj.name}_{self.main_mode}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -695,27 +726,45 @@ class OBJECT_OT_fieldforge_set_csg_mode(Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.active_object and utils.is_sdf_source(context.active_object)
+        obj = context.active_object
+        return obj and (utils.is_sdf_source(obj) or \
+                        utils.is_sdf_group(obj) or \
+                        obj.get(constants.SDF_CANVAS_MARKER, False))
 
     def execute(self, context):
-        obj = context.active_object
+        selected_obj = context.active_object # The object whose panel button was clicked
+
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify: obj_to_modify = selected_obj # Fallback if link resolution fails
+
         prop_name = "sdf_csg_operation"
-        current_op_mode = obj.get(prop_name, constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
+        current_op_mode = obj_to_modify.get(prop_name, constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
         
+        changed = False
         if current_op_mode != self.csg_mode:
-            obj[prop_name] = self.csg_mode
+            obj_to_modify[prop_name] = self.csg_mode
+            changed = True
 
-            use_morph = obj.get("sdf_use_morph", False)
-            use_clearance = obj.get("sdf_use_clearance", False)
-            if not use_morph and not use_clearance:
-                if self.csg_mode == "DIFFERENCE": obj.color = (1.0, 0.3, 0.3, 1.0)
-                elif self.csg_mode == "INTERSECT": obj.color = (0.8, 0.2, 0.8, 1.0)
-                elif self.csg_mode == "NONE": obj.color = (0.3, 0.3, 0.3, 1.0)
-                else: obj.color = (0.5, 0.5, 0.5, 1.0)
+            use_morph_eff = utils.get_sdf_param(obj_to_modify, "sdf_use_morph", False) # Read effective morph
+            use_clearance_eff = utils.get_sdf_param(obj_to_modify, "sdf_use_clearance", False) and not use_morph_eff
 
-            parent_bounds = utils.find_parent_bounds(obj)
-            if parent_bounds:
-                ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_csg_mode_{obj.name}_{self.csg_mode}")
+            if not use_morph_eff and not use_clearance_eff:
+                if self.csg_mode == "DIFFERENCE": obj_to_modify.color = (1.0, 0.3, 0.3, 1.0)
+                elif self.csg_mode == "INTERSECT": obj_to_modify.color = (0.8, 0.2, 0.8, 1.0)
+                elif self.csg_mode == "NONE": obj_to_modify.color = (0.3, 0.3, 0.3, 1.0)
+                else: obj_to_modify.color = (0.5, 0.5, 0.5, 1.0) # UNION
+
+        if changed:
+            
+            bounds_to_update = set()
+            b1 = utils.find_parent_bounds(selected_obj)
+            if b1: bounds_to_update.add(b1.name)
+            if obj_to_modify != selected_obj:
+                b2 = utils.find_parent_bounds(obj_to_modify)
+                if b2: bounds_to_update.add(b2.name)
+
+            for bounds_name in bounds_to_update:
+                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_csg_linked_{selected_obj.name}_{self.csg_mode}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -828,43 +877,59 @@ class OBJECT_OT_fieldforge_toggle_group_symmetry(Operator):
     )
 
     @classmethod
-    def poll(cls, context):
+    def poll(cls, context): # Poll on selected object
         return context.active_object and utils.is_sdf_group(context.active_object)
 
     def execute(self, context):
-        obj = context.active_object
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not utils.is_sdf_group(obj_to_modify): # Ensure target is still a group
+             self.report({'WARNING'}, f"Target for symmetry '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+             return {'CANCELLED'}
+
         prop_name = f"sdf_group_symmetry_{self.axis.lower()}"
+        current_val = obj_to_modify.get(prop_name, False)
+        obj_to_modify[prop_name] = not current_val
 
-        current_val = obj.get(prop_name, False)
-        obj[prop_name] = not current_val
-
-        parent_bounds = utils.find_parent_bounds(obj)
-        if parent_bounds:
-            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_symmetry_{obj.name}_{self.axis}")
+        bounds_to_update = set()
+        b1 = utils.find_parent_bounds(selected_obj)
+        if b1: bounds_to_update.add(b1.name)
+        if obj_to_modify != selected_obj:
+            b2 = utils.find_parent_bounds(obj_to_modify)
+            if b2: bounds_to_update.add(b2.name)
+        
+        for bounds_name in bounds_to_update:
+            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_symmetry_{selected_obj.name}_{self.axis}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
 class OBJECT_OT_fieldforge_toggle_group_taper_z(Operator):
-    """Toggles Z-axis taper for an SDF Group object"""
-    bl_idname = "object.fieldforge_toggle_group_taper_z"
-    bl_label = "Toggle Group Z-Axis Taper"
-    bl_options = {'REGISTER', 'UNDO'}
-
+    # ... (bl_idname, bl_label, poll method are fine) ...
     @classmethod
     def poll(cls, context):
         return context.active_object and utils.is_sdf_group(context.active_object)
 
     def execute(self, context):
-        obj = context.active_object
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not utils.is_sdf_group(obj_to_modify):
+             self.report({'WARNING'}, f"Target for taper '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+             return {'CANCELLED'}
+
         prop_name = "sdf_group_taper_z_active"
+        current_val = obj_to_modify.get(prop_name, False)
+        obj_to_modify[prop_name] = not current_val
 
-        current_val = obj.get(prop_name, False)
-        obj[prop_name] = not current_val
+        bounds_to_update = set()
+        b1 = utils.find_parent_bounds(selected_obj)
+        if b1: bounds_to_update.add(b1.name)
+        if obj_to_modify != selected_obj:
+            b2 = utils.find_parent_bounds(obj_to_modify)
+            if b2: bounds_to_update.add(b2.name)
 
-        parent_bounds = utils.find_parent_bounds(obj)
-        if parent_bounds:
-            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_taper_z_{obj.name}")
+        for bounds_name in bounds_to_update:
+            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_taper_z_{selected_obj.name}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -880,15 +945,25 @@ class OBJECT_OT_fieldforge_toggle_group_shear_x_by_y(Operator):
         return context.active_object and utils.is_sdf_group(context.active_object)
 
     def execute(self, context):
-        obj = context.active_object
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not utils.is_sdf_group(obj_to_modify):
+            self.report({'WARNING'}, f"Target for shear '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+            return {'CANCELLED'}
+            
         prop_name = "sdf_group_shear_x_by_y_active"
+        current_val = obj_to_modify.get(prop_name, False)
+        obj_to_modify[prop_name] = not current_val
 
-        current_val = obj.get(prop_name, False)
-        obj[prop_name] = not current_val
+        bounds_to_update = set()
+        b1 = utils.find_parent_bounds(selected_obj)
+        if b1: bounds_to_update.add(b1.name)
+        if obj_to_modify != selected_obj:
+            b2 = utils.find_parent_bounds(obj_to_modify)
+            if b2: bounds_to_update.add(b2.name)
 
-        parent_bounds = utils.find_parent_bounds(obj)
-        if parent_bounds:
-            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_shear_x_by_y_{obj.name}")
+        for bounds_name in bounds_to_update:
+            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_shear_x_by_y_{selected_obj.name}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -912,16 +987,29 @@ class OBJECT_OT_fieldforge_set_group_attract_repel_mode(Operator):
         return context.active_object and utils.is_sdf_group(context.active_object)
 
     def execute(self, context):
-        obj = context.active_object
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not utils.is_sdf_group(obj_to_modify):
+            self.report({'WARNING'}, f"Target for attract/repel '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+            return {'CANCELLED'}
+
         prop_name = "sdf_group_attract_repel_mode"
-
-        current_mode = obj.get(prop_name, 'NONE')
+        current_mode = obj_to_modify.get(prop_name, 'NONE')
+        changed = False
         if current_mode != self.mode:
-            obj[prop_name] = self.mode
+            obj_to_modify[prop_name] = self.mode
+            changed = True
+        
+        if changed:
+            bounds_to_update = set()
+            b1 = utils.find_parent_bounds(selected_obj)
+            if b1: bounds_to_update.add(b1.name)
+            if obj_to_modify != selected_obj:
+                b2 = utils.find_parent_bounds(obj_to_modify)
+                if b2: bounds_to_update.add(b2.name)
 
-            parent_bounds = utils.find_parent_bounds(obj)
-            if parent_bounds:
-                ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_group_attract_repel_mode_{obj.name}_{self.mode}")
+            for bounds_name in bounds_to_update:
+                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_group_attract_repel_mode_{selected_obj.name}_{self.mode}")
             
             tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -937,14 +1025,25 @@ class OBJECT_OT_fieldforge_toggle_group_twirl(Operator):
         return context.active_object and utils.is_sdf_group(context.active_object)
 
     def execute(self, context):
-        obj = context.active_object
-        prop_name = "sdf_group_twirl_active"
-        current_val = obj.get(prop_name, False)
-        obj[prop_name] = not current_val
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not utils.is_sdf_group(obj_to_modify):
+            self.report({'WARNING'}, f"Target for twirl '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+            return {'CANCELLED'}
 
-        parent_bounds = utils.find_parent_bounds(obj)
-        if parent_bounds:
-            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_group_twirl_{obj.name}")
+        prop_name = "sdf_group_twirl_active"
+        current_val = obj_to_modify.get(prop_name, False)
+        obj_to_modify[prop_name] = not current_val
+
+        bounds_to_update = set()
+        b1 = utils.find_parent_bounds(selected_obj)
+        if b1: bounds_to_update.add(b1.name)
+        if obj_to_modify != selected_obj:
+            b2 = utils.find_parent_bounds(obj_to_modify)
+            if b2: bounds_to_update.add(b2.name)
+        
+        for bounds_name in bounds_to_update:
+            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_twirl_{selected_obj.name}")
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -963,20 +1062,44 @@ class OBJECT_OT_fieldforge_set_group_twirl_axis(Operator):
     )
 
     @classmethod
-    def poll(cls, context):
+    def poll(cls, context): # Poll on selected object
         obj = context.active_object
-        return obj and utils.is_sdf_group(obj) and obj.get("sdf_group_twirl_active", False)
+        # Effective object for properties needs to be checked for twirl_active
+        effective_obj = utils.get_effective_sdf_object(obj) if obj else None
+        if not effective_obj: effective_obj = obj # Fallback if link is broken
+
+        return obj and utils.is_sdf_group(obj) and \
+               effective_obj and effective_obj.get("sdf_group_twirl_active", False)
+
 
     def execute(self, context):
-        obj = context.active_object
-        prop_name = "sdf_group_twirl_axis"
-        current_axis = obj.get(prop_name, 'Z')
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not utils.is_sdf_group(obj_to_modify):
+            self.report({'WARNING'}, f"Target for twirl axis '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+            return {'CANCELLED'}
+        if not obj_to_modify.get("sdf_group_twirl_active", False): # Check on target
+            self.report({'INFO'}, f"Twirl is not active on target '{obj_to_modify.name}'. Cannot set axis.")
+            return {'CANCELLED'}
 
+
+        prop_name = "sdf_group_twirl_axis"
+        current_axis = obj_to_modify.get(prop_name, 'Z')
+        changed = False
         if current_axis != self.axis:
-            obj[prop_name] = self.axis
-            parent_bounds = utils.find_parent_bounds(obj)
-            if parent_bounds:
-                ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"set_group_twirl_axis_{obj.name}_{self.axis}")
+            obj_to_modify[prop_name] = self.axis
+            changed = True
+        
+        if changed:
+            bounds_to_update = set()
+            b1 = utils.find_parent_bounds(selected_obj)
+            if b1: bounds_to_update.add(b1.name)
+            if obj_to_modify != selected_obj:
+                b2 = utils.find_parent_bounds(obj_to_modify)
+                if b2: bounds_to_update.add(b2.name)
+
+            for bounds_name in bounds_to_update:
+                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_group_twirl_axis_{selected_obj.name}_{self.axis}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -987,21 +1110,58 @@ class OBJECT_OT_fieldforge_toggle_canvas_revolve(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
-    def poll(cls, context):
+    def poll(cls, context): # Poll on selected object
         return context.active_object and context.active_object.get(constants.SDF_CANVAS_MARKER, False)
 
     def execute(self, context):
-        obj = context.active_object
+        selected_obj = context.active_object
+        obj_to_modify = utils.get_effective_sdf_object(selected_obj)
+        if not obj_to_modify or not obj_to_modify.get(constants.SDF_CANVAS_MARKER, False):
+            self.report({'WARNING'}, f"Target for revolve '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid canvas.")
+            return {'CANCELLED'}
+
         prop_name = "sdf_canvas_use_revolve"
+        current_val = obj_to_modify.get(prop_name, False)
+        obj_to_modify[prop_name] = not current_val
 
-        current_val = obj.get(prop_name, False)
-        obj[prop_name] = not current_val
-
-        parent_bounds = utils.find_parent_bounds(obj)
-        if parent_bounds:
-            ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"toggle_canvas_revolve_{obj.name}")
+        bounds_to_update = set()
+        b1 = utils.find_parent_bounds(selected_obj)
+        if b1: bounds_to_update.add(b1.name)
+        if obj_to_modify != selected_obj:
+            b2 = utils.find_parent_bounds(obj_to_modify)
+            if b2: bounds_to_update.add(b2.name)
+        
+        for bounds_name in bounds_to_update:
+            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_canvas_revolve_{selected_obj.name}")
         
         tag_redraw_all_view3d()
+        return {'FINISHED'}
+
+class OBJECT_OT_fieldforge_clear_link(Operator):
+    """Clears the SDF parameter link for the specified object."""
+    bl_idname = "object.fieldforge_clear_link"
+    bl_label = "Clear SDF Parameter Link"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    object_name: StringProperty()
+
+    def execute(self, context):
+        obj = context.scene.objects.get(self.object_name)
+        if not obj:
+            self.report({'WARNING'}, f"Object '{self.object_name}' not found.")
+            return {'CANCELLED'}
+
+        if constants.SDF_LINK_TARGET_NAME_PROP in obj:
+            obj[constants.SDF_LINK_TARGET_NAME_PROP] = ""
+            self.report({'INFO'}, f"Link cleared for {obj.name}.")
+            
+            # Trigger update for the bounds system this object belongs to
+            bounds = utils.find_parent_bounds(obj)
+            if bounds:
+                ff_update.check_and_trigger_update(context.scene, bounds.name, f"clear_link_{obj.name}")
+            tag_redraw_all_view3d()
+        else:
+            self.report({'INFO'}, f"{obj.name} was not linked.")
         return {'FINISHED'}
 
 # --- Modal Selection/Grab Handler ---
@@ -1330,6 +1490,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_set_group_attract_repel_mode,
     OBJECT_OT_fieldforge_toggle_group_twirl,
     OBJECT_OT_fieldforge_set_group_twirl_axis,
+    OBJECT_OT_fieldforge_clear_link,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

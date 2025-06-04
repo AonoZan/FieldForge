@@ -36,8 +36,13 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
 
     # Read settings from the bounds object itself into the state dictionary
     # Use utils.get_bounds_setting to handle defaults correctly
-    for key in constants.DEFAULT_SETTINGS.keys():
-        current_state['scene_settings'][key] = utils.get_bounds_setting(bounds_obj, key)
+    for key, default_val in constants.DEFAULT_SETTINGS.items():
+        # Check if this key is the link target prop itself to avoid recursion if bounds links to itself for settings
+        if key == constants.SDF_LINK_TARGET_NAME_PROP:
+            current_state['scene_settings'][key] = bounds_obj.get(key, default_val)
+        else:
+            # For other settings, respect linking if bounds_obj were to link its settings
+            current_state['scene_settings'][key] = utils.get_sdf_param(bounds_obj, key, default_val)
 
     # Traverse hierarchy below this specific bounds object to find visible sources
     # Use a queue for breadth-first or depth-first traversal
@@ -47,121 +52,43 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
     visited_in_hierarchy = {bounds_name}
 
     while queue:
-        parent_obj = queue.pop(0) # Depth-first: use pop(); Breadth-first: use pop(0)
-
-        # Iterate through children safely
-        children = list(parent_obj.children) # Copy children list in case hierarchy changes mid-iteration
+        parent_obj_iterator = queue.pop(0)
+        children = list(parent_obj_iterator.children)
         for child_obj in children:
             if not child_obj: continue # Child might be None temporarily
             child_name = child_obj.name
             if child_name in visited_in_hierarchy: continue # Already processed this node in this traversal
             visited_in_hierarchy.add(child_name)
-
-            # Check if the object *still exists* in the scene's object collection
-            # (it could have been deleted since the .children list was accessed)
-            actual_child_obj = context.scene.objects.get(child_name)
-            if not actual_child_obj:
-                continue # Skip object that no longer exists
-
-            # --- Check visibility using the context's view layer ---
-            # Use visible_get() which respects parent visibility, layer visibility etc.
+            actual_child_obj = context.scene.objects.get(child_obj.name)
+            if not actual_child_obj: continue
             is_visible = actual_child_obj.visible_get(view_layer=context.view_layer)
+            child_name = actual_child_obj.name
 
-            # Process only if it's an SDF source AND visible in the viewport
+
             if utils.is_sdf_source(actual_child_obj) and is_visible:
-                # Gather state for this visible source object
-                sdf_type = actual_child_obj.get("sdf_type") # Get type early
+                props_to_track = {}
+                props_to_track[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "") # Always from actual_child_obj
+                
+                for key, default_val in constants.DEFAULT_SOURCE_SETTINGS.items():
+                    if key != constants.SDF_LINK_TARGET_NAME_PROP: # Don't get link target from target
+                        props_to_track[key] = utils.get_sdf_param(actual_child_obj, key, default_val)
+                
+                props_to_track = {k: v for k, v in props_to_track.items() if v is not None or k == constants.SDF_LINK_TARGET_NAME_PROP}
 
-                # Build dictionary of relevant properties to track for changes
-                props_to_track = {
-                    # Core props
-                    'sdf_type': sdf_type,
-                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"]),
-                    'sdf_csg_operation': actual_child_obj.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"]),
-                    # Interaction Modifiers
-                    'sdf_use_clearance': actual_child_obj.get("sdf_use_clearance", False),
-                    'sdf_clearance_offset': actual_child_obj.get("sdf_clearance_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_clearance_offset"]),
-                    'sdf_clearance_keep_original': actual_child_obj.get("sdf_clearance_keep_original", constants.DEFAULT_SOURCE_SETTINGS["sdf_clearance_keep_original"]),
-                    'sdf_use_morph': actual_child_obj.get("sdf_use_morph", False),
-                    'sdf_morph_factor': actual_child_obj.get("sdf_morph_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_morph_factor"]),
-                    'sdf_use_loft': actual_child_obj.get("sdf_use_loft", False),
-                    # Shell Modifier
-                    'sdf_use_shell': actual_child_obj.get("sdf_use_shell", False),
-                    'sdf_shell_offset': actual_child_obj.get("sdf_shell_offset", constants.DEFAULT_SOURCE_SETTINGS["sdf_shell_offset"]),
-                    # Array Modifier (Main Mode)
-                    'sdf_main_array_mode': actual_child_obj.get("sdf_main_array_mode", 'NONE'),
-                    # Linear Array Props (Only relevant if mode is LINEAR, but get anyway for simplicity)
-                    'sdf_array_active_x': actual_child_obj.get("sdf_array_active_x", False),
-                    'sdf_array_active_y': actual_child_obj.get("sdf_array_active_y", False),
-                    'sdf_array_active_z': actual_child_obj.get("sdf_array_active_z", False),
-                    'sdf_array_delta_x': actual_child_obj.get("sdf_array_delta_x", 1.0),
-                    'sdf_array_delta_y': actual_child_obj.get("sdf_array_delta_y", 1.0),
-                    'sdf_array_delta_z': actual_child_obj.get("sdf_array_delta_z", 1.0),
-                    'sdf_array_count_x': actual_child_obj.get("sdf_array_count_x", 2),
-                    'sdf_array_count_y': actual_child_obj.get("sdf_array_count_y", 2),
-                    'sdf_array_count_z': actual_child_obj.get("sdf_array_count_z", 2),
-                    # Radial Array Props (Only relevant if mode is RADIAL)
-                    'sdf_radial_count': actual_child_obj.get("sdf_radial_count", 6),
-                    'sdf_radial_center': tuple(actual_child_obj.get("sdf_radial_center", (0.0, 0.0))),
-                    'sdf_radial_array_center_on_origin': actual_child_obj.get("sdf_array_center_on_origin", constants.DEFAULT_SOURCE_SETTINGS["sdf_array_center_on_origin"]),
-                    # --- Shape-specific props ---
-                    # Use conditional get based on sdf_type to keep state clean
-                    'sdf_text_string': actual_child_obj.get("sdf_text_string") if sdf_type == "text" else None,
-                    'sdf_round_radius': actual_child_obj.get("sdf_round_radius") if sdf_type == "rounded_box" else None,
-                    'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth") if sdf_type in {"circle", "ring", "polygon", "text"} else None,
-                    'sdf_inner_radius': actual_child_obj.get("sdf_inner_radius") if sdf_type == "ring" else None,
-                    'sdf_sides': actual_child_obj.get("sdf_sides") if sdf_type == "polygon" else None,
-                    'sdf_torus_major_radius': actual_child_obj.get("sdf_torus_major_radius") if sdf_type == "torus" else None,
-                    'sdf_torus_minor_radius': actual_child_obj.get("sdf_torus_minor_radius") if sdf_type == "torus" else None,
-                }
-                # Remove None values from props_to_track for cleaner comparison
-                props_to_track = {k: v for k, v in props_to_track.items() if v is not None}
 
-                # Store state for this object
                 obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),
-                    'props': props_to_track
+                    'props': props_to_track 
                 }
                 current_state['source_objects'][child_name] = obj_state
-
-                # Add source object to queue to check its children as well
                 queue.append(actual_child_obj)
 
-            # Process SDF Group Objects
             elif utils.is_sdf_group(actual_child_obj) and is_visible:
-                props_to_track_group = {
-                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]),
-                    'sdf_group_symmetry_x': actual_child_obj.get("sdf_group_symmetry_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_x"]),
-                    'sdf_group_symmetry_y': actual_child_obj.get("sdf_group_symmetry_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_y"]),
-                    'sdf_group_symmetry_z': actual_child_obj.get("sdf_group_symmetry_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_symmetry_z"]),
-                    'sdf_group_taper_z_active': actual_child_obj.get("sdf_group_taper_z_active", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_active"]),
-                    'sdf_group_taper_z_factor': actual_child_obj.get("sdf_group_taper_z_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_factor"]),
-                    'sdf_group_taper_z_height': actual_child_obj.get("sdf_group_taper_z_height", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_height"]),
-                    'sdf_group_taper_z_base_scale': actual_child_obj.get("sdf_group_taper_z_base_scale", constants.DEFAULT_GROUP_SETTINGS["sdf_group_taper_z_base_scale"]),
-                    'sdf_group_shear_x_by_y_active': actual_child_obj.get("sdf_group_shear_x_by_y_active", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_active"]),
-                    'sdf_group_shear_x_by_y_offset': actual_child_obj.get("sdf_group_shear_x_by_y_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_offset"]),
-                    'sdf_group_shear_x_by_y_base_offset': actual_child_obj.get("sdf_group_shear_x_by_y_base_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_base_offset"]),
-                    'sdf_group_shear_x_by_y_height': actual_child_obj.get("sdf_group_shear_x_by_y_height", constants.DEFAULT_GROUP_SETTINGS["sdf_group_shear_x_by_y_height"]),
-                    'sdf_group_attract_repel_mode': actual_child_obj.get("sdf_group_attract_repel_mode", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_mode"]),
-                    'sdf_group_attract_repel_radius': actual_child_obj.get("sdf_group_attract_repel_radius", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_radius"]),
-                    'sdf_group_attract_repel_exaggerate': actual_child_obj.get("sdf_group_attract_repel_exaggerate", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_exaggerate"]),
-                    'sdf_group_attract_repel_axis_x': actual_child_obj.get("sdf_group_attract_repel_axis_x", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_x"]),
-                    'sdf_group_attract_repel_axis_y': actual_child_obj.get("sdf_group_attract_repel_axis_y", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_y"]),
-                    'sdf_group_attract_repel_axis_z': actual_child_obj.get("sdf_group_attract_repel_axis_z", constants.DEFAULT_GROUP_SETTINGS["sdf_group_attract_repel_axis_z"]),
-                    'sdf_group_twirl_active': actual_child_obj.get("sdf_group_twirl_active", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_active"]),
-                    'sdf_group_twirl_axis': actual_child_obj.get("sdf_group_twirl_axis", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_axis"]),
-                    'sdf_group_twirl_amount': actual_child_obj.get("sdf_group_twirl_amount", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_amount"]),
-                    'sdf_group_twirl_radius': actual_child_obj.get("sdf_group_twirl_radius", constants.DEFAULT_GROUP_SETTINGS["sdf_group_twirl_radius"]),
-                    'sdf_main_array_mode': actual_child_obj.get("sdf_main_array_mode", constants.DEFAULT_GROUP_SETTINGS["sdf_main_array_mode"]),
-                    'sdf_array_active_x': actual_child_obj.get("sdf_array_active_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_active_x"]),
-                    'sdf_array_active_y': actual_child_obj.get("sdf_array_active_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_active_y"]),
-                    'sdf_array_active_z': actual_child_obj.get("sdf_array_active_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_active_z"]),
-                    'sdf_array_count_x': actual_child_obj.get("sdf_array_count_x", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_x"]),
-                    'sdf_array_count_y': actual_child_obj.get("sdf_array_count_y", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_y"]),
-                    'sdf_array_count_z': actual_child_obj.get("sdf_array_count_z", constants.DEFAULT_GROUP_SETTINGS["sdf_array_count_z"]),
-                    'sdf_radial_count': actual_child_obj.get("sdf_radial_count", constants.DEFAULT_GROUP_SETTINGS["sdf_radial_count"]),
-                    'sdf_radial_center': tuple(actual_child_obj.get("sdf_radial_center", constants.DEFAULT_GROUP_SETTINGS["sdf_radial_center"])),
-                }
+                props_to_track_group = {}
+                props_to_track_group[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+                for key, default_val in constants.DEFAULT_GROUP_SETTINGS.items():
+                     if key != constants.SDF_LINK_TARGET_NAME_PROP:
+                        props_to_track_group[key] = utils.get_sdf_param(actual_child_obj, key, default_val)
                 group_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),
                     'props': props_to_track_group
@@ -170,13 +97,12 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                 queue.append(actual_child_obj)
 
             elif actual_child_obj.get(constants.SDF_CANVAS_MARKER, False) and is_visible:
-                props_to_track_canvas = {
-                    'sdf_extrusion_depth': actual_child_obj.get("sdf_extrusion_depth", constants.DEFAULT_CANVAS_SETTINGS["sdf_extrusion_depth"]),
-                    'sdf_canvas_child_blend_factor': actual_child_obj.get("sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]),
-                    'sdf_csg_operation': actual_child_obj.get("sdf_csg_operation", constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"]),
-                    'sdf_child_blend_factor': actual_child_obj.get("sdf_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_child_blend_factor"]),
-                    'sdf_canvas_use_revolve': actual_child_obj.get("sdf_canvas_use_revolve", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_use_revolve"]),
-                }
+                props_to_track_canvas = {}
+                props_to_track_canvas[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+                for key, default_val in constants.DEFAULT_CANVAS_SETTINGS.items():
+                    if key != constants.SDF_LINK_TARGET_NAME_PROP:
+                        props_to_track_canvas[key] = utils.get_sdf_param(actual_child_obj, key, default_val)
+
                 canvas_obj_state = {
                     'matrix': actual_child_obj.matrix_world.copy(),
                     'props': props_to_track_canvas

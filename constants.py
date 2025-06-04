@@ -18,6 +18,8 @@ SDF_PROPERTY_MARKER = "is_sdf_object"
 SDF_GROUP_MARKER = "is_sdf_group"
 SDF_CANVAS_MARKER = "is_sdf_canvas" 
 
+SDF_LINK_TARGET_NAME_PROP = "sdf_link_target_name"
+
 # Axis constants on Python side for C++
 AXIS_X_BIT = 1
 AXIS_Y_BIT = 2
@@ -68,6 +70,7 @@ DEFAULT_SETTINGS = {
     "sdf_discard_mesh_on_save": True, # Don't save generated mesh by default
     "sdf_result_auto_smooth_angle": 44.9,
     "sdf_result_material_name": "",
+    SDF_LINK_TARGET_NAME_PROP: "",
 }
 
 # Default values for Canvas Object properties ---
@@ -77,6 +80,7 @@ DEFAULT_CANVAS_SETTINGS = {
     "sdf_child_blend_factor": 0.0,
     "sdf_csg_operation": "UNION",
     "sdf_canvas_use_revolve": False,
+    SDF_LINK_TARGET_NAME_PROP: "",
 }
 
 # Default values for Group Object properties ---
@@ -112,6 +116,7 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_array_count_z": 2,
     "sdf_radial_count": 6,
     "sdf_radial_center": (0.0, 0.0),
+    SDF_LINK_TARGET_NAME_PROP: "",
 }
 
 # --- Optional: Default values for Source Object properties ---
@@ -150,4 +155,5 @@ DEFAULT_SOURCE_SETTINGS = {
     "sdf_inner_radius": 0.25, # Ring inner radius (unit space)
     "sdf_sides": 6,           # Polygon sides
     "sdf_text_string": "Text",
+    SDF_LINK_TARGET_NAME_PROP: "",
 }
