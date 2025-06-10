@@ -19,6 +19,7 @@ SDF_GROUP_MARKER = "is_sdf_group"
 SDF_CANVAS_MARKER = "is_sdf_canvas" 
 
 SDF_LINK_TARGET_NAME_PROP = "sdf_link_target_name"
+SDF_PROCESS_LINKED_CHILDREN_PROP = "sdf_process_linked_children"
 
 # Axis constants on Python side for C++
 AXIS_X_BIT = 1
@@ -81,6 +82,7 @@ DEFAULT_CANVAS_SETTINGS = {
     "sdf_csg_operation": "UNION",
     "sdf_canvas_use_revolve": False,
     SDF_LINK_TARGET_NAME_PROP: "",
+    SDF_PROCESS_LINKED_CHILDREN_PROP: False,
 }
 
 # Default values for Group Object properties ---
@@ -117,6 +119,7 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_radial_count": 6,
     "sdf_radial_center": (0.0, 0.0),
     SDF_LINK_TARGET_NAME_PROP: "",
+    SDF_PROCESS_LINKED_CHILDREN_PROP: False,
 }
 
 # --- Optional: Default values for Source Object properties ---
@@ -156,4 +159,5 @@ DEFAULT_SOURCE_SETTINGS = {
     "sdf_sides": 6,           # Polygon sides
     "sdf_text_string": "Text",
     SDF_LINK_TARGET_NAME_PROP: "",
+    SDF_PROCESS_LINKED_CHILDREN_PROP: False,
 }

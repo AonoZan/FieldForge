@@ -42,6 +42,14 @@ _last_update_finish_times = {}
 # Caches the last known state dictionary used for a successful update
 _sdf_update_caches = {}
 
+_link_dependents_cache = {}
+_reverse_link_cache = {}
+
+
+def clear_link_caches(): # Call from clear_timers_and_state
+    global _link_dependents_cache, _reverse_link_cache
+    _link_dependents_cache.clear()
+    _reverse_link_cache.clear()
 
 # --- Cache Update ---
 
@@ -500,6 +508,42 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
         _last_update_finish_times[bounds_name] = time.time()
         _updates_pending[bounds_name] = False
 
+def _update_linker_caches(linker_obj: bpy.types.Object, new_target_name: str | None, linker_parent_bounds_name: str | None):
+    """Manages the _link_dependents_cache and _reverse_link_cache."""
+    global _link_dependents_cache, _reverse_link_cache
+    
+    linker_name = linker_obj.name
+
+    # 1. Clean up old dependencies for this linker_name
+    old_target_name_for_linker = _reverse_link_cache.pop(linker_name, None)
+    if old_target_name_for_linker and old_target_name_for_linker in _link_dependents_cache:
+        if linker_parent_bounds_name in _link_dependents_cache[old_target_name_for_linker]:
+            _link_dependents_cache[old_target_name_for_linker].remove(linker_parent_bounds_name)
+            if not _link_dependents_cache[old_target_name_for_linker]: # Is set empty?
+                del _link_dependents_cache[old_target_name_for_linker]
+
+    # 2. Add new dependency if new_target_name and linker_parent_bounds_name are valid
+    if new_target_name and linker_parent_bounds_name:
+        _link_dependents_cache.setdefault(new_target_name, set()).add(linker_parent_bounds_name)
+        _reverse_link_cache[linker_name] = new_target_name
+    elif linker_name in _reverse_link_cache: # If new_target_name is None, ensure linker is removed from reverse cache
+        del _reverse_link_cache[linker_name]
+
+# This function would be called from state.py
+def register_link_dependency(linker_obj: bpy.types.Object, effective_target_obj: bpy.types.Object | None, linker_parent_bounds: bpy.types.Object | None):
+    if not linker_obj:
+        return
+
+    linker_parent_bounds_name = linker_parent_bounds.name if linker_parent_bounds else None
+    
+    current_link_target_prop_val = linker_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+
+    if effective_target_obj and effective_target_obj != linker_obj and current_link_target_prop_val == effective_target_obj.name:
+        # Link is valid and points to effective_target_obj
+        _update_linker_caches(linker_obj, effective_target_obj.name, linker_parent_bounds_name)
+    else:
+        # Link is invalid, empty, or points to self, or prop val doesn't match effective (e.g. incompatible)
+        _update_linker_caches(linker_obj, None, linker_parent_bounds_name)
 
 # --- Scene Update Handler (Dependency Graph) ---
 # This needs to be persistent to stay active between file loads
@@ -517,45 +561,61 @@ def ff_depsgraph_handler(scene, depsgraph):
 
     if depsgraph is None or not hasattr(depsgraph, 'updates'): return # Check depsgraph validity
 
-    updated_bounds_names = set() # Track which Bounds hierarchies are affected by relevant changes
+    bounds_to_recheck_due_to_direct_change = set()
+    bounds_to_recheck_due_to_link = set()
     needs_visual_redraw = False # Flag if custom visuals need redraw (transform change)
+
+    scene_geometry_updated = any(update.id == scene and update.is_updated_geometry for update in depsgraph.updates)
+    if scene_geometry_updated:
+        for bounds_obj_iter in utils.get_all_bounds_objects(context):
+            bounds_to_recheck_due_to_direct_change.add(bounds_obj_iter.name)
+
 
     for update in depsgraph.updates:
         updated_obj = None
-        if isinstance(update.id, bpy.types.Object):
-            try: updated_obj = update.id.evaluated_get(depsgraph) if depsgraph else update.id # Get evaluated
-            except (ReferenceError, AttributeError): continue # Object might be gone or invalid
-            if not updated_obj: continue
-        elif isinstance(update.id, bpy.types.Scene) and update.is_updated_geometry:
-            # If scene geometry generally updated, might need to recheck all bounds? Risky.
-            # For now, focus on object updates.
-            pass
+        if hasattr(update, 'id') and isinstance(update.id, bpy.types.ID):
+            updated_obj = update.id
+        
+        if not updated_obj: continue
+        if isinstance(updated_obj, bpy.types.Object):
+            try:
+                evaluated_obj = updated_obj.evaluated_get(depsgraph) if depsgraph else updated_obj
+            except (ReferenceError, AttributeError): 
+                continue
+            if not evaluated_obj: continue
+            root_bounds_for_updated = utils.find_parent_bounds(updated_obj)
+            is_updated_obj_bounds_itself = updated_obj.get(constants.SDF_BOUNDS_MARKER, False)
+            
+            current_obj_for_check = None
+            if root_bounds_for_updated:
+                current_obj_for_check = root_bounds_for_updated
+            elif is_updated_obj_bounds_itself:
+                current_obj_for_check = updated_obj
+            
+            if current_obj_for_check:
+                if update.is_updated_transform or \
+                   update.is_updated_geometry:
+                    bounds_to_recheck_due_to_direct_change.add(current_obj_for_check.name)
+            if utils.is_sdf_source(updated_obj) and update.is_updated_transform:
+                needs_visual_redraw = True
+            if updated_obj.name in _link_dependents_cache:
+                for dependent_bounds_name in _link_dependents_cache[updated_obj.name]:
+                    bounds_to_recheck_due_to_link.add(dependent_bounds_name)
+        elif isinstance(updated_obj, bpy.types.Object) and updated_obj.get(constants.SDF_BOUNDS_MARKER, False):
+            bounds_to_recheck_due_to_direct_change.add(updated_obj.name)
+    all_bounds_to_schedule_check = bounds_to_recheck_due_to_direct_change.union(bounds_to_recheck_due_to_link)
 
-        if updated_obj:
-            # Find the root Bounds object for the updated object
-            root_bounds = utils.find_parent_bounds(updated_obj)
-            is_bounds_itself = updated_obj.get(constants.SDF_BOUNDS_MARKER, False) if root_bounds is None else False # Check if it IS the bounds
-            is_source = utils.is_sdf_source(updated_obj)
-
-            if root_bounds or is_bounds_itself:
-                 bounds_to_check = root_bounds if root_bounds else updated_obj # Target the bounds obj
-                 # --- Check conditions that require SDF Recompute ---
-                 recompute_needed = False
-                 if update.is_updated_transform and (is_bounds_itself or is_source):
-                     recompute_needed = True
-                     if is_source: needs_visual_redraw = True
-                 if recompute_needed:
-                      updated_bounds_names.add(bounds_to_check.name)
-
-    # Trigger the check function for each affected bounds hierarchy
-    if updated_bounds_names:
-        current_scene = getattr(context, 'scene', None)
-        if current_scene: # Check scene exists before passing
-             for bounds_name in updated_bounds_names:
-                try:
-                    # Use timer to avoid potential depsgraph recursion issues
-                    bpy.app.timers.register(lambda scn=current_scene, name=bounds_name: check_and_trigger_update(scn, name, "depsgraph"), first_interval=0.0)
-                except Exception as e: print(f"FieldForge ERROR: Failed schedule check_trigger from depsgraph for {bounds_name}: {e}")
+    if all_bounds_to_schedule_check:
+        current_scene_ctx = getattr(context, 'scene', None)
+        if current_scene_ctx:
+            for bounds_name_to_check in all_bounds_to_schedule_check:
+                if current_scene_ctx.objects.get(bounds_name_to_check):
+                    try:
+                        bpy.app.timers.register(
+                            lambda scn_arg=current_scene_ctx, name_arg=bounds_name_to_check: check_and_trigger_update(scn_arg, name_arg, "depsgraph_or_link_event"),
+                            first_interval=0.0
+                        )
+                    except Exception as e: print(f"FieldForge ERROR: Failed schedule check_trigger from depsgraph for {bounds_name}: {e}")
         else: print("FieldForge WARN (Depsgraph): Cannot trigger update - no current scene.")
 
 

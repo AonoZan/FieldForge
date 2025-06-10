@@ -8,6 +8,7 @@ from mathutils import Vector, Matrix
 
 from .. import constants
 from .. import utils
+from ..core import update_manager as ff_update_manager
 
 
 def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Object) -> dict | None:
@@ -64,6 +65,9 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
             is_visible = actual_child_obj.visible_get(view_layer=context.view_layer)
             child_name = actual_child_obj.name
 
+            if utils.is_sdf_source(actual_child_obj) or utils.is_sdf_group(actual_child_obj) or utils.is_sdf_canvas(actual_child_obj):
+                effective_target_for_child = utils.get_effective_sdf_object(actual_child_obj)
+                ff_update_manager.register_link_dependency(actual_child_obj, effective_target_for_child, bounds_obj)
 
             if utils.is_sdf_source(actual_child_obj) and is_visible:
                 props_to_track = {}

@@ -1167,6 +1167,34 @@ class OBJECT_OT_fieldforge_clear_link(Operator):
             self.report({'INFO'}, f"{obj.name} was not linked.")
         return {'FINISHED'}
 
+class OBJECT_OT_fieldforge_toggle_process_linked_children(Operator):
+    """Toggles whether the children of the linked target are processed."""
+    bl_idname = "object.fieldforge_toggle_process_linked_children"
+    bl_label = "Toggle Process Linked Children"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        if not obj:
+            return False
+        # Check if the object is actually linked to a valid, different, compatible target
+        return utils.is_sdf_linked(obj)
+
+    def execute(self, context):
+        obj = context.active_object # This operator always acts on the selected object
+
+        prop_name = constants.SDF_PROCESS_LINKED_CHILDREN_PROP
+        current_val = obj.get(prop_name, False) # Default to False if somehow not set
+        obj[prop_name] = not current_val
+
+        # Trigger update for the bounds system this object belongs to
+        bounds = utils.find_parent_bounds(obj)
+        if bounds:
+            ff_update.check_and_trigger_update(context.scene, bounds.name, f"toggle_process_linked_children_{obj.name}")
+        tag_redraw_all_view3d() # For UI refresh and potential visual changes
+        return {'FINISHED'}
+
 # --- Modal Selection/Grab Handler ---
 
 class VIEW3D_OT_fieldforge_select_handler(Operator):
@@ -1494,6 +1522,7 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_group_twirl,
     OBJECT_OT_fieldforge_set_group_twirl_axis,
     OBJECT_OT_fieldforge_clear_link,
+    OBJECT_OT_fieldforge_toggle_process_linked_children,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
 )

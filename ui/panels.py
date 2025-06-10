@@ -32,40 +32,28 @@ from .operators import (
 def _draw_link_controls(layout: bpy.types.UILayout, context: bpy.types.Context, obj: bpy.types.Object, linkable_type_check_func):
     """
     Helper to draw link controls.
-    linkable_type_check_func is a function like utils.is_sdf_source, utils.is_sdf_group, etc.
     """
     if not obj: return False, obj
-    link_prop_exists_on_obj = constants.SDF_LINK_TARGET_NAME_PROP in obj
-    if not link_prop_exists_on_obj:
-        layout.label(text=f"'{constants.SDF_LINK_TARGET_NAME_PROP}' missing on {obj.name}.", icon='ERROR')
-        return False, obj 
-    is_self_linked = utils.is_sdf_linked(obj) 
-    effective_obj_for_ui = utils.get_effective_sdf_object(obj)
-    if not effective_obj_for_ui: effective_obj_for_ui = obj 
 
-    link_row = layout.row(align=True); link_row.label(text="Link Params From:")
-    link_row.prop_search(obj, f'["{constants.SDF_LINK_TARGET_NAME_PROP}"]', context.scene, "objects", text="", icon='LINKED')
+    row_link_target = layout.row(align=True)
+    row_link_target.prop_search(obj, f'["{constants.SDF_LINK_TARGET_NAME_PROP}"]', 
+                                context.scene, "objects", text="")
+    effective_obj_for_ui = utils.get_effective_sdf_object(obj)
+    toggle_op = row_link_target.operator(
+        "object.fieldforge_toggle_process_linked_children", 
+        text="", 
+        icon='LINKED',
+        depress=obj.get(constants.SDF_PROCESS_LINKED_CHILDREN_PROP, False)
+    )
     
-    if is_self_linked and effective_obj_for_ui != obj: 
-        info_row = layout.row(align=True)
-        info_row.label(text=f"Using: {effective_obj_for_ui.name}", icon='INFO')
-        clear_op = info_row.operator("object.fieldforge_clear_link", text="", icon='X'); clear_op.object_name = obj.name
-    elif obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "") and (effective_obj_for_ui == obj or not effective_obj_for_ui):
-        info_row = layout.row(align=True); info_row.alert = True
-        linked_name = obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "") 
-        target_obj_temp = context.scene.objects.get(linked_name)
-        if not target_obj_temp: info_row.label(text=f"Target '{linked_name}' not found!", icon='ERROR')
-        else: info_row.label(text=f"Target '{linked_name}' incompatible!", icon='ERROR')
-        clear_op = info_row.operator("object.fieldforge_clear_link", text="", icon='X'); clear_op.object_name = obj.name
-        
     layout.separator()
-    return is_self_linked, effective_obj_for_ui
+    return is_obj_actually_linked_to_valid_target, effective_obj_for_ui
 
 def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the Bounds object settings. """
     obj = context.object # Assumes the active object IS the Bounds object
 
-    is_self_linked, obj_for_props = _draw_link_controls(layout, context, obj, utils.is_sdf_source)
+    is_obj_itself_linked, obj_for_props = _draw_link_controls(layout, context, obj, utils.is_sdf_bounds)
 
     obj = obj_for_props
 
@@ -379,7 +367,7 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     obj = context.object
     sdf_type = obj.get("sdf_type", "Unknown")
 
-    is_self_linked, obj_for_props = _draw_link_controls(layout, context, obj, utils.is_sdf_source)
+    is_obj_itself_linked, obj_for_props = _draw_link_controls(layout, context, obj, utils.is_sdf_source)
 
     parent_obj = obj_for_props.parent
     parent_is_canvas = False
