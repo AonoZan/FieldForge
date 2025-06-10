@@ -35,6 +35,8 @@ def _draw_link_controls(layout: bpy.types.UILayout, context: bpy.types.Context, 
     """
     if not obj: return False, obj
 
+    is_obj_actually_linked_to_valid_target = utils.is_sdf_linked(obj)
+
     row_link_target = layout.row(align=True)
     row_link_target.prop_search(obj, f'["{constants.SDF_LINK_TARGET_NAME_PROP}"]', 
                                 context.scene, "objects", text="")
