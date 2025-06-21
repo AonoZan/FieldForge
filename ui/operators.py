@@ -132,6 +132,13 @@ class OBJECT_OT_add_sdf_group(Operator):
         default=constants.DEFAULT_GROUP_SETTINGS["sdf_blend_factor"],
         min=0.0, max=5.0, subtype='FACTOR'
     )
+    initial_csg_operation: EnumProperty(
+        name="CSG Operation",
+        description="CSG operation for this group's result with its parent",
+        items=[('UNION', "Union", "Add to parent shape"), ('DIFFERENCE', "Difference", "Subtract from parent"),
+               ('INTERSECT', "Intersect", "Intersect with parent"), ('NONE', "None", "No direct CSG")],
+        default=constants.DEFAULT_GROUP_SETTINGS["sdf_csg_operation"]
+    )
 
     @classmethod
     def poll(cls, context):
@@ -188,6 +195,8 @@ class OBJECT_OT_add_sdf_group(Operator):
             try:
                 if key == "sdf_blend_factor":
                     obj[key] = self.initial_blend_factor
+                elif key == "sdf_csg_operation":
+                    obj[key] = self.initial_csg_operation
                 else:
                     obj[key] = value
             except TypeError as e:

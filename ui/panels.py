@@ -156,11 +156,23 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     
     layout.separator()
 
+    # --- Interaction Mode ---
+    row_csg_buttons = layout.row(align=True)
+    current_csg_op = obj_for_props.get("sdf_csg_operation", constants.DEFAULT_GROUP_SETTINGS["sdf_csg_operation"])
+
+    op_none = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='RADIOBUT_OFF', depress=(current_csg_op == 'NONE'))
+    op_none.csg_mode = 'NONE'
+    op_union = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='ADD', depress=(current_csg_op == 'UNION'))
+    op_union.csg_mode = 'UNION'
+    op_intersect = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='SELECT_INTERSECT', depress=(current_csg_op == 'INTERSECT'))
+    op_intersect.csg_mode = 'INTERSECT'
+    op_diff = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='SELECT_DIFFERENCE', depress=(current_csg_op == 'DIFFERENCE'))
+    op_diff.csg_mode = 'DIFFERENCE'
+
     # --- Blending ---
     blend_prop_row = layout.row(align=True)
     blend_prop_row.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend Factor")
     blend_prop_row.active = not (obj_for_props.get("sdf_use_morph") or obj_for_props.get("sdf_use_clearance"))
-
 
     layout.separator()
 
@@ -442,17 +454,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     layout.separator()
 
     ## --- Interaction Mode (CSG with parent/canvas) ---
-    interact_label_row = layout.row(align=True)
-    interact_label_row.label(text="CSG Operation with Parent/Canvas:") # Clarify label
-
-    use_loft = obj_for_props.get("sdf_use_loft", False)
-    use_morph = obj_for_props.get("sdf_use_morph", False) and not use_loft
-    use_clearance = obj_for_props.get("sdf_use_clearance", False) and not use_loft and not use_morph
-    csg_active = not use_loft and not use_morph and not use_clearance
-    
-
-    # CSG buttons are ALWAYS active, as they define how this 2D shape interacts
-    # within the Canvas, or how this 3D shape (if not child of canvas) interacts with its 3D parent.
     row_csg_buttons = layout.row(align=True)
     current_csg_op = obj_for_props.get("sdf_csg_operation", constants.DEFAULT_SOURCE_SETTINGS["sdf_csg_operation"])
 
@@ -465,6 +466,14 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     op_diff = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='SELECT_DIFFERENCE', depress=(current_csg_op == 'DIFFERENCE'))
     op_diff.csg_mode = 'DIFFERENCE'
 
+    # --- Blending ---
+    blend_row = layout.row(align=True)
+    blend_row.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend Factor")
+
+    use_loft = obj_for_props.get("sdf_use_loft", False)
+    use_morph = obj_for_props.get("sdf_use_morph", False) and not use_loft
+    use_clearance = obj_for_props.get("sdf_use_clearance", False) and not use_loft and not use_morph
+    csg_active = not use_loft and not use_morph and not use_clearance
 
     col_3d_mods = layout.column()
     col_3d_mods.active = not parent_is_canvas # Disable this whole column if parent is canvas
@@ -563,13 +572,6 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     shell_offset_sub_row = shell_controls_row.row(align=True)
     shell_offset_sub_row.active = use_shell_val
     shell_offset_sub_row.prop(obj_for_props, '["sdf_shell_offset"]', text="Thickness")
-    
-    layout.separator()
-
-    # --- Blending ---
-    blend_row = layout.row(align=True)
-    blend_row.active = not use_clearance
-    blend_row.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend Factor")
 
 
     layout.separator()
@@ -666,8 +668,24 @@ def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
         down_button_op_layout=buttons_sub_row.row(align=True); down_button_op_layout.active=can_move_down
         op_down=down_button_op_layout.operator(OBJECT_OT_fieldforge_reorder_source.bl_idname,text=" ",icon='TRIA_DOWN'); op_down.direction='DOWN'
 
-
     layout.separator()
+
+    # CSG operation of this Canvas (as an extruded 3D object) with its parent
+    row_csg_buttons = layout.row(align=True)
+    current_csg_op = obj_for_props.get("sdf_csg_operation", constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"])
+
+    op_none = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='RADIOBUT_OFF', depress=(current_csg_op == 'NONE'))
+    op_none.csg_mode = 'NONE'
+    op_union = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='ADD', depress=(current_csg_op == 'UNION'))
+    op_union.csg_mode = 'UNION'
+    op_intersect = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='SELECT_INTERSECT', depress=(current_csg_op == 'INTERSECT'))
+    op_intersect.csg_mode = 'INTERSECT'
+    op_diff = row_csg_buttons.operator(OBJECT_OT_fieldforge_set_csg_mode.bl_idname, text="    ", icon='SELECT_DIFFERENCE', depress=(current_csg_op == 'DIFFERENCE'))
+    op_diff.csg_mode = 'DIFFERENCE'
+    
+    layout.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend factor")
+    layout.separator()
+
     row_blend = layout.row(align=True)
     row_blend.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend factor")
     
@@ -703,12 +721,7 @@ def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
         revolve_params_row.label(text="Profile: Local Positive X")
     layout.separator()
 
-    # CSG operation of this Canvas (as an extruded 3D object) with its parent
-    layout.label(text="Interaction with Parent (3D):")
-    row_csg_parent = layout.row(align=True)
-    # Simplified: direct prop editing for CSG for now, or use OBJECT_OT_fieldforge_set_csg_mode if it can target any object.
-    # For now, direct prop for simplicity, assuming "sdf_csg_operation" is the standard key.
-    row_csg_parent.prop(obj_for_props, '["sdf_csg_operation"]', text="CSG with Parent")
+
 
 # --- Main Panel Class ---
 

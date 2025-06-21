@@ -87,6 +87,7 @@ DEFAULT_CANVAS_SETTINGS = {
 # Default values for Group Object properties ---
 DEFAULT_GROUP_SETTINGS = {
     "sdf_blend_factor": 0.1,
+    "sdf_csg_operation": "UNION",
     "sdf_group_symmetry_x": False,
     "sdf_group_symmetry_y": False,
     "sdf_group_symmetry_z": False,
