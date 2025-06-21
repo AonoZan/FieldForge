@@ -77,8 +77,7 @@ DEFAULT_SETTINGS = {
 # Default values for Canvas Object properties ---
 DEFAULT_CANVAS_SETTINGS = {
     "sdf_extrusion_depth": 0.1,
-    "sdf_canvas_child_blend_factor": 0.0,
-    "sdf_child_blend_factor": 0.0,
+    "sdf_blend_factor": 0.0,
     "sdf_csg_operation": "UNION",
     "sdf_canvas_use_revolve": False,
     SDF_LINK_TARGET_NAME_PROP: "",
@@ -87,7 +86,7 @@ DEFAULT_CANVAS_SETTINGS = {
 
 # Default values for Group Object properties ---
 DEFAULT_GROUP_SETTINGS = {
-    "sdf_child_blend_factor": 0.1, # Default blend factor for children of this group
+    "sdf_blend_factor": 0.1,
     "sdf_group_symmetry_x": False,
     "sdf_group_symmetry_y": False,
     "sdf_group_symmetry_z": False,
@@ -126,7 +125,7 @@ DEFAULT_GROUP_SETTINGS = {
 # While these are set in the Add operators, having them here could be useful for reference
 # or if you needed to reset properties on an existing source.
 DEFAULT_SOURCE_SETTINGS = {
-    "sdf_child_blend_factor": 0.0,
+    "sdf_blend_factor": 0.0,
     "sdf_csg_operation": "UNION",
     "sdf_use_clearance": False,
     "sdf_clearance_offset": 0.05,

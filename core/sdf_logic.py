@@ -291,7 +291,6 @@ def _process_children_recursive(
     children_owner_obj: bpy.types.Object, 
     current_logical_parent_obj: bpy.types.Object, 
     shape_accumulator: lf.Shape,
-    blend_factor_for_combining: float, 
     bounds_settings: dict,
     context: bpy.types.Context,
     is_processing_as_linked_child_instance: bool 
@@ -342,7 +341,8 @@ def _process_children_recursive(
             if is_logical_parent_an_arraying_group:
                 final_child_contribution_world = _apply_array_to_shape(final_child_contribution_world, current_logical_parent_obj, child_in_list)
             if not (final_child_contribution_world is None or final_child_contribution_world is lf.emptiness()):
-                shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, blend_factor_for_combining)
+                child_blend_factor = float(utils.get_sdf_param(child_in_list, "sdf_blend_factor", 0.0))
+                shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, child_blend_factor)
             continue
 
         child_subtree_contribution_world: lf.Shape | None
@@ -377,11 +377,13 @@ def _process_children_recursive(
         use_morph = utils.get_sdf_param(child_in_list, "sdf_use_morph", False)
         use_clearance = utils.get_sdf_param(child_in_list, "sdf_use_clearance", False) and not use_morph
         child_csg_op_type = utils.get_sdf_param(child_in_list, "sdf_csg_operation", "UNION")
-        current_interaction_blend = blend_factor_for_combining
+        
+        # Each child now provides its own blend factor.
+        child_blend_factor = float(utils.get_sdf_param(child_in_list, "sdf_blend_factor", 0.0))
 
         if utils.is_sdf_canvas(child_in_list):
             child_csg_op_type = utils.get_sdf_param(child_in_list, "sdf_csg_operation", constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"])
-            current_interaction_blend = float(utils.get_sdf_param(child_in_list, "sdf_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_child_blend_factor"]))
+            child_blend_factor = float(utils.get_sdf_param(child_in_list, "sdf_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_blend_factor"]))
             use_morph = False; use_clearance = False
 
         if use_morph:
@@ -394,24 +396,24 @@ def _process_children_recursive(
             try:
                 offset_sub = lf.offset(final_child_contribution_world, offset_val)
                 shape_accumulator = lf.difference(shape_accumulator, offset_sub)
-                if keep_original: shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, current_interaction_blend)
+                if keep_original: shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, child_blend_factor)
             except Exception: pass
         elif child_csg_op_type == "NONE": pass
         elif child_csg_op_type == "UNION":
-            shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, current_interaction_blend)
+            shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, child_blend_factor)
         elif child_csg_op_type == "INTERSECT":
             try:
-                blend = min(max(0.0, current_interaction_blend), 1.0) if current_interaction_blend > constants.CACHE_PRECISION else 0.0
+                blend = min(max(0.0, child_blend_factor), 1.0) if child_blend_factor > constants.CACHE_PRECISION else 0.0
                 if blend > 0.0 : shape_accumulator = custom_blended_intersection(shape_accumulator, final_child_contribution_world, blend, lf)
                 else: shape_accumulator = lf.intersection(shape_accumulator, final_child_contribution_world)
             except Exception: shape_accumulator = lf.emptiness() if _lf_imported_ok else None
         elif child_csg_op_type == "DIFFERENCE":
             try:
-                blend = min(max(0.0, current_interaction_blend), 1.0) if current_interaction_blend > constants.CACHE_PRECISION else 0.0
+                blend = min(max(0.0, child_blend_factor), 1.0) if child_blend_factor > constants.CACHE_PRECISION else 0.0
                 if blend > 0.0: shape_accumulator = lf.blend_difference(shape_accumulator, final_child_contribution_world, blend)
                 else: shape_accumulator = lf.difference(shape_accumulator, final_child_contribution_world)
             except Exception: pass
-        else: shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, current_interaction_blend)
+        else: shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, child_blend_factor)
             
     return shape_accumulator
 
@@ -485,7 +487,6 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
     elif obj_is_canvas:
         canvas_2d_base_local = lf.emptiness() if _lf_imported_ok else None
-        canvas_blend_for_its_2d_elements = float(utils.get_sdf_param(obj, "sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"]))
 
         direct_2d_children_list = []
         for c_child_obj in obj.children:
@@ -510,9 +511,12 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             if c2d_item_in_canvas_local_xy is None or c2d_item_in_canvas_local_xy is lf.emptiness(): continue
 
             c2d_item_csg_op = utils.get_sdf_param(c2d_item, "sdf_csg_operation", "UNION")
-            if c2d_item_csg_op == "UNION": canvas_2d_base_local = combine_shapes(canvas_2d_base_local, c2d_item_in_canvas_local_xy, canvas_blend_for_its_2d_elements)
-            elif c2d_item_csg_op == "DIFFERENCE": canvas_2d_base_local = lf.blend_difference(canvas_2d_base_local, c2d_item_in_canvas_local_xy, canvas_blend_for_its_2d_elements)
-            elif c2d_item_csg_op == "INTERSECT": canvas_2d_base_local = custom_blended_intersection(canvas_2d_base_local, c2d_item_in_canvas_local_xy, canvas_blend_for_its_2d_elements, lf)
+            # Get blend factor from the 2D child itself
+            c2d_blend_factor = float(utils.get_sdf_param(c2d_item, "sdf_blend_factor", 0.0))
+
+            if c2d_item_csg_op == "UNION": canvas_2d_base_local = combine_shapes(canvas_2d_base_local, c2d_item_in_canvas_local_xy, c2d_blend_factor)
+            elif c2d_item_csg_op == "DIFFERENCE": canvas_2d_base_local = lf.blend_difference(canvas_2d_base_local, c2d_item_in_canvas_local_xy, c2d_blend_factor)
+            elif c2d_item_csg_op == "INTERSECT": canvas_2d_base_local = custom_blended_intersection(canvas_2d_base_local, c2d_item_in_canvas_local_xy, c2d_blend_factor, lf)
 
         obj_processes_linked_children_canvas = obj.get(constants.SDF_PROCESS_LINKED_CHILDREN_PROP, False)
         if utils.is_sdf_linked(obj) and obj_processes_linked_children_canvas:
@@ -542,9 +546,12 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     if linked_c2d_item_in_canvas_local_xy is None or linked_c2d_item_in_canvas_local_xy is lf.emptiness(): continue
 
                     linked_c2d_item_csg_op = utils.get_sdf_param(linked_c2d_item, "sdf_csg_operation", "UNION")
-                    if linked_c2d_item_csg_op == "UNION": canvas_2d_base_local = combine_shapes(canvas_2d_base_local, linked_c2d_item_in_canvas_local_xy, canvas_blend_for_its_2d_elements)
-                    elif linked_c2d_item_csg_op == "DIFFERENCE": canvas_2d_base_local = lf.blend_difference(canvas_2d_base_local, linked_c2d_item_in_canvas_local_xy, canvas_blend_for_its_2d_elements)
-                    elif linked_c2d_item_csg_op == "INTERSECT": canvas_2d_base_local = custom_blended_intersection(canvas_2d_base_local, linked_c2d_item_in_canvas_local_xy, canvas_blend_for_its_2d_elements, lf)
+                    # Get blend factor from the linked 2D child itself
+                    linked_c2d_blend_factor = float(utils.get_sdf_param(linked_c2d_item, "sdf_blend_factor", 0.0))
+
+                    if linked_c2d_item_csg_op == "UNION": canvas_2d_base_local = combine_shapes(canvas_2d_base_local, linked_c2d_item_in_canvas_local_xy, linked_c2d_blend_factor)
+                    elif linked_c2d_item_csg_op == "DIFFERENCE": canvas_2d_base_local = lf.blend_difference(canvas_2d_base_local, linked_c2d_item_in_canvas_local_xy, linked_c2d_blend_factor)
+                    elif linked_c2d_item_csg_op == "INTERSECT": canvas_2d_base_local = custom_blended_intersection(canvas_2d_base_local, linked_c2d_item_in_canvas_local_xy, linked_c2d_blend_factor, lf)
 
         if not (canvas_2d_base_local is None or canvas_2d_base_local is lf.emptiness()):
             canvas_3d_final_local = lf.emptiness()
@@ -566,15 +573,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
     current_processing_shape = obj_initial_shape_contribution_world
 
-    obj_blend_factor_for_its_children = float(utils.get_sdf_param(obj, "sdf_child_blend_factor", 0.0))
-    if obj_is_sdf_source and not obj_is_canvas: obj_blend_factor_for_its_children = float(utils.get_sdf_param(obj, "sdf_child_blend_factor", constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"]))
-    elif obj_is_group : obj_blend_factor_for_its_children = float(utils.get_sdf_param(obj, "sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]))
-    elif obj_is_canvas: obj_blend_factor_for_its_children = float(utils.get_sdf_param(obj, "sdf_canvas_child_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_canvas_child_blend_factor"])) 
-
     current_processing_shape = _process_children_recursive(
         children_owner_obj=obj, current_logical_parent_obj=obj, 
         shape_accumulator=current_processing_shape,
-        blend_factor_for_combining=obj_blend_factor_for_its_children,
         bounds_settings=bounds_settings, context=context,
         is_processing_as_linked_child_instance=False 
     )
@@ -583,12 +584,10 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
     if utils.is_sdf_linked(obj) and obj_processes_linked_children:
         linked_target = utils.get_effective_sdf_object(obj)
         if linked_target and linked_target != obj:
-            blend_for_linked_children = obj_blend_factor_for_its_children
 
             current_processing_shape = _process_children_recursive(
                 children_owner_obj=linked_target, current_logical_parent_obj=obj, 
                 shape_accumulator=current_processing_shape,
-                blend_factor_for_combining=blend_for_linked_children, 
                 bounds_settings=bounds_settings, context=context,
                 is_processing_as_linked_child_instance=True
             )
@@ -611,10 +610,10 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 if modified_local is None or modified_local is lf.emptiness(): return lf.emptiness()
                 return apply_blender_transform_to_sdf(modified_local, obj_for_local_space.matrix_world.inverted())
 
-            sym_blend_grp = float(utils.get_sdf_param(obj, "sdf_child_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"]))
-            if utils.get_sdf_param(obj, "sdf_group_symmetry_x", False): shape_after_mods = _apply_local_modifier(shape_after_mods, obj, blended_symmetric_x, sym_blend_grp)
-            if utils.get_sdf_param(obj, "sdf_group_symmetry_y", False): shape_after_mods = _apply_local_modifier(shape_after_mods, obj, blended_symmetric_y, sym_blend_grp)
-            if utils.get_sdf_param(obj, "sdf_group_symmetry_z", False): shape_after_mods = _apply_local_modifier(shape_after_mods, obj, blended_symmetric_z, sym_blend_grp)
+            group_self_blend_factor = float(utils.get_sdf_param(obj, "sdf_blend_factor", constants.DEFAULT_GROUP_SETTINGS["sdf_blend_factor"]))
+            if utils.get_sdf_param(obj, "sdf_group_symmetry_x", False): shape_after_mods = _apply_local_modifier(shape_after_mods, obj, blended_symmetric_x, group_self_blend_factor)
+            if utils.get_sdf_param(obj, "sdf_group_symmetry_y", False): shape_after_mods = _apply_local_modifier(shape_after_mods, obj, blended_symmetric_y, group_self_blend_factor)
+            if utils.get_sdf_param(obj, "sdf_group_symmetry_z", False): shape_after_mods = _apply_local_modifier(shape_after_mods, obj, blended_symmetric_z, group_self_blend_factor)
 
             if utils.get_sdf_param(obj, "sdf_group_taper_z_active", False):
                 h_tpr=max(1e-5,float(utils.get_sdf_param(obj,"sdf_group_taper_z_height",1.0))); f_tpr=max(0.0,float(utils.get_sdf_param(obj,"sdf_group_taper_z_factor",0.5))); bs_tpr=max(1e-5,float(utils.get_sdf_param(obj,"sdf_group_taper_z_base_scale",1.0)))

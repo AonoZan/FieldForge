@@ -126,10 +126,10 @@ class OBJECT_OT_add_sdf_group(Operator):
     bl_label = "Add SDF Group"
     bl_options = {'REGISTER', 'UNDO'}
 
-    initial_child_blend: FloatProperty(
-        name="Child Blend Factor",
-        description="Blend factor for children parented TO this group",
-        default=constants.DEFAULT_GROUP_SETTINGS["sdf_child_blend_factor"],
+    initial_blend_factor: FloatProperty(
+        name="Blend Factor",
+        description="Blend factor for the group's operations (e.g. symmetry) and for blending with its parent",
+        default=constants.DEFAULT_GROUP_SETTINGS["sdf_blend_factor"],
         min=0.0, max=5.0, subtype='FACTOR'
     )
 
@@ -186,8 +186,8 @@ class OBJECT_OT_add_sdf_group(Operator):
 
         for key, value in constants.DEFAULT_GROUP_SETTINGS.items():
             try:
-                if key == "sdf_child_blend_factor":
-                    obj[key] = self.initial_child_blend
+                if key == "sdf_blend_factor":
+                    obj[key] = self.initial_blend_factor
                 else:
                     obj[key] = value
             except TypeError as e:
@@ -240,10 +240,10 @@ class OBJECT_OT_add_sdf_canvas(Operator):
                ('INTERSECT', "Intersect", "Intersect with parent"), ('NONE', "None", "No direct CSG")],
         default=constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"]
     )
-    initial_parent_child_blend: FloatProperty(
-        name="Parent Blend Factor",
+    initial_blend_factor: FloatProperty(
+        name="Blend with Parent",
         description="Blend factor for this extruded Canvas with its parent",
-        default=constants.DEFAULT_CANVAS_SETTINGS["sdf_child_blend_factor"],
+        default=constants.DEFAULT_CANVAS_SETTINGS["sdf_blend_factor"],
         min=0.0, max=5.0, subtype='FACTOR'
     )
 
@@ -293,6 +293,8 @@ class OBJECT_OT_add_sdf_canvas(Operator):
         except ValueError: obj.matrix_parent_inverse.identity()
 
         utils.initiate_settings(obj, constants.DEFAULT_CANVAS_SETTINGS)
+        obj["sdf_blend_factor"] = self.initial_blend_factor
+        obj["sdf_csg_operation"] = self.initial_parent_csg_operation
 
         obj[constants.SDF_CANVAS_MARKER] = True
         
@@ -327,10 +329,10 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
     """Base class for adding various SDF source type Empties"""
     bl_options = {'REGISTER', 'UNDO'}
 
-    initial_child_blend: FloatProperty(
-        name="Child Blend Factor",
-        description="Blend factor for children parented TO this object",
-        default=constants.DEFAULT_SOURCE_SETTINGS["sdf_child_blend_factor"],
+    initial_blend_factor: FloatProperty(
+        name="Blend Factor",
+        description="How much this shape blends with its parent in the hierarchy",
+        default=constants.DEFAULT_SOURCE_SETTINGS["sdf_blend_factor"],
         min=0.0, max=5.0, subtype='FACTOR'
     )
     initial_csg_operation: EnumProperty(
@@ -412,15 +414,15 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
         obj[constants.SDF_PROPERTY_MARKER] = True
         obj["sdf_type"] = sdf_type
         defaults = constants.DEFAULT_SOURCE_SETTINGS # Use defaults from constants
-        obj["sdf_child_blend_factor"] = self.initial_child_blend # Set from operator prop
+        obj["sdf_blend_factor"] = self.initial_blend_factor # Set from operator prop
         # Determine initial interaction mode (Morph/Clearance override CSG op)
         final_use_morph = self.use_morph
         final_use_clearance = self.use_clearance and not final_use_morph
 
         utils.initiate_settings(obj, constants.DEFAULT_SOURCE_SETTINGS)
 
-        if hasattr(self, 'initial_child_blend'):
-            obj["sdf_child_blend_factor"] = self.initial_child_blend
+        if hasattr(self, 'initial_blend_factor'):
+            obj["sdf_blend_factor"] = self.initial_blend_factor
         
         obj["sdf_use_morph"] = final_use_morph
         obj["sdf_morph_factor"] = self.initial_morph_factor if final_use_morph else defaults["sdf_morph_factor"]

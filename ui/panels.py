@@ -156,9 +156,11 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     
     layout.separator()
 
-    # --- Child Object Blending ---
-    child_blend_prop_row = layout.row(align=True)
-    child_blend_prop_row.prop(obj_for_props, '["sdf_child_blend_factor"]', text="Blend Factor")
+    # --- Blending ---
+    blend_prop_row = layout.row(align=True)
+    blend_prop_row.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend Factor")
+    blend_prop_row.active = not (obj_for_props.get("sdf_use_morph") or obj_for_props.get("sdf_use_clearance"))
+
 
     layout.separator()
 
@@ -564,10 +566,11 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
     
     layout.separator()
 
-    # --- Child Object Blending ---
-    child_blend_row = layout.row(align=True)
-    child_blend_row.active = not use_clearance
-    child_blend_row.prop(obj_for_props, '["sdf_child_blend_factor"]', text="Blend Factor")
+    # --- Blending ---
+    blend_row = layout.row(align=True)
+    blend_row.active = not use_clearance
+    blend_row.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend Factor")
+
 
     layout.separator()
 
@@ -665,8 +668,8 @@ def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
 
 
     layout.separator()
-    layout.label(text="2D Composition:")
-    layout.prop(obj_for_props, '["sdf_canvas_child_blend_factor"]', text="2D Child Blend")
+    row_blend = layout.row(align=True)
+    row_blend.prop(obj_for_props, '["sdf_blend_factor"]', text="Blend factor")
     
     layout.separator()
 
@@ -706,7 +709,6 @@ def draw_sdf_canvas_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     # Simplified: direct prop editing for CSG for now, or use OBJECT_OT_fieldforge_set_csg_mode if it can target any object.
     # For now, direct prop for simplicity, assuming "sdf_csg_operation" is the standard key.
     row_csg_parent.prop(obj_for_props, '["sdf_csg_operation"]', text="CSG with Parent")
-    row_csg_parent.prop(obj_for_props, '["sdf_child_blend_factor"]', text="Blend with Parent")
 
 # --- Main Panel Class ---
 
