@@ -2,12 +2,15 @@
 Manages the automatic update process for FieldForge SDF systems.
 Includes debouncing, throttling, triggering mesh regeneration,
 and the Blender dependency graph handler.
+This version uses multi-threading for mesh generation to keep the UI responsive.
 """
 
 import bpy
 import time
 import math
 from mathutils import Matrix, Vector
+import threading
+import queue
 
 # Use relative imports assuming this file is in FieldForge/core/
 from .. import constants
@@ -41,15 +44,12 @@ _updates_pending = {}
 _last_update_finish_times = {}
 # Caches the last known state dictionary used for a successful update
 _sdf_update_caches = {}
-
-_link_dependents_cache = {}
-_reverse_link_cache = {}
+# State for multithreading
+_worker_threads = {}
 
 
 def clear_link_caches(): # Call from clear_timers_and_state
-    global _link_dependents_cache, _reverse_link_cache
-    _link_dependents_cache.clear()
-    _reverse_link_cache.clear()
+    state.clear_link_caches()
 
 # --- Cache Update ---
 
@@ -70,6 +70,7 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
     """
     global _updates_pending, _sdf_update_caches # Access relevant state dicts
 
+    t_start = time.perf_counter()
     context = bpy.context
     if not context or not scene: return # Context/Scene might not be ready
 
@@ -81,6 +82,7 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
         _updates_pending.pop(bounds_name, None)
         _last_update_finish_times.pop(bounds_name, None)
         _sdf_update_caches.pop(bounds_name, None)
+        _cancel_and_clear_worker(bounds_name)
         return
 
     # Check the auto-update setting ON THE BOUNDS OBJECT
@@ -92,7 +94,9 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
         return
 
     # Get the current state ONLY if necessary checks pass
+    t_state_start = time.perf_counter()
     current_state = state.get_current_sdf_state(context, bounds_obj)
+    t_state_end = time.perf_counter()
     if not current_state: # Handle case where state gathering fails
         print(f"FieldForge WARN (check_trigger): Could not get current state for {bounds_name}.")
         return
@@ -102,9 +106,7 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
     if state.has_state_changed(current_state, cached_state): # Pass cached state directly
         # State has changed, schedule a new debounce timer
         schedule_new_debounce_timer(scene, bounds_name, current_state)
-        # Trigger redraw for custom visuals (handled in drawing.py)
-        # Consider importing and calling drawing.tag_redraw_all_view3d() here if needed
-        # import drawing; drawing.tag_redraw_all_view3d() # Requires careful import handling
+    t_end = time.perf_counter()
 
 
 def cancel_debounce_timer(bounds_name: str):
@@ -130,6 +132,8 @@ def schedule_new_debounce_timer(scene: bpy.types.Scene, bounds_name: str, trigge
 
     # Cancel any previous timer for this specific bounds object
     cancel_debounce_timer(bounds_name)
+    # Also cancel any running worker thread for this bounds, as a new update is coming
+    _cancel_and_clear_worker(bounds_name)
 
     # Store the state that triggered this timer scheduling attempt
     _last_trigger_states[bounds_name] = trigger_state
@@ -191,16 +195,7 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
         _last_trigger_states.pop(bounds_name, None) # Clear trigger state, it's being used
         _updates_pending[bounds_name] = True # Mark as pending
 
-        try:
-            # Use timer with 0 interval to run the update in the next Blender tick
-            # Pass the specific bounds_name, state, and scene explicitly
-            bpy.app.timers.register(
-                lambda scn=scene, name=bounds_name, state=state_to_pass_to_update: run_sdf_update(scn, name, state, is_viewport_update=True),
-                first_interval=0.0
-            )
-        except Exception as e:
-             print(f"FieldForge ERROR: Failed register run_sdf_update timer for {bounds_name}: {e}")
-             _updates_pending[bounds_name] = False # Reset pending flag on error
+        run_sdf_update(scene, bounds_name, state_to_pass_to_update, is_viewport_update=True)
 
     else:
         # --- Throttle Active: Reschedule this check function ---
@@ -223,327 +218,230 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
     return None # Essential: Prevents timer from repeating automatically
 
 
-# --- Core Update Function ---
+# --- Core Update Function (Now split into Thread Starter and Result Applicator) ---
 
-def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict, is_viewport_update: bool = False):
+def _mesh_generation_worker(result_q, is_cancelled_flag, shape, mesh_args, bounds_name):
     """
-    Performs the core SDF generation and mesh update for a specific bounds hierarchy.
-    Reads settings and state from the provided `trigger_state`.
-    Updates the cache only on success.
+    Worker function to be run in a separate thread.
+    Performs the heavy mesh generation and puts the result in a queue.
     """
-    global _updates_pending, _last_update_finish_times, _sdf_update_caches
-
-    # Check libfive availability at runtime
-    if not _lf_imported_ok:
-         _updates_pending[bounds_name] = False # Reset pending flag
-         return # Cannot proceed
-
-    context = bpy.context
-    if not context or not scene or not scene.name:
-        print(f"FieldForge ERROR: Invalid context/scene during run_sdf_update for {bounds_name}.")
-        if bounds_name in _updates_pending: _updates_pending[bounds_name] = False;
-        return # Cannot proceed reliably
-
-    bounds_obj = scene.objects.get(bounds_name)
-
-    # --- Pre-computation Checks ---
-    if trigger_state is None: print(f"ERROR: run_sdf_update with None state for {bounds_name}!"); _updates_pending[bounds_name] = False; return
-    if not bounds_obj: print(f"ERROR: run_sdf_update for non-existent bounds '{bounds_name}'!"); _updates_pending[bounds_name] = False; return
-
-    update_type = "VIEWPORT" if is_viewport_update else "FINAL"
-    start_time = time.time()
-
-    mesh_update_successful = False
-    mesh_generation_error = False
-    result_obj = None # Define early for use in finally block
+    if is_cancelled_flag.is_set():
+        result_q.put(None) # Signal that we cancelled before starting
+        return
 
     try:
-        sdf_settings_from_bounds = trigger_state.get('scene_settings')
-        bounds_matrix_at_trigger = trigger_state.get('bounds_matrix')
-        result_name = bounds_obj.get(constants.SDF_RESULT_OBJ_NAME_PROP)
+        t_start_worker = time.perf_counter()
+        # This is the slow, CPU-intensive part
+        mesh_data = shape.get_mesh(**mesh_args)
+        t_end_worker = time.perf_counter()
+        if is_cancelled_flag.is_set():
+            result_q.put(None) # Cancelled during generation, discard result
+            return
+        result_q.put(mesh_data) # Put the result in the queue for the main thread
+    except Exception as e:
+        print(f"FieldForge Thread ERROR: libfive mesh generation failed for {bounds_name}: {e}")
+        result_q.put(Exception(f"Meshing failed: {e}")) # Put exception in queue to report it
 
-        if not sdf_settings_from_bounds: raise ValueError("SDF bounds settings missing from trigger state")
-        if not bounds_matrix_at_trigger: raise ValueError("Bounds matrix missing from trigger state")
+def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewport_update: bool):
+    """
+    Timer callback for the main thread. Checks the result queue from the worker.
+    If a result is available, it applies the new mesh data to the Blender object.
+    """
+    global _worker_threads, _updates_pending, _last_update_finish_times, _sdf_update_caches
+    t_apply_start = time.perf_counter()
 
-        # 1. Process Hierarchy using the *current* bounds_obj as root.
-        #    Pass sdf_settings_from_bounds as the `bounds_settings` argument
-        #    to sdf_logic.process_sdf_hierarchy.
-        final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings_from_bounds)
+    if bounds_name not in _worker_threads:
+        return None # Worker was cancelled or finished, timer is stale
 
-        if final_combined_shape is None:
-            final_combined_shape = lf.emptiness()
-            print(f"FieldForge WARN: SDF hierarchy processing returned None for {bounds_name}, using empty.")
+    thread, result_q, _, is_cancelled_flag = _worker_threads[bounds_name]
+
+    try:
+        # Check the queue without blocking
+        result_data = result_q.get_nowait()
+    except queue.Empty:
+        return 0.1 # No result yet, poll again in 0.1 seconds
+
+    # --- Result is ready, process it ---
+    _cancel_and_clear_worker(bounds_name) # Clean up the worker entry now that we have the result
+    
+    context = bpy.context
+    scene = getattr(context, 'scene', None)
+    if not scene:
+        _updates_pending[bounds_name] = False
+        return None
+
+    bounds_obj = scene.objects.get(bounds_name)
+    if not bounds_obj:
+        _updates_pending[bounds_name] = False
+        return None
+        
+    mesh_update_successful = False
+    mesh_generation_error = False
+    result_obj = None
+
+    try:
+        if result_data is None: # Worker was cancelled
             mesh_generation_error = True
+            raise InterruptedError("Update was cancelled by a newer request.")
+        if isinstance(result_data, Exception): # Worker had an error
+            mesh_generation_error = True
+            raise result_data
 
-        # 2. Define Meshing Region based on the Bounds object's state at trigger time
-        #    Use bounds_matrix_at_trigger here for consistency with the state that triggered the update.
-        b_loc = bounds_matrix_at_trigger.translation
-        b_sca_vec = bounds_matrix_at_trigger.to_scale()
-        extent_factor = 1.0 
-        world_extent_avg = max(1e-6, (abs(b_sca_vec.x) + abs(b_sca_vec.y) + abs(b_sca_vec.z)) / 3.0) * extent_factor
+        # --- Apply mesh data (this code is moved from the old run_sdf_update) ---
+        mesh_data = result_data
+        sdf_settings_from_bounds = trigger_state.get('scene_settings')
+        result_name = bounds_obj.get(constants.SDF_RESULT_OBJ_NAME_PROP)
         
-        # More robust way to define bounds using actual scale components
-        # Ensure bounds are not inverted if scale is negative.
-        # The region should be defined by min/max corners in world space.
-        # If bounds_obj itself is scaled, its local unit cube (-1 to 1 on each axis)
-        # defines the meshing region in its local space. We need to transform these
-        # 8 corner points to world space using bounds_matrix_at_trigger and find the min/max.
+        # Find or create result object
+        result_obj = utils.find_result_object(context, result_name)
+        if not result_obj and result_name and sdf_settings_from_bounds.get("sdf_create_result_object"):
+             new_mesh_bdata = bpy.data.meshes.new(name=result_name + "_Mesh")
+             result_obj = bpy.data.objects.new(result_name, new_mesh_bdata)
+             link_collection = bounds_obj.users_collection[0] if bounds_obj.users_collection else scene.collection
+             link_collection.objects.link(result_obj)
+             result_obj.matrix_world = Matrix.Identity(4) 
+             result_obj.hide_select = True
         
-        local_corners = [
-            Vector((-1, -1, -1)), Vector((1, -1, -1)),
-            Vector((-1,  1, -1)), Vector((1,  1, -1)),
-            Vector((-1, -1,  1)), Vector((1, -1,  1)),
-            Vector((-1,  1,  1)), Vector((1,  1,  1)),
-        ]
-        world_corners = [(bounds_matrix_at_trigger @ corner.to_4d()).xyz for corner in local_corners]
+        if result_obj and result_obj.type == 'MESH':
+            # Create a completely new mesh datablock to avoid issues with from_pydata on existing data
+            old_mesh = result_obj.data
+            new_mesh_bdata = bpy.data.meshes.new(name=old_mesh.name)
+            result_obj.data = new_mesh_bdata
 
-        min_x = min(c.x for c in world_corners)
-        max_x = max(c.x for c in world_corners)
-        min_y = min(c.y for c in world_corners)
-        max_y = max(c.y for c in world_corners)
-        min_z = min(c.z for c in world_corners)
-        max_z = max(c.z for c in world_corners)
+            # Remove the old mesh datablock if it has no other users
+            if old_mesh.users == 0:
+                bpy.data.meshes.remove(old_mesh)
 
-        xyz_min = (min_x, min_y, min_z)
-        xyz_max = (max_x, max_y, max_z)
+            if mesh_data and mesh_data[0]:
+                new_mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1])
+            new_mesh_bdata.update()
+            mesh_update_successful = True
+            
+            # Apply smooth shading and material logic
+            if mesh_update_successful and len(new_mesh_bdata.polygons) > 0:
+                 for poly in new_mesh_bdata.polygons:
+                     poly.use_smooth = True
+                 
+                 # Auto Smooth Angle via Modifier for robustness
+                 angle_input_identifier = "Input_1" # Based on the default node group
+                 addon_modifier_name = "FieldForge_Smooth"
+                 auto_smooth_angle_deg = sdf_settings_from_bounds.get("sdf_result_auto_smooth_angle", 45.0)
+                 auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
+                 
+                 existing_mod = result_obj.modifiers.get(addon_modifier_name)
+                 if not existing_mod:
+                     # Add the 'Smooth by Angle' geometry node group modifier
+                     try:
+                        # This requires an active object, so we temporarily set it
+                        with context.temp_override(object=result_obj, active_object=result_obj, selected_objects=[result_obj]):
+                            bpy.ops.object.modifier_add_node_group(
+                                asset_library_type='ESSENTIALS', asset_library_identifier="Essentials", 
+                                relative_asset_identifier="geometry_nodes/smooth_by_angle.blend/NodeTree/Smooth by Angle")
+                        # The new modifier will be the last one on the stack
+                        existing_mod = result_obj.modifiers[-1]
+                        existing_mod.name = addon_modifier_name
+                     except Exception as e_mod:
+                         print(f"FF WARN: Could not add 'Smooth by Angle' node group from asset library: {e_mod}")
+                 
+                 if existing_mod and existing_mod.node_group and angle_input_identifier in existing_mod:
+                     try:
+                        existing_mod[angle_input_identifier] = auto_smooth_angle_rad
+                     except Exception: # Input might be read-only if node group is missing
+                        pass
 
+                 # Material
+                 mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
+                 if mat_name:
+                     material = bpy.data.materials.get(mat_name)
+                     if material:
+                         if not new_mesh_bdata.materials or new_mesh_bdata.materials.get(material.name) is None:
+                             new_mesh_bdata.materials.append(material)
+                 elif len(new_mesh_bdata.materials) > 0:
+                     new_mesh_bdata.materials.clear()
 
-        # 3. Select Resolution based on update type and settings from sdf_settings_from_bounds
-        resolution = sdf_settings_from_bounds.get("sdf_final_resolution", 30)
-        if is_viewport_update:
-            resolution = sdf_settings_from_bounds.get("sdf_viewport_resolution", 10)
-        resolution = max(3, int(resolution))
-
-        # 4. Generate Mesh using libfive
-        mesh_data = None
-        is_not_empty = final_combined_shape is not None and final_combined_shape is not lf.emptiness()
-        if not mesh_generation_error and is_not_empty:
-            gen_start_time = time.time()
-            try:
-                mesh_data = final_combined_shape.get_mesh(xyz_min=xyz_min, xyz_max=xyz_max, resolution=resolution)
-                if not mesh_data or not mesh_data[0]: # Check if get_mesh returned empty
-                     mesh_data = None # Treat as no mesh data
-            except Exception as e:
-                print(f"FieldForge Error: libfive mesh generation failed for {bounds_name}: {e}")
-                mesh_generation_error = True
-                mesh_data = None
-
-        # 5. Find or Create Result Object
-        if not result_name and utils.get_bounds_setting(bounds_obj, "sdf_create_result_object"):
-            # Auto-generate a result name if empty and creation is allowed
-            # This part might need a more robust naming if bounds_name isn't unique enough as a base
-            base_for_result = bounds_name.replace("_Bounds", "") or "SDF_System"
-            unique_result_name_base = base_for_result + "_Result"
-            i = 1
-            result_name_candidate = unique_result_name_base
-            while result_name_candidate in scene.objects:
-                result_name_candidate = f"{unique_result_name_base}.{i:03d}"
-                i += 1
-            result_name = result_name_candidate
-            bounds_obj[constants.SDF_RESULT_OBJ_NAME_PROP] = result_name # Store the new name
-            print(f"FieldForge: Auto-generated result object name '{result_name}' for {bounds_name}")
-
-
-        result_obj = utils.find_result_object(context, result_name) if result_name else None
-        if not result_obj and result_name: # Name exists but object doesn't
-            if utils.get_bounds_setting(bounds_obj, "sdf_create_result_object"):
-                try:
-                    new_mesh_bdata = bpy.data.meshes.new(name=result_name + "_Mesh")
-                    result_obj = bpy.data.objects.new(result_name, new_mesh_bdata)
-                    link_collection = bounds_obj.users_collection[0] if bounds_obj.users_collection else scene.collection
-                    link_collection.objects.link(result_obj)
-                    result_obj.matrix_world = Matrix.Identity(4) 
-                    result_obj.hide_select = True 
-                except Exception as e_create:
-                    mesh_generation_error = True # Mark error if creation fails
-                    print(f"FieldForge Error: Failed to create result object {result_name}: {e_create}")
-                    # Don't raise here, let finally block handle pending flag
-            else: 
-                 if not mesh_generation_error and mesh_data:
-                      mesh_generation_error = True # Error if data generated but no place to put it
-                      print(f"FieldForge ERROR: Result obj '{result_name}' not found & auto-create disabled for {bounds_name}, but mesh data was generated.")
-                 # If no data and no obj, this is fine (empty result for an empty name slot)
-                 mesh_update_successful = True # Considered success if no data and no object creation expected
-
-        # 6. Update Mesh Data
-        if result_obj and not mesh_generation_error: # Only proceed if obj exists and no prior error
-            if result_obj.type != 'MESH':
-                # This should ideally not happen if we control creation.
-                print(f"FieldForge ERROR: Target '{result_name}' is not a Mesh (type: {result_obj.type}). Cannot update.")
-                mesh_generation_error = True # Mark as error
-            else:
-                mesh_bdata = result_obj.data # bpy.types.Mesh
-                if mesh_data: 
-                    if mesh_bdata.vertices or mesh_bdata.polygons or mesh_bdata.loops: mesh_bdata.clear_geometry()
-                    try:
-                        mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1]) 
-                        mesh_bdata.update() 
-                        mesh_update_successful = True
-                    except Exception as e_apply:
-                        print(f"FieldForge ERROR: Applying mesh data to '{result_name}' failed: {e_apply}")
-                        if mesh_bdata.vertices: mesh_bdata.clear_geometry(); mesh_bdata.update()
-                        mesh_update_successful = False # Explicitly false
-                        mesh_generation_error = True # This is also a generation/application error
-                else: # No mesh data from libfive (e.g., empty shape or earlier error)
-                    if mesh_bdata.vertices or mesh_bdata.polygons or mesh_bdata.loops: 
-                        mesh_bdata.clear_geometry()
-                        mesh_bdata.update()
-                    mesh_update_successful = True # Success: empty result applied correctly
-                if mesh_update_successful and result_obj.data and hasattr(result_obj.data, 'polygons'):
-                    try:
-                        if len(result_obj.data.polygons) > 0: # Only if there are polygons
-                            for poly in result_obj.data.polygons:
-                                poly.use_smooth = True
-                            result_obj.data.update() # Update mesh after changing polygon smooth flags
-                    except Exception as e_smooth:
-                        print(f"FieldForge WARN: Could not apply smooth shading to {result_name}: {e_smooth}")
-                
-                # --- Apply Smooth Shading & Auto Smooth Angle via Modifier ---
-                if mesh_update_successful and result_obj and result_obj.type == 'MESH' and result_obj.data:
-                    mesh_data_block = result_obj.data
-                    addon_modifier_name = "FieldForge_Smooth_By_Angle"
-                    angle_input_identifier = "Input_1" 
-
-                    try:
-                        if len(mesh_data_block.polygons) > 0:
-                            for poly in mesh_data_block.polygons:
-                                poly.use_smooth = True
-
-                        auto_smooth_angle_deg = sdf_settings_from_bounds.get(
-                            "sdf_result_auto_smooth_angle", 
-                            constants.DEFAULT_SETTINGS["sdf_result_auto_smooth_angle"]
-                        )
-                        auto_smooth_angle_deg = float(auto_smooth_angle_deg)
-                        auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
-                        existing_modifier = result_obj.modifiers.get(addon_modifier_name)
-                        
-                        if existing_modifier and existing_modifier.type == 'NODES':
-                            try:
-                                if angle_input_identifier in existing_modifier:
-                                    if abs(existing_modifier[angle_input_identifier] - auto_smooth_angle_rad) > 1e-5:
-                                        existing_modifier[angle_input_identifier] = auto_smooth_angle_rad
-                                else:
-                                    print(f"FieldForge WARN: Input '{angle_input_identifier}' not found on existing modifier '{addon_modifier_name}' for {result_name}. Recreating.")
-                                    bpy.ops.object.modifier_remove({'object': result_obj}, modifier=existing_modifier.name)
-                                    existing_modifier = None
-                            except (KeyError, TypeError, SystemError) as e_mod_update:
-                                print(f"FieldForge WARN: Failed to update '{angle_input_identifier}' on '{addon_modifier_name}' for {result_name}. Recreating. Error: {e_mod_update}")
-                                bpy.ops.object.modifier_remove({'object': result_obj}, modifier=existing_modifier.name)
-                                existing_modifier = None 
-
-                        if not existing_modifier:
-                            current_active = context.view_layer.objects.active
-                            current_selected_names = [o.name for o in context.selected_objects]
-                            bpy.ops.object.select_all(action='DESELECT')
-                            result_obj.select_set(True); context.view_layer.objects.active = result_obj
-                            try:
-                                bpy.ops.object.modifier_add_node_group(
-                                    asset_library_type='ESSENTIALS',
-                                    asset_library_identifier="Essentials", 
-                                    relative_asset_identifier="geometry_nodes/smooth_by_angle.blend/NodeTree/Smooth by Angle"
-                                )
-                                new_modifier = result_obj.modifiers[-1]
-                                new_modifier.name = addon_modifier_name
-                                if angle_input_identifier in new_modifier:
-                                    new_modifier[angle_input_identifier] = auto_smooth_angle_rad
-                                else:
-                                    print(f"FieldForge ERROR: Newly added 'Smooth by Angle' for {result_name} no input '{angle_input_identifier}'.")
-                            except RuntimeError as e_mod_add:
-                                print(f"FieldForge ERROR: Failed to add 'Smooth by Angle' modifier to {result_name}: {e_mod_add}")
-                            finally:
-                                if context.view_layer.objects.active == result_obj: result_obj.select_set(False)
-                                for name in current_selected_names:
-                                    obj_to_reselect = context.scene.objects.get(name)
-                                    if obj_to_reselect:
-                                        try: obj_to_reselect.select_set(True)
-                                        except ReferenceError: pass 
-                                try: 
-                                    if current_active and current_active.name in context.scene.objects : 
-                                        context.view_layer.objects.active = current_active
-                                    elif context.selected_objects : 
-                                        context.view_layer.objects.active = context.selected_objects[0]
-                                except ReferenceError: pass 
-
-                        mesh_data_block.update()
-
-                    except Exception as e_smooth_mod:
-                        print(f"FieldForge WARN: Broader error applying smooth shading/modifier to {result_name}: {e_smooth_mod}")
-
-                if mesh_update_successful and result_obj: # Ensure result_obj exists
-                    try:
-                        mat_name_to_assign = sdf_settings_from_bounds.get("sdf_result_material_name", "")
-                        if mat_name_to_assign: # If a material name is specified
-                            material_to_assign = bpy.data.materials.get(mat_name_to_assign)
-                            if material_to_assign:
-                                if result_obj.data.materials: # If there are material slots
-                                    if not result_obj.data.materials[0] or result_obj.data.materials[0].name != material_to_assign.name :
-                                        result_obj.data.materials[0] = material_to_assign
-                                else: # No material slots, append one
-                                    result_obj.data.materials.append(material_to_assign)
-                            else:
-                                # Material name specified but not found, clear if a different one was assigned
-                                if result_obj.data.materials and result_obj.data.materials[0] is not None:
-                                    print(f"FieldForge WARN: Material '{mat_name_to_assign}' not found for {result_name}. Clearing existing material.")
-                                    result_obj.data.materials.clear() # Or result_obj.data.materials[0] = None if you want to keep the slot
-                                # If no material was previously assigned, do nothing if new one not found.
-                        else: # No material name specified, ensure no material is assigned
-                            if result_obj.data.materials:
-                                result_obj.data.materials.clear() # Remove all materials from the object's mesh data
-                    except Exception as e_mat: # pragma: no cover
-                        print(f"FieldForge WARN: Could not assign material to {result_name}: {e_mat}")
-
-    except Exception as e_outer:
-         print(f"FieldForge ERROR during {update_type} update for {bounds_name}: {type(e_outer).__name__} - {e_outer}")
-         mesh_generation_error = True # Outer loop error
-         mesh_update_successful = False
-         try:
-             if result_obj and result_obj.type == 'MESH' and result_obj.data and (result_obj.data.vertices or result_obj.data.polygons):
-                 result_obj.data.clear_geometry(); result_obj.data.update()
-         except Exception: pass
-
+    except Exception as e:
+        mesh_generation_error = True
+        mesh_update_successful = False
+        if result_obj and result_obj.data:
+            try: result_obj.data.clear_geometry(); result_obj.data.update()
+            except Exception: pass
     finally:
         if not mesh_generation_error and mesh_update_successful:
-            update_sdf_cache(trigger_state, bounds_name) 
+            update_sdf_cache(trigger_state, bounds_name)
         
         _last_update_finish_times[bounds_name] = time.time()
         _updates_pending[bounds_name] = False
+        
+        t_apply_end = time.perf_counter()
 
-def _update_linker_caches(linker_obj: bpy.types.Object, new_target_name: str | None, linker_parent_bounds_name: str | None):
-    """Manages the _link_dependents_cache and _reverse_link_cache."""
-    global _link_dependents_cache, _reverse_link_cache
-    
-    linker_name = linker_obj.name
+    return None # Unregister the timer
 
-    # 1. Clean up old dependencies for this linker_name
-    old_target_name_for_linker = _reverse_link_cache.pop(linker_name, None)
-    if old_target_name_for_linker and old_target_name_for_linker in _link_dependents_cache:
-        if linker_parent_bounds_name in _link_dependents_cache[old_target_name_for_linker]:
-            _link_dependents_cache[old_target_name_for_linker].remove(linker_parent_bounds_name)
-            if not _link_dependents_cache[old_target_name_for_linker]: # Is set empty?
-                del _link_dependents_cache[old_target_name_for_linker]
-
-    # 2. Add new dependency if new_target_name and linker_parent_bounds_name are valid
-    if new_target_name and linker_parent_bounds_name:
-        _link_dependents_cache.setdefault(new_target_name, set()).add(linker_parent_bounds_name)
-        _reverse_link_cache[linker_name] = new_target_name
-    elif linker_name in _reverse_link_cache: # If new_target_name is None, ensure linker is removed from reverse cache
-        del _reverse_link_cache[linker_name]
-
-# This function would be called from state.py
-def register_link_dependency(linker_obj: bpy.types.Object, effective_target_obj: bpy.types.Object | None, linker_parent_bounds: bpy.types.Object | None):
-    if not linker_obj:
+def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict, is_viewport_update: bool = False):
+    """
+    STARTS the threaded SDF generation and mesh update process.
+    """
+    if not _lf_imported_ok:
+        _updates_pending[bounds_name] = False
         return
 
-    linker_parent_bounds_name = linker_parent_bounds.name if linker_parent_bounds else None
-    
-    current_link_target_prop_val = linker_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+    t_start = time.perf_counter()
+    context = bpy.context
+    if not context or not scene or not scene.name:
+        if bounds_name in _updates_pending: _updates_pending[bounds_name] = False;
+        return
 
-    if effective_target_obj and effective_target_obj != linker_obj and current_link_target_prop_val == effective_target_obj.name:
-        # Link is valid and points to effective_target_obj
-        _update_linker_caches(linker_obj, effective_target_obj.name, linker_parent_bounds_name)
-    else:
-        # Link is invalid, empty, or points to self, or prop val doesn't match effective (e.g. incompatible)
-        _update_linker_caches(linker_obj, None, linker_parent_bounds_name)
+    bounds_obj = scene.objects.get(bounds_name)
+    if not bounds_obj:
+        if bounds_name in _updates_pending: _updates_pending[bounds_name] = False;
+        return
+
+    # --- Cancel any previous worker for this bounds ---
+    _cancel_and_clear_worker(bounds_name)
+    
+    t_sdf_start = time.perf_counter()
+    sdf_settings = trigger_state.get('scene_settings')
+    final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
+    t_sdf_end = time.perf_counter()
+
+    if final_combined_shape is None:
+        final_combined_shape = lf.emptiness()
+
+    bounds_matrix = trigger_state.get('bounds_matrix')
+    local_corners = [Vector(c) for c in ((-1,-1,-1), (1,-1,-1), (-1,1,-1), (1,1,-1), (-1,-1,1), (1,-1,1), (-1,1,1), (1,1,1))]
+    world_corners = [(bounds_matrix @ c.to_4d()).xyz for c in local_corners]
+    
+    mesh_args = {
+        'xyz_min': (min(c.x for c in world_corners), min(c.y for c in world_corners), min(c.z for c in world_corners)),
+        'xyz_max': (max(c.x for c in world_corners), max(c.y for c in world_corners), max(c.z for c in world_corners)),
+        'resolution': max(3, int(sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)))
+    }
+
+    result_q = queue.Queue()
+    is_cancelled_flag = threading.Event()
+    
+    worker_thread = threading.Thread(
+        target=_mesh_generation_worker,
+        args=(result_q, is_cancelled_flag, final_combined_shape, mesh_args, bounds_name)
+    )
+    
+    result_timer = bpy.app.timers.register(
+        lambda: _apply_mesh_data_from_worker(bounds_name, trigger_state, is_viewport_update),
+        first_interval=0.1
+    )
+
+    _worker_threads[bounds_name] = (worker_thread, result_q, result_timer, is_cancelled_flag)
+    worker_thread.start()
+    t_end = time.perf_counter()
+
+
+def _cancel_and_clear_worker(bounds_name: str):
+    """Safely cancels and cleans up a worker thread and its timer."""
+    global _worker_threads
+    if bounds_name in _worker_threads:
+        thread, _, timer, is_cancelled_flag = _worker_threads.pop(bounds_name)
+        is_cancelled_flag.set() # Signal the thread to stop
+        if timer and bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
 
 # --- Scene Update Handler (Dependency Graph) ---
 # This needs to be persistent to stay active between file loads
@@ -598,9 +496,8 @@ def ff_depsgraph_handler(scene, depsgraph):
                     bounds_to_recheck_due_to_direct_change.add(current_obj_for_check.name)
             if utils.is_sdf_source(updated_obj) and update.is_updated_transform:
                 needs_visual_redraw = True
-            if updated_obj.name in _link_dependents_cache:
-                for dependent_bounds_name in _link_dependents_cache[updated_obj.name]:
-                    bounds_to_recheck_due_to_link.add(dependent_bounds_name)
+            for dependent_bounds_name in state.get_dependent_bounds_for_linked_object(updated_obj.name):
+                bounds_to_recheck_due_to_link.add(dependent_bounds_name)
         elif isinstance(updated_obj, bpy.types.Object) and updated_obj.get(constants.SDF_BOUNDS_MARKER, False):
             bounds_to_recheck_due_to_direct_change.add(updated_obj.name)
     all_bounds_to_schedule_check = bounds_to_recheck_due_to_direct_change.union(bounds_to_recheck_due_to_link)
@@ -615,7 +512,7 @@ def ff_depsgraph_handler(scene, depsgraph):
                             lambda scn_arg=current_scene_ctx, name_arg=bounds_name_to_check: check_and_trigger_update(scn_arg, name_arg, "depsgraph_or_link_event"),
                             first_interval=0.0
                         )
-                    except Exception as e: print(f"FieldForge ERROR: Failed schedule check_trigger from depsgraph for {bounds_name}: {e}")
+                    except Exception as e: print(f"FieldForge ERROR: Failed schedule check_trigger from depsgraph for {bounds_name_to_check}: {e}")
         else: print("FieldForge WARN (Depsgraph): Cannot trigger update - no current scene.")
 
 
@@ -674,12 +571,20 @@ def initial_update_check_all():
 # Called from unregister()
 def clear_timers_and_state():
     """Cancels all active timers and clears global state dictionaries."""
-    global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times, _sdf_update_caches
+    global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times, _sdf_update_caches, _worker_threads
     if bpy.app.timers: # Check if timers module is still valid
         for bounds_name in list(_debounce_timers.keys()):
              cancel_debounce_timer(bounds_name) # Use existing cancel function
+    
+    # Cancel all running worker threads
+    for bounds_name in list(_worker_threads.keys()):
+        _cancel_and_clear_worker(bounds_name)
+
     _debounce_timers.clear()
     _last_trigger_states.clear()
     _updates_pending.clear()
     _last_update_finish_times.clear()
     _sdf_update_caches.clear()
+    _worker_threads.clear()
+
+    clear_link_caches()

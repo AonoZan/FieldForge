@@ -8,7 +8,51 @@ from mathutils import Vector, Matrix
 
 from .. import constants
 from .. import utils
-from ..core import update_manager as ff_update_manager
+
+_link_dependents_cache = {}
+_reverse_link_cache = {}
+
+def _update_linker_caches(linker_obj: bpy.types.Object, new_target_name: str | None, linker_parent_bounds_name: str | None):
+    """Manages the _link_dependents_cache and _reverse_link_cache."""
+    global _link_dependents_cache, _reverse_link_cache
+    
+    linker_name = linker_obj.name
+
+    old_target_name_for_linker = _reverse_link_cache.pop(linker_name, None)
+    if old_target_name_for_linker and old_target_name_for_linker in _link_dependents_cache:
+        if linker_parent_bounds_name in _link_dependents_cache[old_target_name_for_linker]:
+            _link_dependents_cache[old_target_name_for_linker].remove(linker_parent_bounds_name)
+            if not _link_dependents_cache[old_target_name_for_linker]:
+                del _link_dependents_cache[old_target_name_for_linker]
+
+    if new_target_name and linker_parent_bounds_name:
+        _link_dependents_cache.setdefault(new_target_name, set()).add(linker_parent_bounds_name)
+        _reverse_link_cache[linker_name] = new_target_name
+    elif linker_name in _reverse_link_cache:
+        del _reverse_link_cache[linker_name]
+
+def register_link_dependency(linker_obj: bpy.types.Object, effective_target_obj: bpy.types.Object | None, linker_parent_bounds: bpy.types.Object | None):
+    if not linker_obj:
+        return
+
+    linker_parent_bounds_name = linker_parent_bounds.name if linker_parent_bounds else None
+    
+    current_link_target_prop_val = linker_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
+
+    if effective_target_obj and effective_target_obj != linker_obj and current_link_target_prop_val == effective_target_obj.name:
+        _update_linker_caches(linker_obj, effective_target_obj.name, linker_parent_bounds_name)
+    else:
+        _update_linker_caches(linker_obj, None, linker_parent_bounds_name)
+
+def get_dependent_bounds_for_linked_object(obj_name: str) -> set:
+    """Public accessor for update_manager to get dependent bounds names."""
+    return _link_dependents_cache.get(obj_name, set())
+
+def clear_link_caches():
+    """Public function to be called from update_manager on cleanup."""
+    global _link_dependents_cache, _reverse_link_cache
+    _link_dependents_cache.clear()
+    _reverse_link_cache.clear()
 
 
 def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Object) -> dict | None:
@@ -67,7 +111,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
 
             if utils.is_sdf_source(actual_child_obj) or utils.is_sdf_group(actual_child_obj) or utils.is_sdf_canvas(actual_child_obj):
                 effective_target_for_child = utils.get_effective_sdf_object(actual_child_obj)
-                ff_update_manager.register_link_dependency(actual_child_obj, effective_target_for_child, bounds_obj)
+                register_link_dependency(actual_child_obj, effective_target_for_child, bounds_obj)
 
             if utils.is_sdf_source(actual_child_obj) and is_visible:
                 props_to_track = {}
