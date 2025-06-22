@@ -158,8 +158,7 @@ def apply_blender_transform_to_sdf(shape: lf.Shape, obj_matrix_world_inv: Matrix
     Returns lf.emptiness() on error.
     """
     if not _lf_imported_ok: return None
-    if shape is None or shape is lf.emptiness(): # Cannot transform None
-    # Check if shape is already emptiness to avoid unnecessary work
+    if shape is None or shape is lf.emptiness():
         return lf.emptiness()
     if obj_matrix_world_inv is None:
         print(f"FieldForge WARN (apply_transform): Received None matrix_world_inv.")
@@ -230,7 +229,8 @@ def blended_symmetric_z(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | N
 def _apply_array_to_shape(
     shape_to_array_world: lf.Shape, 
     array_controller_obj: bpy.types.Object, 
-    child_obj_for_logging: bpy.types.Object 
+    child_obj_for_logging: bpy.types.Object,
+    delta_override: tuple | None = None
     ) -> lf.Shape | None:
     if not _lf_imported_ok or shape_to_array_world is None or shape_to_array_world is lf.emptiness():
         return shape_to_array_world
@@ -240,11 +240,11 @@ def _apply_array_to_shape(
 
     shape_in_controller_local_space = lf.emptiness()
     try:
-        mat_w2l_controller = array_controller_obj.matrix_world.inverted()
+        mat_l2w_controller = array_controller_obj.matrix_world
         X_r, Y_r, Z_r = libfive_shape_module.Shape.X(), libfive_shape_module.Shape.Y(), libfive_shape_module.Shape.Z()
-        xp_r = mat_w2l_controller[0][0]*X_r + mat_w2l_controller[0][1]*Y_r + mat_w2l_controller[0][2]*Z_r + mat_w2l_controller[0][3]
-        yp_r = mat_w2l_controller[1][0]*X_r + mat_w2l_controller[1][1]*Y_r + mat_w2l_controller[1][2]*Z_r + mat_w2l_controller[1][3]
-        zp_r = mat_w2l_controller[2][0]*X_r + mat_w2l_controller[2][1]*Y_r + mat_w2l_controller[2][2]*Z_r + mat_w2l_controller[2][3]
+        xp_r = mat_l2w_controller[0][0]*X_r + mat_l2w_controller[0][1]*Y_r + mat_l2w_controller[0][2]*Z_r + mat_l2w_controller[0][3]
+        yp_r = mat_l2w_controller[1][0]*X_r + mat_l2w_controller[1][1]*Y_r + mat_l2w_controller[1][2]*Z_r + mat_l2w_controller[1][3]
+        zp_r = mat_l2w_controller[2][0]*X_r + mat_l2w_controller[2][1]*Y_r + mat_l2w_controller[2][2]*Z_r + mat_l2w_controller[2][3]
         shape_in_controller_local_space = shape_to_array_world.remap(xp_r, yp_r, zp_r)
     except Exception: return shape_to_array_world 
 
@@ -257,7 +257,7 @@ def _apply_array_to_shape(
     if array_mode == 'LINEAR':
         ax=utils.get_sdf_param(array_controller_obj,"sdf_array_active_x",False); ay=utils.get_sdf_param(array_controller_obj,"sdf_array_active_y",False) and ax; az=utils.get_sdf_param(array_controller_obj,"sdf_array_active_z",False) and ay
         nx=max(1,int(utils.get_sdf_param(array_controller_obj,"sdf_array_count_x",2))) if ax else 1; ny=max(1,int(utils.get_sdf_param(array_controller_obj,"sdf_array_count_y",2))) if ay else 1; nz=max(1,int(utils.get_sdf_param(array_controller_obj,"sdf_array_count_z",2))) if az else 1
-        dx=float(utils.get_sdf_param(array_controller_obj,"sdf_array_delta_x",1.0)) if ax else 0.0; dy=float(utils.get_sdf_param(array_controller_obj,"sdf_array_delta_y",1.0)) if ay else 0.0; dz=float(utils.get_sdf_param(array_controller_obj,"sdf_array_delta_z",1.0)) if az else 0.0
+        dx, dy, dz = delta_override
         applied=False
         try:
             if az: 
@@ -266,11 +266,14 @@ def _apply_array_to_shape(
                 if nx>1 or ny>1: arrayed_shape_local=lf.array_xy(shape_in_controller_local_space,nx,ny,(dx,dy)); applied=True
             elif ax:
                 if nx>1: arrayed_shape_local=lf.array_x(shape_in_controller_local_space,nx,dx); applied=True
-            if applied and center_on_origin:
-                off_x=-(nx-1)*dx/2.0 if ax and nx>1 else 0.0; off_y=-(ny-1)*dy/2.0 if ay and ny>1 else 0.0; off_z=-(nz-1)*dz/2.0 if az and nz>1 else 0.0
-                if abs(off_x)>1e-6 or abs(off_y)>1e-6 or abs(off_z)>1e-6:
-                    X_cs,Y_cs,Z_cs=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
-                    arrayed_shape_local=arrayed_shape_local.remap(X_cs-off_x,Y_cs-off_y,Z_cs-off_z)
+            if applied:
+                center_shift_x = -(dx*(nx-1))
+                center_shift_y = -(dy*(ny-1))
+                center_shift_z = -(dz*(nz-1))
+
+                if abs(center_shift_x)>1e-6 or abs(center_shift_y)>1e-6 or abs(center_shift_z)>1e-6:
+                    X_arr_c,Y_arr_c,Z_arr_c=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
+                    arrayed_shape_local=arrayed_shape_local.remap(X_arr_c-center_shift_x,Y_arr_c-center_shift_y,Z_arr_c-center_shift_z)
         except Exception: arrayed_shape_local = shape_in_controller_local_space
     elif array_mode == 'RADIAL':
         count_rad=max(1,int(utils.get_sdf_param(array_controller_obj,"sdf_radial_count",1))); center_prop_rad=utils.get_sdf_param(array_controller_obj,"sdf_radial_center",(0.0,0.0))
@@ -309,8 +312,8 @@ def _process_children_recursive(
     
     sorted_children_list = sorted(children_to_process_list, key=lambda c: (utils.get_sdf_param(c, "sdf_processing_order", float('inf')), c.name))
 
-    is_logical_parent_an_arraying_group = utils.is_sdf_group(current_logical_parent_obj) and \
-                                          utils.get_sdf_param(current_logical_parent_obj, "sdf_main_array_mode", 'NONE') != 'NONE'
+    parent_array_mode = utils.get_sdf_param(current_logical_parent_obj, "sdf_main_array_mode", 'NONE')
+    is_logical_parent_an_arraying_group = utils.is_sdf_group(current_logical_parent_obj) and parent_array_mode != 'NONE'
 
     for child_in_list in sorted_children_list:
         child_name = child_in_list.name 
@@ -338,8 +341,6 @@ def _process_children_recursive(
                 except Exception: pass 
             
             final_child_contribution_world = lofted_world
-            if is_logical_parent_an_arraying_group:
-                final_child_contribution_world = _apply_array_to_shape(final_child_contribution_world, current_logical_parent_obj, child_in_list)
             if not (final_child_contribution_world is None or final_child_contribution_world is lf.emptiness()):
                 child_blend_factor = float(utils.get_sdf_param(child_in_list, "sdf_blend_factor", 0.0))
                 shape_accumulator = combine_shapes(shape_accumulator, final_child_contribution_world, child_blend_factor)
@@ -371,7 +372,32 @@ def _process_children_recursive(
 
         final_child_contribution_world = child_subtree_contribution_world
         if is_logical_parent_an_arraying_group:
-            final_child_contribution_world = _apply_array_to_shape(final_child_contribution_world, current_logical_parent_obj, child_in_list)
+            delta_override = None
+            if parent_array_mode == 'LINEAR':
+                active_x = utils.get_sdf_param(current_logical_parent_obj, "sdf_array_active_x", False)
+                active_y = utils.get_sdf_param(current_logical_parent_obj, "sdf_array_active_y", False) and active_x
+                active_z = utils.get_sdf_param(current_logical_parent_obj, "sdf_array_active_z", False) and active_y
+
+                child_local_pos_in_obj = (children_owner_obj.matrix_world.inverted() @ child_in_list.matrix_world).translation
+
+                nx = max(1, int(utils.get_sdf_param(current_logical_parent_obj, "sdf_array_count_x", 2))) if active_x else 1
+                ny = max(1, int(utils.get_sdf_param(current_logical_parent_obj, "sdf_array_count_y", 2))) if active_y else 1
+                nz = max(1, int(utils.get_sdf_param(current_logical_parent_obj, "sdf_array_count_z", 2))) if active_z else 1
+
+                dx_val = (child_local_pos_in_obj.x * 2.0/ (nx-1)) if (active_x and nx > 1) else 0.0
+                dy_val = (child_local_pos_in_obj.y * 2.0/ (ny-1)) if (active_y and ny > 1) else 0.0
+                dz_val = (child_local_pos_in_obj.z * 2.0/ (nz-1)) if (active_z and nz > 1) else 0.0
+
+                default_small_delta = 1.0
+                if active_x and nx > 1 and abs(dx_val) < 1e-5: dx_val = default_small_delta * (1 if child_local_pos_in_obj.x >=0 else -1) if abs(child_local_pos_in_obj.x) <1e-5 else dx_val
+                if active_y and ny > 1 and abs(dy_val) < 1e-5: dy_val = default_small_delta * (1 if child_local_pos_in_obj.y >=0 else -1) if abs(child_local_pos_in_obj.y) <1e-5 else dy_val
+                if active_z and nz > 1 and abs(dz_val) < 1e-5: dz_val = default_small_delta * (1 if child_local_pos_in_obj.z >=0 else -1) if abs(child_local_pos_in_obj.z) <1e-5 else dz_val
+
+                delta_override = (dx_val, dy_val, dz_val)
+
+            final_child_contribution_world = _apply_array_to_shape(
+                final_child_contribution_world, current_logical_parent_obj, child_in_list, delta_override)       
+
             if final_child_contribution_world is None or final_child_contribution_world is lf.emptiness(): continue
 
         use_morph = utils.get_sdf_param(child_in_list, "sdf_use_morph", False)
@@ -380,8 +406,9 @@ def _process_children_recursive(
         
         # Each child now provides its own blend factor.
         child_blend_factor = float(utils.get_sdf_param(child_in_list, "sdf_blend_factor", 0.0))
-
-        if utils.is_sdf_canvas(child_in_list):
+        if utils.is_sdf_group(child_in_list): # Groups use their own blend for csg
+            child_csg_op_type = utils.get_sdf_param(child_in_list, "sdf_csg_operation", constants.DEFAULT_GROUP_SETTINGS["sdf_csg_operation"])
+        elif utils.is_sdf_canvas(child_in_list): # Canvases use their own blend for csg
             child_csg_op_type = utils.get_sdf_param(child_in_list, "sdf_csg_operation", constants.DEFAULT_CANVAS_SETTINGS["sdf_csg_operation"])
             child_blend_factor = float(utils.get_sdf_param(child_in_list, "sdf_blend_factor", constants.DEFAULT_CANVAS_SETTINGS["sdf_blend_factor"]))
             use_morph = False; use_clearance = False
@@ -449,39 +476,6 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                         if offset_obj > 0: unit_shape = lf.difference(outer_obj, unit_shape)
                         else: unit_shape = lf.difference(unit_shape, outer_obj)
                     except Exception: unit_shape = lf.emptiness()
-            array_mode_self_obj = utils.get_sdf_param(obj, "sdf_main_array_mode", 'NONE')
-            if array_mode_self_obj != 'NONE' and not (unit_shape is None or unit_shape is lf.emptiness()):
-                original_unit_shape_obj = unit_shape
-                center_on_origin_self_obj = utils.get_sdf_param(obj, "sdf_array_center_on_origin", True)
-                if array_mode_self_obj == 'LINEAR':
-                    ax_o=utils.get_sdf_param(obj,"sdf_array_active_x",False); ay_o=utils.get_sdf_param(obj,"sdf_array_active_y",False) and ax_o; az_o=utils.get_sdf_param(obj,"sdf_array_active_z",False) and ay_o
-                    nx_o=max(1,int(utils.get_sdf_param(obj,"sdf_array_count_x",2))) if ax_o else 1; ny_o=max(1,int(utils.get_sdf_param(obj,"sdf_array_count_y",2))) if ay_o else 1; nz_o=max(1,int(utils.get_sdf_param(obj,"sdf_array_count_z",2))) if az_o else 1
-                    dx_o=float(utils.get_sdf_param(obj,"sdf_array_delta_x",1.0)) if ax_o else 0.0; dy_o=float(utils.get_sdf_param(obj,"sdf_array_delta_y",1.0)) if ay_o else 0.0; dz_o=float(utils.get_sdf_param(obj,"sdf_array_delta_z",1.0)) if az_o else 0.0
-                    applied_o=False
-                    try:
-                        if az_o: 
-                            if nx_o>1 or ny_o>1 or nz_o>1: unit_shape=lf.array_xyz(original_unit_shape_obj,nx_o,ny_o,nz_o,(dx_o,dy_o,dz_o)); applied_o=True
-                        elif ay_o:
-                            if nx_o>1 or ny_o>1: unit_shape=lf.array_xy(original_unit_shape_obj,nx_o,ny_o,(dx_o,dy_o)); applied_o=True
-                        elif ax_o:
-                            if nx_o>1: unit_shape=lf.array_x(original_unit_shape_obj,nx_o,dx_o); applied_o=True
-                        if applied_o and center_on_origin_self_obj:
-                            off_x_o=-(nx_o-1)*dx_o/2.0 if ax_o and nx_o>1 else 0.0; off_y_o=-(ny_o-1)*dy_o/2.0 if ay_o and ny_o>1 else 0.0; off_z_o=-(nz_o-1)*dz_o/2.0 if az_o and nz_o>1 else 0.0
-                            if abs(off_x_o)>1e-6 or abs(off_y_o)>1e-6 or abs(off_z_o)>1e-6:
-                                Xo,Yo,Zo=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
-                                unit_shape=unit_shape.remap(Xo-off_x_o,Yo-off_y_o,Zo-off_z_o)
-                    except Exception: unit_shape = original_unit_shape_obj
-                elif array_mode_self_obj == 'RADIAL':
-                    count_o=max(1,int(utils.get_sdf_param(obj,"sdf_radial_count",6))); center_prop_o=utils.get_sdf_param(obj,"sdf_radial_center",(0.0,0.0))
-                    if count_o > 1:
-                        try: pivot_o=(float(center_prop_o[0]),float(center_prop_o[1]))
-                        except: pivot_o=(0.0,0.0)
-                        try:
-                            unit_shape=lf.array_polar_z(original_unit_shape_obj,count_o,pivot_o)
-                            if center_on_origin_self_obj and (abs(pivot_o[0])>1e-6 or abs(pivot_o[1])>1e-6):
-                                Xor,Yor,Zor=libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
-                                unit_shape=unit_shape.remap(Xor+pivot_o[0],Yor+pivot_o[1],Zor)
-                        except Exception: unit_shape = original_unit_shape_obj
             if not (unit_shape is None or unit_shape is lf.emptiness()):
                 obj_initial_shape_contribution_world = apply_blender_transform_to_sdf(unit_shape, obj.matrix_world.inverted())
 
@@ -597,12 +591,13 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             shape_after_mods = current_processing_shape
             def _apply_local_modifier(current_shape, obj_for_local_space, modifier_func, *args):
                 if current_shape is None or current_shape is lf.emptiness(): return current_shape
-                shape_in_local = lf.emptiness(); mat_obj_inv = obj_for_local_space.matrix_world.inverted()
+                shape_in_local = lf.emptiness()
+                mat_obj_l2w = obj_for_local_space.matrix_world
                 X_loc,Y_loc,Z_loc = libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
                 try:
-                    xp_loc=mat_obj_inv[0][0]*X_loc+mat_obj_inv[0][1]*Y_loc+mat_obj_inv[0][2]*Z_loc+mat_obj_inv[0][3]
-                    yp_loc=mat_obj_inv[1][0]*X_loc+mat_obj_inv[1][1]*Y_loc+mat_obj_inv[1][2]*Z_loc+mat_obj_inv[1][3]
-                    zp_loc=mat_obj_inv[2][0]*X_loc+mat_obj_inv[2][1]*Y_loc+mat_obj_inv[2][2]*Z_loc+mat_obj_inv[2][3]
+                    xp_loc=mat_obj_l2w[0][0]*X_loc+mat_obj_l2w[0][1]*Y_loc+mat_obj_l2w[0][2]*Z_loc+mat_obj_l2w[0][3]
+                    yp_loc=mat_obj_l2w[1][0]*X_loc+mat_obj_l2w[1][1]*Y_loc+mat_obj_l2w[1][2]*Z_loc+mat_obj_l2w[1][3]
+                    zp_loc=mat_obj_l2w[2][0]*X_loc+mat_obj_l2w[2][1]*Y_loc+mat_obj_l2w[2][2]*Z_loc+mat_obj_l2w[2][3]
                     shape_in_local = current_shape.remap(xp_loc, yp_loc, zp_loc)
                 except Exception: return current_shape
                 if shape_in_local is None or shape_in_local is lf.emptiness(): return current_shape
