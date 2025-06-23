@@ -60,7 +60,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
     Gathers the current relevant state for a specific Bounds hierarchy.
 
     Includes bounds settings, bounds transform, and details (transform, properties)
-    of all *visible* SDF Source objects within that hierarchy.
+    of all SDF objects within that hierarchy, regardless of visibility.
 
     Returns a dictionary representing the state, or None if bounds_obj is invalid.
     """
@@ -89,78 +89,67 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
             # For other settings, respect linking if bounds_obj were to link its settings
             current_state['scene_settings'][key] = utils.get_sdf_param(bounds_obj, key, default_val)
 
-    # Traverse hierarchy below this specific bounds object to find visible sources
-    # Use a queue for breadth-first or depth-first traversal
+    # Traverse hierarchy below this specific bounds object
     queue = [bounds_obj]
-    # Keep track of visited objects *within this specific hierarchy traversal*
-    # to avoid issues with objects parented under multiple relevant paths (though unlikely).
     visited_in_hierarchy = {bounds_name}
 
     while queue:
         parent_obj_iterator = queue.pop(0)
         children = list(parent_obj_iterator.children)
         for child_obj in children:
-            if not child_obj: continue # Child might be None temporarily
+            if not child_obj: continue
             child_name = child_obj.name
-            if child_name in visited_in_hierarchy: continue # Already processed this node in this traversal
+            if child_name in visited_in_hierarchy: continue
             visited_in_hierarchy.add(child_name)
             actual_child_obj = context.scene.objects.get(child_obj.name)
             if not actual_child_obj: continue
-            is_visible = actual_child_obj.visible_get(view_layer=context.view_layer)
-            child_name = actual_child_obj.name
-
+            
+            # --- Link dependency tracking ---
             if utils.is_sdf_source(actual_child_obj) or utils.is_sdf_group(actual_child_obj) or utils.is_sdf_canvas(actual_child_obj):
                 effective_target_for_child = utils.get_effective_sdf_object(actual_child_obj)
                 register_link_dependency(actual_child_obj, effective_target_for_child, bounds_obj)
 
-            if utils.is_sdf_source(actual_child_obj) and is_visible:
+            # --- State gathering (visibility check removed for SDF objects) ---
+            if utils.is_sdf_source(actual_child_obj):
                 props_to_track = {}
-                props_to_track[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "") # Always from actual_child_obj
-                
+                props_to_track[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
                 for key, default_val in constants.DEFAULT_SOURCE_SETTINGS.items():
-                    if key != constants.SDF_LINK_TARGET_NAME_PROP: # Don't get link target from target
-                        props_to_track[key] = utils.get_sdf_param(actual_child_obj, key, default_val)
+                    if key != constants.SDF_LINK_TARGET_NAME_PROP:
+                        value = utils.get_sdf_param(actual_child_obj, key, default_val)
+                        if isinstance(default_val, float): # Round if default is a float
+                            value = round(float(value), 5)
+                        props_to_track[key] = value
                 
-                props_to_track = {k: v for k, v in props_to_track.items() if v is not None or k == constants.SDF_LINK_TARGET_NAME_PROP}
-
-
-                obj_state = {
-                    'matrix': actual_child_obj.matrix_world.copy(),
-                    'props': props_to_track 
-                }
+                obj_state = {'matrix': actual_child_obj.matrix_world.copy(), 'props': props_to_track}
                 current_state['source_objects'][child_name] = obj_state
                 queue.append(actual_child_obj)
 
-            elif utils.is_sdf_group(actual_child_obj) and is_visible:
+            elif utils.is_sdf_group(actual_child_obj):
                 props_to_track_group = {}
                 props_to_track_group[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
                 for key, default_val in constants.DEFAULT_GROUP_SETTINGS.items():
                      if key != constants.SDF_LINK_TARGET_NAME_PROP:
-                        props_to_track_group[key] = utils.get_sdf_param(actual_child_obj, key, default_val)
-                group_obj_state = {
-                    'matrix': actual_child_obj.matrix_world.copy(),
-                    'props': props_to_track_group
-                }
+                        value = utils.get_sdf_param(actual_child_obj, key, default_val)
+                        if isinstance(default_val, float):
+                            value = round(float(value), 5)
+                        props_to_track_group[key] = value
+                group_obj_state = {'matrix': actual_child_obj.matrix_world.copy(), 'props': props_to_track_group}
                 current_state['group_objects'][child_name] = group_obj_state
                 queue.append(actual_child_obj)
 
-            elif actual_child_obj.get(constants.SDF_CANVAS_MARKER, False) and is_visible:
+            elif actual_child_obj.get(constants.SDF_CANVAS_MARKER, False):
                 props_to_track_canvas = {}
                 props_to_track_canvas[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
                 for key, default_val in constants.DEFAULT_CANVAS_SETTINGS.items():
                     if key != constants.SDF_LINK_TARGET_NAME_PROP:
-                        props_to_track_canvas[key] = utils.get_sdf_param(actual_child_obj, key, default_val)
-
-                canvas_obj_state = {
-                    'matrix': actual_child_obj.matrix_world.copy(),
-                    'props': props_to_track_canvas
-                }
+                        value = utils.get_sdf_param(actual_child_obj, key, default_val)
+                        if isinstance(default_val, float):
+                            value = round(float(value), 5)
+                        props_to_track_canvas[key] = value
+                canvas_obj_state = {'matrix': actual_child_obj.matrix_world.copy(), 'props': props_to_track_canvas}
                 current_state['canvas_objects'][child_name] = canvas_obj_state
                 queue.append(actual_child_obj)
-
-            # If it's not a source object but might have children (e.g., a regular Empty group node),
-            # still add it to the queue to traverse further down, but only if it's visible.
-            elif is_visible and actual_child_obj.children:
+            elif actual_child_obj.visible_get(view_layer=context.view_layer) and actual_child_obj.children:
                  queue.append(actual_child_obj)
     return current_state
 

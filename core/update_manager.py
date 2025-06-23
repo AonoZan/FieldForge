@@ -253,7 +253,7 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
     if bounds_name not in _worker_threads:
         return None # Worker was cancelled or finished, timer is stale
 
-    thread, result_q, _, is_cancelled_flag = _worker_threads[bounds_name]
+    thread, result_q, timer, is_cancelled_flag = _worker_threads[bounds_name]
 
     try:
         # Check the queue without blocking
@@ -261,8 +261,11 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
     except queue.Empty:
         return 0.1 # No result yet, poll again in 0.1 seconds
 
-    # --- Result is ready, process it ---
-    _cancel_and_clear_worker(bounds_name) # Clean up the worker entry now that we have the result
+    # --- Result is ready, clean up worker state immediately ---
+    _worker_threads.pop(bounds_name)
+    is_cancelled_flag.set()
+    if timer and bpy.app.timers.is_registered(timer):
+        bpy.app.timers.unregister(timer)
     
     context = bpy.context
     scene = getattr(context, 'scene', None)
@@ -281,13 +284,10 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
 
     try:
         if result_data is None: # Worker was cancelled
-            mesh_generation_error = True
             raise InterruptedError("Update was cancelled by a newer request.")
         if isinstance(result_data, Exception): # Worker had an error
-            mesh_generation_error = True
             raise result_data
 
-        # --- Apply mesh data (this code is moved from the old run_sdf_update) ---
         mesh_data = result_data
         sdf_settings_from_bounds = trigger_state.get('scene_settings')
         result_name = bounds_obj.get(constants.SDF_RESULT_OBJ_NAME_PROP)
@@ -344,24 +344,23 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
                          print(f"FF WARN: Could not add 'Smooth by Angle' node group from asset library: {e_mod}")
                  
                  if existing_mod and existing_mod.node_group and angle_input_identifier in existing_mod:
-                     try:
-                        existing_mod[angle_input_identifier] = auto_smooth_angle_rad
-                     except Exception: # Input might be read-only if node group is missing
-                        pass
+                     try: existing_mod[angle_input_identifier] = auto_smooth_angle_rad
+                     except Exception: pass
 
                  # Material
                  mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
                  if mat_name:
                      material = bpy.data.materials.get(mat_name)
-                     if material:
-                         if not new_mesh_bdata.materials or new_mesh_bdata.materials.get(material.name) is None:
-                             new_mesh_bdata.materials.append(material)
+                     if material and (not new_mesh_bdata.materials or new_mesh_bdata.materials.get(material.name) is None):
+                         new_mesh_bdata.materials.append(material)
                  elif len(new_mesh_bdata.materials) > 0:
                      new_mesh_bdata.materials.clear()
 
     except Exception as e:
         mesh_generation_error = True
         mesh_update_successful = False
+        if not isinstance(e, InterruptedError):
+            print(f"FieldForge ERROR: Failed to apply mesh data for {bounds_name}: {e}")
         if result_obj and result_obj.data:
             try: result_obj.data.clear_geometry(); result_obj.data.update()
             except Exception: pass
@@ -371,8 +370,6 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
         
         _last_update_finish_times[bounds_name] = time.time()
         _updates_pending[bounds_name] = False
-        
-        t_apply_end = time.perf_counter()
 
     return None # Unregister the timer
 
@@ -461,45 +458,40 @@ def ff_depsgraph_handler(scene, depsgraph):
 
     bounds_to_recheck_due_to_direct_change = set()
     bounds_to_recheck_due_to_link = set()
-    needs_visual_redraw = False # Flag if custom visuals need redraw (transform change)
-
-    scene_geometry_updated = any(update.id == scene and update.is_updated_geometry for update in depsgraph.updates)
-    if scene_geometry_updated:
-        for bounds_obj_iter in utils.get_all_bounds_objects(context):
-            bounds_to_recheck_due_to_direct_change.add(bounds_obj_iter.name)
-
+    needs_visual_redraw = False
 
     for update in depsgraph.updates:
-        updated_obj = None
-        if hasattr(update, 'id') and isinstance(update.id, bpy.types.ID):
-            updated_obj = update.id
+        updated_obj = getattr(update, 'id', None)
+        if not isinstance(updated_obj, bpy.types.Object):
+            continue
+
+        try:
+            evaluated_obj = updated_obj.evaluated_get(depsgraph) if depsgraph else updated_obj
+        except (ReferenceError, AttributeError): 
+            continue
+        if not evaluated_obj: continue
+
+        root_bounds_for_updated = utils.find_parent_bounds(updated_obj)
+        is_updated_obj_bounds_itself = updated_obj.get(constants.SDF_BOUNDS_MARKER, False)
         
-        if not updated_obj: continue
-        if isinstance(updated_obj, bpy.types.Object):
-            try:
-                evaluated_obj = updated_obj.evaluated_get(depsgraph) if depsgraph else updated_obj
-            except (ReferenceError, AttributeError): 
-                continue
-            if not evaluated_obj: continue
-            root_bounds_for_updated = utils.find_parent_bounds(updated_obj)
-            is_updated_obj_bounds_itself = updated_obj.get(constants.SDF_BOUNDS_MARKER, False)
-            
-            current_obj_for_check = None
+        # Determine if the object is relevant to any SDF system
+        is_sdf_relevant = root_bounds_for_updated or is_updated_obj_bounds_itself or state.get_dependent_bounds_for_linked_object(updated_obj.name)
+        if not is_sdf_relevant:
+            continue
+
+        # Trigger update checks for transform, geometry, or property changes
+        if update.is_updated_transform or update.is_updated_geometry or getattr(update, 'is_updated_properties', False):
             if root_bounds_for_updated:
-                current_obj_for_check = root_bounds_for_updated
+                bounds_to_recheck_due_to_direct_change.add(root_bounds_for_updated.name)
             elif is_updated_obj_bounds_itself:
-                current_obj_for_check = updated_obj
+                bounds_to_recheck_due_to_direct_change.add(updated_obj.name)
             
-            if current_obj_for_check:
-                if update.is_updated_transform or \
-                   update.is_updated_geometry:
-                    bounds_to_recheck_due_to_direct_change.add(current_obj_for_check.name)
-            if utils.is_sdf_source(updated_obj) and update.is_updated_transform:
-                needs_visual_redraw = True
             for dependent_bounds_name in state.get_dependent_bounds_for_linked_object(updated_obj.name):
                 bounds_to_recheck_due_to_link.add(dependent_bounds_name)
-        elif isinstance(updated_obj, bpy.types.Object) and updated_obj.get(constants.SDF_BOUNDS_MARKER, False):
-            bounds_to_recheck_due_to_direct_change.add(updated_obj.name)
+
+        if utils.is_sdf_source(updated_obj) and update.is_updated_transform:
+            needs_visual_redraw = True
+
     all_bounds_to_schedule_check = bounds_to_recheck_due_to_direct_change.union(bounds_to_recheck_due_to_link)
 
     if all_bounds_to_schedule_check:
@@ -507,27 +499,16 @@ def ff_depsgraph_handler(scene, depsgraph):
         if current_scene_ctx:
             for bounds_name_to_check in all_bounds_to_schedule_check:
                 if current_scene_ctx.objects.get(bounds_name_to_check):
-                    try:
-                        bpy.app.timers.register(
-                            lambda scn_arg=current_scene_ctx, name_arg=bounds_name_to_check: check_and_trigger_update(scn_arg, name_arg, "depsgraph_or_link_event"),
-                            first_interval=0.0
-                        )
-                    except Exception as e: print(f"FieldForge ERROR: Failed schedule check_trigger from depsgraph for {bounds_name_to_check}: {e}")
-        else: print("FieldForge WARN (Depsgraph): Cannot trigger update - no current scene.")
+                    bpy.app.timers.register(
+                        lambda scn_arg=current_scene_ctx, name_arg=bounds_name_to_check: check_and_trigger_update(scn_arg, name_arg, "depsgraph_or_link_event"),
+                        first_interval=0.0
+                    )
 
-
-    # Trigger visual redraw if needed (call function from drawing module)
     if needs_visual_redraw:
-        # Assumes drawing module is imported
         try:
-            import importlib # Use importlib if used for reloading
             from .. import drawing
-            importlib.reload(drawing) # Reload drawing if needed for dev
             drawing.tag_redraw_all_view3d()
-        except (ImportError, AttributeError, NameError):
-            print("FieldForge WARN (Depsgraph): Could not trigger visual redraw (drawing module issue?).")
-        except Exception as e:
-            print(f"FieldForge ERROR (Depsgraph): Error triggering redraw: {e}")
+        except Exception: pass
 
 
 # --- Initial Update Check on Load ---
