@@ -445,11 +445,7 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
             obj["sdf_csg_operation"] = "UNION" 
         # Set other defaults from constants file
         obj["sdf_use_loft"] = defaults["sdf_use_loft"]; obj["sdf_use_shell"] = defaults["sdf_use_shell"]
-        obj["sdf_shell_offset"] = defaults["sdf_shell_offset"]; obj["sdf_main_array_mode"] = defaults["sdf_main_array_mode"]
-        obj["sdf_array_active_x"] = defaults["sdf_array_active_x"]; obj["sdf_array_count_x"] = defaults["sdf_array_count_x"]; obj["sdf_array_delta_x"] = defaults["sdf_array_delta_x"]
-        obj["sdf_array_active_y"] = defaults["sdf_array_active_y"]; obj["sdf_array_count_y"] = defaults["sdf_array_count_y"]; obj["sdf_array_delta_y"] = defaults["sdf_array_delta_y"]
-        obj["sdf_array_active_z"] = defaults["sdf_array_active_z"]; obj["sdf_array_count_z"] = defaults["sdf_array_count_z"]; obj["sdf_array_delta_z"] = defaults["sdf_array_delta_z"]
-        obj["sdf_radial_count"] = defaults["sdf_radial_count"]; obj["sdf_radial_center"] = tuple(defaults["sdf_radial_center"]); obj["sdf_array_center_on_origin"] = defaults["sdf_array_center_on_origin"]
+        obj["sdf_shell_offset"] = defaults["sdf_shell_offset"]
 
         # --- Assign Type-Specific Properties (Passed via props_to_set) ---
         if props_to_set:
