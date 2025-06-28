@@ -63,7 +63,7 @@ def update_sdf_cache(new_state: dict, bounds_name: str):
 
 # --- Debounce and Throttle Logic (Per Bounds) ---
 
-def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: str="unknown"):
+def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
     """
     Checks if an update is needed for a specific bounds hierarchy based on state change.
     If needed and auto-update is on, resets the debounce timer for viewport updates.
@@ -72,8 +72,9 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
 
     t_start = time.perf_counter()
     context = bpy.context
-    if not context or not scene: return # Context/Scene might not be ready
+    if not context or not context.scene: return # Context/Scene might not be ready
 
+    scene = context.scene
     bounds_obj = scene.objects.get(bounds_name)
     if not bounds_obj or not bounds_obj.get(constants.SDF_BOUNDS_MARKER):
         # Clean up potentially orphaned state if object is gone
@@ -105,7 +106,7 @@ def check_and_trigger_update(scene: bpy.types.Scene, bounds_name: str, reason: s
     cached_state = _sdf_update_caches.get(bounds_name)
     if state.has_state_changed(current_state, cached_state): # Pass cached state directly
         # State has changed, schedule a new debounce timer
-        schedule_new_debounce_timer(scene, bounds_name, current_state)
+        schedule_new_debounce_timer(bounds_name, current_state)
     t_end = time.perf_counter()
 
 
@@ -121,12 +122,13 @@ def cancel_debounce_timer(bounds_name: str):
         except Exception as e: print(f"FieldForge WARN: Unexpected error cancelling timer for {bounds_name}: {e}")
 
 
-def schedule_new_debounce_timer(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict):
+def schedule_new_debounce_timer(bounds_name: str, trigger_state: dict):
     """ Schedules a new viewport update timer, cancelling any existing one for this bounds. """
     global _debounce_timers, _last_trigger_states
     context = bpy.context
-    if not context or not scene: return
+    if not context or not context.scene: return
 
+    scene = context.scene
     bounds_obj = scene.objects.get(bounds_name)
     if not bounds_obj: return # Bounds deleted
 
@@ -146,7 +148,7 @@ def schedule_new_debounce_timer(scene: bpy.types.Scene, bounds_name: str, trigge
         # Use a lambda that captures the specific bounds_name AND scene
         # Pass scene explicitly as context might change when timer fires
         new_timer = bpy.app.timers.register(
-            lambda scn=scene, name=bounds_name: debounce_check_and_run_viewport_update(scn, name),
+            lambda name=bounds_name: debounce_check_and_run_viewport_update(name),
             first_interval=safe_delay
         )
         _debounce_timers[bounds_name] = new_timer
@@ -155,18 +157,19 @@ def schedule_new_debounce_timer(scene: bpy.types.Scene, bounds_name: str, trigge
          _last_trigger_states.pop(bounds_name, None) # Clean up trigger state on failure
 
 
-def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: str):
+def debounce_check_and_run_viewport_update(bounds_name: str):
     """
     Timer callback. Checks throttle and schedules the actual update via another timer.
     Returns None to indicate the timer should not repeat automatically.
     """
     global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times
 
-    # Check if scene still exists when timer fires
-    if not scene or not scene.name: # Check name as extra validation
-         _debounce_timers.pop(bounds_name, None) # Remove timer ref if scene is gone
-         return None
+    context = bpy.context
+    if not context or not context.scene:
+        _debounce_timers.pop(bounds_name, None)
+        return None
 
+    scene = context.scene
     bounds_obj = scene.objects.get(bounds_name)
     if not bounds_obj:
         _debounce_timers.pop(bounds_name, None) # Remove timer ref
@@ -195,7 +198,7 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
         _last_trigger_states.pop(bounds_name, None) # Clear trigger state, it's being used
         _updates_pending[bounds_name] = True # Mark as pending
 
-        run_sdf_update(scene, bounds_name, state_to_pass_to_update, is_viewport_update=True)
+        run_sdf_update(bounds_name, state_to_pass_to_update, is_viewport_update=True)
 
     else:
         # --- Throttle Active: Reschedule this check function ---
@@ -207,7 +210,7 @@ def debounce_check_and_run_viewport_update(scene: bpy.types.Scene, bounds_name: 
         try:
             safe_wait = max(0.0, remaining_wait)
             new_timer = bpy.app.timers.register(
-                lambda scn=scene, name=bounds_name: debounce_check_and_run_viewport_update(scn, name),
+                lambda name=bounds_name: debounce_check_and_run_viewport_update(name),
                 first_interval=safe_wait
             )
             _debounce_timers[bounds_name] = new_timer # Store new timer ref
@@ -373,7 +376,7 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
 
     return None # Unregister the timer
 
-def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict, is_viewport_update: bool = False):
+def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bool = False):
     """
     STARTS the threaded SDF generation and mesh update process.
     """
@@ -383,10 +386,11 @@ def run_sdf_update(scene: bpy.types.Scene, bounds_name: str, trigger_state: dict
 
     t_start = time.perf_counter()
     context = bpy.context
-    if not context or not scene or not scene.name:
+    if not context or not context.scene:
         if bounds_name in _updates_pending: _updates_pending[bounds_name] = False;
         return
 
+    scene = context.scene
     bounds_obj = scene.objects.get(bounds_name)
     if not bounds_obj:
         if bounds_name in _updates_pending: _updates_pending[bounds_name] = False;
@@ -495,14 +499,12 @@ def ff_depsgraph_handler(scene, depsgraph):
     all_bounds_to_schedule_check = bounds_to_recheck_due_to_direct_change.union(bounds_to_recheck_due_to_link)
 
     if all_bounds_to_schedule_check:
-        current_scene_ctx = getattr(context, 'scene', None)
-        if current_scene_ctx:
-            for bounds_name_to_check in all_bounds_to_schedule_check:
-                if current_scene_ctx.objects.get(bounds_name_to_check):
-                    bpy.app.timers.register(
-                        lambda scn_arg=current_scene_ctx, name_arg=bounds_name_to_check: check_and_trigger_update(scn_arg, name_arg, "depsgraph_or_link_event"),
-                        first_interval=0.0
-                    )
+        for bounds_name_to_check in all_bounds_to_schedule_check:
+            # No need to check if bounds_obj exists here, check_and_trigger_update does it
+            bpy.app.timers.register(
+                lambda name_arg=bounds_name_to_check: check_and_trigger_update(name_arg, "depsgraph_or_link_event"),
+                first_interval=0.0
+            )
 
     if needs_visual_redraw:
         try:
@@ -526,14 +528,12 @@ def initial_update_check_all():
         if bounds_obj.name not in processed_bounds:
             processed_bounds.add(bounds_obj.name)
             try:
-                scene = context.scene # Get scene inside loop? Probably fine outside too.
-                if scene:
-                    # Stagger checks slightly
-                    bpy.app.timers.register(
-                         lambda scn=scene, name=bounds_obj.name: check_and_trigger_update(scn, name, "initial_check"),
-                         first_interval=0.1 + count * 0.05
-                    )
-                    count += 1
+                # Stagger checks slightly
+                bpy.app.timers.register(
+                        lambda name=bounds_obj.name: check_and_trigger_update(name, "initial_check"),
+                        first_interval=0.1 + count * 0.05
+                )
+                count += 1
             except Exception as e:
                 print(f"FieldForge ERROR: Failed schedule initial check for {bounds_obj.name}: {e}")
 
