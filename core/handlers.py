@@ -58,3 +58,13 @@ def ff_load_post_handler(dummy):
          print("FieldForge ERROR (load_post): Could not find function to start select handler in operators.py")
     except Exception as e:
         print(f"FieldForge ERROR (load_post): Failed to start modal select handler via timer: {e}")
+
+@persistent
+def ff_undo_pre_handler(dummy):
+    from ..core import update_manager
+    update_manager.clear_timers_and_state()
+
+@persistent
+def ff_undo_post_handler(dummy):
+    from ..core import update_manager
+    bpy.app.timers.register(update_manager.initial_update_check_all, first_interval=0.05)

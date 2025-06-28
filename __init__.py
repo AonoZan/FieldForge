@@ -152,6 +152,12 @@ def register():
         if handlers.ff_load_post_handler not in bpy.app.handlers.load_post:
             bpy.app.handlers.load_post.append(handlers.ff_load_post_handler)
 
+        # Undo Handlers
+        if handlers.ff_undo_pre_handler not in bpy.app.handlers.undo_pre:
+            bpy.app.handlers.undo_pre.append(handlers.ff_undo_pre_handler)
+        if handlers.ff_undo_post_handler not in bpy.app.handlers.undo_post:
+            bpy.app.handlers.undo_post.append(handlers.ff_undo_post_handler)
+
         # Draw Handler (store handle within drawing module)
         if drawing._draw_handle is None:
             drawing._draw_handle = bpy.types.SpaceView3D.draw_handler_add(
@@ -198,6 +204,12 @@ def unregister():
         # Load Post Handler
         if handlers.ff_load_post_handler in bpy.app.handlers.load_post:
             bpy.app.handlers.load_post.remove(handlers.ff_load_post_handler)
+
+        # Undo Handlers
+        if handlers.ff_undo_pre_handler in bpy.app.handlers.undo_pre:
+            bpy.app.handlers.undo_pre.remove(handlers.ff_undo_pre_handler)
+        if handlers.ff_undo_post_handler in bpy.app.handlers.undo_post:
+            bpy.app.handlers.undo_post.remove(handlers.ff_undo_post_handler)
 
         # Draw Handler (using handle stored in drawing module)
         if drawing._draw_handle is not None:
