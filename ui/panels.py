@@ -326,6 +326,17 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
     row_twirl_params.prop(obj_for_props, '["sdf_group_twirl_amount"]', text="Amount") # Consider subtype='ANGLE' if you want degrees display
     row_twirl_params.prop(obj_for_props, '["sdf_group_twirl_radius"]', text="Radius")
 
+    layout.separator()
+
+    # --- Shell Modifier ---
+    shell_controls_row = layout.row(align=True)
+    use_shell_val = obj_for_props.get("sdf_use_shell", False)
+    shell_controls_row.prop(obj_for_props, '["sdf_use_shell"]', text="Use Shell", toggle=True, icon='MOD_SOLIDIFY')
+    
+    shell_offset_sub_row = shell_controls_row.row(align=True)
+    shell_offset_sub_row.active = use_shell_val
+    shell_offset_sub_row.prop(obj_for_props, '["sdf_shell_offset"]', text="Thickness")
+
     # --- Array Modifier for Group ---
     array_label_row = layout.row(align=True)
     array_label_row.label(text="Array Modifier (Group Content):")

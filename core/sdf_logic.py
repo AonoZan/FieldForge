@@ -647,6 +647,15 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                     def tw_fn_wrap(s_l,fn_tw,amt_tw,rad_tw,cen_tw): return fn_tw(s_l,amt_tw,rad_tw,cen_tw)
                     shape_after_mods = _apply_local_modifier(shape_after_mods, obj, tw_fn_wrap, sel_tw_fn, tw_am_grp, tw_r_grp, (0,0,0))
             
+            if utils.get_sdf_param(obj, "sdf_use_shell", False):
+                offset_grp = float(utils.get_sdf_param(obj, "sdf_shell_offset", constants.DEFAULT_GROUP_SETTINGS["sdf_shell_offset"]))
+                if abs(offset_grp) > 1e-5:
+                    def shell_fn(s_l, offset_val):
+                        outer_s_l = lf.offset(s_l, offset_val)
+                        if offset_val > 0: return lf.difference(outer_s_l, s_l)
+                        else: return lf.difference(s_l, outer_s_l)
+                    shape_after_mods = _apply_local_modifier(shape_after_mods, obj, shell_fn, offset_grp)
+
             current_processing_shape = shape_after_mods
 
     if current_processing_shape is None and _lf_imported_ok: return lf.emptiness()

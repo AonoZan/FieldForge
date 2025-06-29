@@ -109,6 +109,8 @@ DEFAULT_GROUP_SETTINGS = {
     "sdf_group_twirl_axis": 'Z',
     "sdf_group_twirl_amount": 1.5708,
     "sdf_group_twirl_radius": 1.0,
+    "sdf_use_shell": False,
+    "sdf_shell_offset": 0.1,
     "sdf_main_array_mode": 'NONE',
     "sdf_array_active_x": False,
     "sdf_array_active_y": False,
