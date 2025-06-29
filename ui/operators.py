@@ -111,7 +111,7 @@ class OBJECT_OT_add_sdf_bounds(Operator):
                 # Use timer to ensure object is fully integrated
                 bpy.app.timers.register(
                     # Use lambda to pass current scene context correctly
-                    lambda scn=context.scene, name=bounds_obj.name: ff_update.check_and_trigger_update(scn, name, "add_bounds"),
+                    lambda scn=context.scene, name=bounds_obj.name: ff_update.check_and_trigger_update(name, "add_bounds"),
                     first_interval=0.01 # Short delay
                 )
             except Exception as e:
@@ -223,7 +223,7 @@ class OBJECT_OT_add_sdf_group(Operator):
 
         self.report({'INFO'}, f"Added SDF Group: {obj.name} under {target_parent.name}")
 
-        ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"add_group")
+        ff_update.check_and_trigger_update(parent_bounds.name, f"add_group")
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -325,7 +325,7 @@ class OBJECT_OT_add_sdf_canvas(Operator):
         else: obj["sdf_processing_order"] = 0
 
         self.report({'INFO'}, f"Added SDF Canvas: {obj.name} under {target_parent.name}")
-        ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"add_canvas")
+        ff_update.check_and_trigger_update(parent_bounds.name, f"add_canvas")
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -492,7 +492,7 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
         else: mode_str = f" [{current_csg_op.capitalize()}]"
         self.report({'INFO'}, f"Added SDF Source: {obj.name} ({sdf_type}) under {target_parent.name}{mode_str}")
 
-        ff_update.check_and_trigger_update(context.scene, parent_bounds.name, f"add_{sdf_type}_source")
+        ff_update.check_and_trigger_update(parent_bounds.name, f"add_{sdf_type}_source")
         tag_redraw_all_view3d() # Redraw to show new object/outline
         return {'FINISHED'}
 
@@ -625,7 +625,7 @@ class OBJECT_OT_sdf_manual_update(Operator):
         if not current_state: self.report({'ERROR'}, f"Failed get state for {bounds_name}."); return {'CANCELLED'}
         ff_update._updates_pending[bounds_name] = True
         try:
-            bpy.app.timers.register(lambda scn=context.scene, name=bounds_name, state=current_state: ff_update.run_sdf_update(scn, name, state, is_viewport_update=False), first_interval=0.0)
+            bpy.app.timers.register(lambda name=bounds_name, state=current_state: ff_update.run_sdf_update(name, state, is_viewport_update=False), first_interval=0.0)
         except Exception as e: print(f"ERROR: Reg FINAL update timer: {e}"); ff_update._updates_pending[bounds_name] = False; self.report({'ERROR'}, f"Failed schedule update."); return {'CANCELLED'}
         self.report({'INFO'}, f"Scheduled final update for {bounds_name}."); return {'FINISHED'}
 
@@ -672,7 +672,7 @@ class OBJECT_OT_fieldforge_toggle_array_axis(Operator):
                 if b2: bounds_to_update.add(b2.name)
             
             for bounds_name in bounds_to_update:
-                ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_array_{selected_obj.name}_{self.axis}")
+                ff_update.check_and_trigger_update(bounds_name, f"toggle_array_{selected_obj.name}_{self.axis}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -710,7 +710,7 @@ class OBJECT_OT_fieldforge_set_main_array_mode(Operator):
                 if b2: bounds_to_update.add(b2.name)
 
             for bounds_name in bounds_to_update:
-                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_main_array_{selected_obj.name}_{self.main_mode}")
+                ff_update.check_and_trigger_update(bounds_name, f"set_main_array_{selected_obj.name}_{self.main_mode}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -771,7 +771,7 @@ class OBJECT_OT_fieldforge_set_csg_mode(Operator):
                 if b2: bounds_to_update.add(b2.name)
 
             for bounds_name in bounds_to_update:
-                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_csg_linked_{selected_obj.name}_{self.csg_mode}")
+                ff_update.check_and_trigger_update(bounds_name, f"set_csg_linked_{selected_obj.name}_{self.csg_mode}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -864,7 +864,7 @@ class OBJECT_OT_fieldforge_reorder_source(Operator):
                 root_bounds = parent_obj
 
             if root_bounds:
-                ff_update.check_and_trigger_update(context.scene, root_bounds.name, f"reorder_item_{obj_to_move.name}")
+                ff_update.check_and_trigger_update(root_bounds.name, f"reorder_item_{obj_to_move.name}")
 
             tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -906,7 +906,7 @@ class OBJECT_OT_fieldforge_toggle_group_symmetry(Operator):
             if b2: bounds_to_update.add(b2.name)
         
         for bounds_name in bounds_to_update:
-            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_symmetry_{selected_obj.name}_{self.axis}")
+            ff_update.check_and_trigger_update(bounds_name, f"toggle_group_symmetry_{selected_obj.name}_{self.axis}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -939,7 +939,7 @@ class OBJECT_OT_fieldforge_toggle_group_taper_z(Operator):
             if b2: bounds_to_update.add(b2.name)
 
         for bounds_name in bounds_to_update:
-            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_taper_z_{selected_obj.name}")
+            ff_update.check_and_trigger_update(bounds_name, f"toggle_group_taper_z_{selected_obj.name}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -973,7 +973,7 @@ class OBJECT_OT_fieldforge_toggle_group_shear_x_by_y(Operator):
             if b2: bounds_to_update.add(b2.name)
 
         for bounds_name in bounds_to_update:
-            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_shear_x_by_y_{selected_obj.name}")
+            ff_update.check_and_trigger_update(bounds_name, f"toggle_group_shear_x_by_y_{selected_obj.name}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -1019,7 +1019,7 @@ class OBJECT_OT_fieldforge_set_group_attract_repel_mode(Operator):
                 if b2: bounds_to_update.add(b2.name)
 
             for bounds_name in bounds_to_update:
-                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_group_attract_repel_mode_{selected_obj.name}_{self.mode}")
+                ff_update.check_and_trigger_update(bounds_name, f"set_group_attract_repel_mode_{selected_obj.name}_{self.mode}")
             
             tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -1053,7 +1053,7 @@ class OBJECT_OT_fieldforge_toggle_group_twirl(Operator):
             if b2: bounds_to_update.add(b2.name)
         
         for bounds_name in bounds_to_update:
-            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_group_twirl_{selected_obj.name}")
+            ff_update.check_and_trigger_update(bounds_name, f"toggle_group_twirl_{selected_obj.name}")
         tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -1109,7 +1109,7 @@ class OBJECT_OT_fieldforge_set_group_twirl_axis(Operator):
                 if b2: bounds_to_update.add(b2.name)
 
             for bounds_name in bounds_to_update:
-                ff_update.check_and_trigger_update(context.scene, bounds_name, f"set_group_twirl_axis_{selected_obj.name}_{self.axis}")
+                ff_update.check_and_trigger_update(bounds_name, f"set_group_twirl_axis_{selected_obj.name}_{self.axis}")
             tag_redraw_all_view3d()
         return {'FINISHED'}
 
@@ -1142,7 +1142,7 @@ class OBJECT_OT_fieldforge_toggle_canvas_revolve(Operator):
             if b2: bounds_to_update.add(b2.name)
         
         for bounds_name in bounds_to_update:
-            ff_update.check_and_trigger_update(context.scene, bounds_name, f"toggle_canvas_revolve_{selected_obj.name}")
+            ff_update.check_and_trigger_update(bounds_name, f"toggle_canvas_revolve_{selected_obj.name}")
         
         tag_redraw_all_view3d()
         return {'FINISHED'}
@@ -1168,7 +1168,7 @@ class OBJECT_OT_fieldforge_clear_link(Operator):
             # Trigger update for the bounds system this object belongs to
             bounds = utils.find_parent_bounds(obj)
             if bounds:
-                ff_update.check_and_trigger_update(context.scene, bounds.name, f"clear_link_{obj.name}")
+                ff_update.check_and_trigger_update(bounds.name, f"clear_link_{obj.name}")
             tag_redraw_all_view3d()
         else:
             self.report({'INFO'}, f"{obj.name} was not linked.")
@@ -1198,7 +1198,7 @@ class OBJECT_OT_fieldforge_toggle_process_linked_children(Operator):
         # Trigger update for the bounds system this object belongs to
         bounds = utils.find_parent_bounds(obj)
         if bounds:
-            ff_update.check_and_trigger_update(context.scene, bounds.name, f"toggle_process_linked_children_{obj.name}")
+                        ff_update.check_and_trigger_update(bounds.name, f"toggle_process_linked_children_{obj.name}")
         tag_redraw_all_view3d() # For UI refresh and potential visual changes
         return {'FINISHED'}
 
