@@ -8,7 +8,7 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: '71899313d36ce14de6646ef760fa6bbc5c0cc067'
+  LIBFIVE_COMMIT_SHA: 'daa458279121a95b51482508bcfa906d6227442e'
 
 jobs:
   build_and_package_macos:
