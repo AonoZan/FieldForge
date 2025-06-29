@@ -3,6 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Blender Version](https://img.shields.io/badge/Blender-4.4+-orange.svg)](https://www.blender.org)
 [![Powered by libfive](https://img.shields.io/badge/Powered%20by-libfive-blue)](https://libfive.com/)
+[![Gemini](https://img.shields.io/badge/GEMINI-5b5b5b?logo=googlegemini)](https://gemini.google.com/)
 
 FieldForge brings the power of Signed Distance Function (SDF) modeling directly into Blender, leveraging the robust **libfive** library. Create complex, non-destructive shapes with a deep, hierarchical workflow, procedural modifiers, and smooth blending capabilities.
 
