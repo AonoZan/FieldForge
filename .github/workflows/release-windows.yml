@@ -122,7 +122,7 @@ jobs:
           Write-Host "Copying addon files from addon_code to $addonDestDir ..."
           robocopy addon_code $addonDestDir /E `
                    /XD .git* .github* `
-                   /XF .gitignore Example.blend LICENSE README.md screenshot.png libfive*
+                   /XF .gitignore Example.blend README.md screenshot.png libfive*
       
           # Store the exit code immediately
           $RoboExitCode = $LASTEXITCODE

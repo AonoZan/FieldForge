@@ -10,6 +10,7 @@ bl_info = {
     "warning": "Requires compiled libfive libraries.",
     "doc_url": "",
     "category": "Add Mesh",
+    "license": "GPL-3.0-only",
 }
 
 import bpy
