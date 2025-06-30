@@ -1449,7 +1449,11 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
                 utils.find_and_set_new_active(context, target_obj)  # Try to set another object as active
             else:
                 # Otherwise, deselect all, select target, and make it active
-                bpy.ops.object.select_all(action='DESELECT')
+                try:
+                    bpy.ops.object.select_all(action='DESELECT')
+                except RuntimeError:
+                    for obj in context.selected_objects:
+                        obj.select_set(False)
                 target_obj.select_set(True)
                 context.view_layer.objects.active = target_obj
 
