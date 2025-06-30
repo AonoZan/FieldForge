@@ -12,3 +12,9 @@ libfive/
 
 # Graphic project related files
 Screenshot.xcfA
+
+# Ignore generated test files
+*.obj
+*.mtl
+*_test.blend
+!*_ground_truth.obj
