@@ -617,8 +617,8 @@ class OBJECT_OT_sdf_manual_update(Operator):
     def execute(self, context):
         bounds_obj = context.active_object; bounds_name = bounds_obj.name
         print(f"FieldForge: Manual final update triggered for {bounds_name}.")
-        ff_update.cancel_debounce_timer(bounds_name) # Use update_manager function
-        if bounds_name in ff_update._last_trigger_states: ff_update._last_trigger_states.pop(bounds_name)
+        
+        
         if ff_update._updates_pending.get(bounds_name, False):
              self.report({'WARNING'}, f"Update already in progress for {bounds_name}."); return {'CANCELLED'}
         current_state = ff_state.get_current_sdf_state(context, bounds_obj) # Use state module function

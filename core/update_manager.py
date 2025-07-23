@@ -34,18 +34,19 @@ except ImportError:
 # --- Global State Dictionaries (Managed by this module) ---
 # Keys are generally bounds_obj.name
 
-# Stores active bpy.app.timer references for viewport updates
-_debounce_timers = {}
-# Caches the state dictionary that triggered the last debounce timer start
-_last_trigger_states = {}
 # Flags indicating an update is scheduled or running for a specific bounds
 _updates_pending = {}
-# Stores the time.time() when the last update finished (for throttling)
-_last_update_finish_times = {}
 # Caches the last known state dictionary used for a successful update
 _sdf_update_caches = {}
 # State for multithreading
 _worker_threads = {}
+# Stores the current div being displayed for each bounds object
+_current_divs = {}
+# Stores the target div for each bounds object (can be lower than current)
+_target_divs = {}
+
+MAX_DIV = 5 # Corresponds to lowest resolution (highest div)
+MIN_DIV = 0 # Corresponds to highest resolution (lowest div)
 
 
 def clear_link_caches(): # Call from clear_timers_and_state
@@ -69,6 +70,8 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
     If needed and auto-update is on, resets the debounce timer for viewport updates.
     """
     global _updates_pending, _sdf_update_caches # Access relevant state dicts
+
+    is_viewport_update = True # This function is always called for auto-updates (viewport context)
 
     t_start = time.perf_counter()
     context = bpy.context
@@ -105,125 +108,25 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
     # Compare current state to the cached state for this specific bounds
     cached_state = _sdf_update_caches.get(bounds_name)
     if state.has_state_changed(current_state, cached_state): # Pass cached state directly
-        # State has changed, schedule a new debounce timer
-        schedule_new_debounce_timer(bounds_name, current_state)
+        # Check if the ONLY change is sdf_final_resolution for viewport updates
+        if is_viewport_update and cached_state is not None and \
+           len(current_state) == len(cached_state) and \
+           all(k in cached_state and current_state[k] == cached_state[k] for k in current_state if k != 'scene_settings') and \
+           current_state.get('scene_settings', {}).get('sdf_final_resolution') != cached_state.get('scene_settings', {}).get('sdf_final_resolution'):
+            # If only sdf_final_resolution changed, and it's a viewport update, do NOT trigger update
+            return
+
+        # State has changed, directly trigger update (no debounce/throttle)
+        run_sdf_update(bounds_name, current_state, is_viewport_update=True)
     t_end = time.perf_counter()
 
 
-def cancel_debounce_timer(bounds_name: str):
-    """Cancels the active debounce timer for a specific bounds object."""
-    global _debounce_timers
-    timer = _debounce_timers.pop(bounds_name, None) # Get and remove timer reference
-    if timer is not None and bpy.app.timers: # Check timers module exists
-        try:
-            if bpy.app.timers.is_registered(timer):
-                bpy.app.timers.unregister(timer)
-        except (ValueError, TypeError, ReferenceError): pass # Timer already gone/invalid
-        except Exception as e: print(f"FieldForge WARN: Unexpected error cancelling timer for {bounds_name}: {e}")
 
-
-def schedule_new_debounce_timer(bounds_name: str, trigger_state: dict):
-    """ Schedules a new viewport update timer, cancelling any existing one for this bounds. """
-    global _debounce_timers, _last_trigger_states
-    context = bpy.context
-    if not context or not context.scene: return
-
-    scene = context.scene
-    bounds_obj = scene.objects.get(bounds_name)
-    if not bounds_obj: return # Bounds deleted
-
-    # Cancel any previous timer for this specific bounds object
-    cancel_debounce_timer(bounds_name)
-    # Also cancel any running worker thread for this bounds, as a new update is coming
-    _cancel_and_clear_worker(bounds_name)
-
-    # Store the state that triggered this timer scheduling attempt
-    _last_trigger_states[bounds_name] = trigger_state
-
-    # Get the delay from the bounds object's settings
-    delay = utils.get_bounds_setting(bounds_obj, "sdf_realtime_update_delay")
-
-    try:
-        safe_delay = max(0.0, delay)
-        # Use a lambda that captures the specific bounds_name AND scene
-        # Pass scene explicitly as context might change when timer fires
-        new_timer = bpy.app.timers.register(
-            lambda name=bounds_name: debounce_check_and_run_viewport_update(name),
-            first_interval=safe_delay
-        )
-        _debounce_timers[bounds_name] = new_timer
-    except Exception as e:
-         print(f"FieldForge ERROR: Failed to register debounce timer for {bounds_name}: {e}")
-         _last_trigger_states.pop(bounds_name, None) # Clean up trigger state on failure
-
-
-def debounce_check_and_run_viewport_update(bounds_name: str):
-    """
-    Timer callback. Checks throttle and schedules the actual update via another timer.
-    Returns None to indicate the timer should not repeat automatically.
-    """
-    global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times
-
-    context = bpy.context
-    if not context or not context.scene:
-        _debounce_timers.pop(bounds_name, None)
-        return None
-
-    scene = context.scene
-    bounds_obj = scene.objects.get(bounds_name)
-    if not bounds_obj:
-        _debounce_timers.pop(bounds_name, None) # Remove timer ref
-        return None # Bounds deleted, timer is now defunct
-
-    # Timer has fired, remove its reference (it won't fire again unless rescheduled)
-    _debounce_timers.pop(bounds_name, None)
-
-    # Check if an update was already manually triggered or is running
-    if _updates_pending.get(bounds_name, False):
-        return None # Let the existing pending update run its course
-
-    # Retrieve the state that caused this timer to be scheduled
-    state_to_pass_to_update = _last_trigger_states.get(bounds_name)
-    if state_to_pass_to_update is None:
-        return None # Should not happen if scheduling works correctly
-
-    # --- Throttle Check ---
-    min_interval = utils.get_bounds_setting(bounds_obj, "sdf_minimum_update_interval")
-    last_finish = _last_update_finish_times.get(bounds_name, 0.0)
-    current_time = time.time()
-    time_since_last_update = current_time - last_finish
-
-    if time_since_last_update >= min_interval:
-        # --- Throttle OK: Schedule the actual viewport update ---
-        _last_trigger_states.pop(bounds_name, None) # Clear trigger state, it's being used
-        _updates_pending[bounds_name] = True # Mark as pending
-
-        run_sdf_update(bounds_name, state_to_pass_to_update, is_viewport_update=True)
-
-    else:
-        # --- Throttle Active: Reschedule this check function ---
-        remaining_wait = min_interval - time_since_last_update
-        # Keep the state in _last_trigger_states for the next attempt
-        # Do NOT set the pending flag yet
-        # Cancel just in case (shouldn't be needed as timer was popped)
-        cancel_debounce_timer(bounds_name)
-        try:
-            safe_wait = max(0.0, remaining_wait)
-            new_timer = bpy.app.timers.register(
-                lambda name=bounds_name: debounce_check_and_run_viewport_update(name),
-                first_interval=safe_wait
-            )
-            _debounce_timers[bounds_name] = new_timer # Store new timer ref
-        except Exception as e:
-            print(f"FieldForge ERROR: Failed reschedule throttle check for {bounds_name}: {e}")
-            _last_trigger_states.pop(bounds_name, None) # Clear state if reschedule fails
-
-    return None # Essential: Prevents timer from repeating automatically
 
 
 # --- Core Update Function (Now split into Thread Starter and Result Applicator) ---
 
-def _mesh_generation_worker(result_q, is_cancelled_flag, shape, mesh_args, bounds_name):
+def _mesh_generation_worker(result_q, is_cancelled_flag, shape, bounds_name, base_resolution, current_div, xyz_min, xyz_max):
     """
     Worker function to be run in a separate thread.
     Performs the heavy mesh generation and puts the result in a queue.
@@ -234,13 +137,21 @@ def _mesh_generation_worker(result_q, is_cancelled_flag, shape, mesh_args, bound
 
     try:
         t_start_worker = time.perf_counter()
+        # Calculate actual resolution from base_resolution and current_div
+        actual_resolution = max(3, int(base_resolution / (1 << current_div)))
+        mesh_args = {
+            'xyz_min': xyz_min,
+            'xyz_max': xyz_max,
+            'resolution': actual_resolution
+        }
         # This is the slow, CPU-intensive part
         mesh_data = shape.get_mesh(**mesh_args)
         t_end_worker = time.perf_counter()
+        meshing_time = t_end_worker - t_start_worker
         if is_cancelled_flag.is_set():
             result_q.put(None) # Cancelled during generation, discard result
             return
-        result_q.put(mesh_data) # Put the result in the queue for the main thread
+        result_q.put((mesh_data, meshing_time, current_div)) # Put the result, time, and div in the queue
     except Exception as e:
         print(f"FieldForge Thread ERROR: libfive mesh generation failed for {bounds_name}: {e}")
         result_q.put(Exception(f"Meshing failed: {e}")) # Put exception in queue to report it
@@ -250,7 +161,7 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
     Timer callback for the main thread. Checks the result queue from the worker.
     If a result is available, it applies the new mesh data to the Blender object.
     """
-    global _worker_threads, _updates_pending, _last_update_finish_times, _sdf_update_caches
+    global _worker_threads, _updates_pending, _sdf_update_caches, _current_divs, _target_divs
     t_apply_start = time.perf_counter()
 
     if bounds_name not in _worker_threads:
@@ -291,10 +202,22 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
         if isinstance(result_data, Exception): # Worker had an error
             raise result_data
 
-        mesh_data = result_data
+        mesh_data, meshing_time, actual_rendered_div = result_data
         sdf_settings_from_bounds = trigger_state.get('scene_settings')
         result_name = bounds_obj.get(constants.SDF_RESULT_OBJ_NAME_PROP)
-        
+
+        # Update current div to the one that was just rendered
+        _current_divs[bounds_name] = actual_rendered_div
+
+        # Adaptive div logic (only for viewport updates)
+        if is_viewport_update:
+            target_div = _target_divs.get(bounds_name, MIN_DIV)
+            if meshing_time < 0.05: # Very fast, decrease target div (higher resolution)
+                _target_divs[bounds_name] = max(MIN_DIV, target_div - 1)
+            elif meshing_time > 0.5: # Slow, increase target div (lower resolution)
+                _target_divs[bounds_name] = min(MAX_DIV, target_div + 1)
+            # else: Moderate, keep target div same
+
         # Find or create result object
         result_obj = utils.find_result_object(context, result_name)
         if not result_obj and result_name and sdf_settings_from_bounds.get("sdf_create_result_object"):
@@ -306,19 +229,15 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
              result_obj.hide_select = True
         
         if result_obj and result_obj.type == 'MESH':
-            # Create a completely new mesh datablock to avoid issues with from_pydata on existing data
-            old_mesh = result_obj.data
-            new_mesh_bdata = bpy.data.meshes.new(name=old_mesh.name)
-            result_obj.data = new_mesh_bdata
-
-            # Remove the old mesh datablock if it has no other users
-            if old_mesh.users == 0:
-                bpy.data.meshes.remove(old_mesh)
+            # Update the existing mesh datablock
+            new_mesh_bdata = result_obj.data
+            new_mesh_bdata.clear_geometry() # Clear existing data
 
             if mesh_data and mesh_data[0]:
                 new_mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1])
             new_mesh_bdata.update()
             mesh_update_successful = True
+            
             
             # Apply smooth shading and material logic
             if mesh_update_successful and len(new_mesh_bdata.polygons) > 0:
@@ -371,8 +290,19 @@ def _apply_mesh_data_from_worker(bounds_name: str, trigger_state: dict, is_viewp
         if not mesh_generation_error and mesh_update_successful:
             update_sdf_cache(trigger_state, bounds_name)
         
-        _last_update_finish_times[bounds_name] = time.time()
-        _updates_pending[bounds_name] = False
+        
+        # Progressive rendering: if current div is greater than target, schedule another update
+        if is_viewport_update and _current_divs.get(bounds_name, MAX_DIV) > _target_divs.get(bounds_name, MIN_DIV):
+            bounds_obj = scene.objects.get(bounds_name) # Re-fetch bounds_obj
+            if bounds_obj and utils.get_bounds_setting(bounds_obj, "sdf_auto_update"):
+                bpy.app.timers.register(
+                    lambda: run_sdf_update(bounds_name, trigger_state, is_viewport_update),
+                    first_interval=0.01 # Schedule very soon
+                )
+            else: # If auto-update is off or bounds_obj is gone, stop progressive updates
+                _updates_pending[bounds_name] = False
+        else: # Progressive rendering is complete or not a viewport update
+            _updates_pending[bounds_name] = False
 
     return None # Unregister the timer
 
@@ -410,11 +340,35 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     bounds_matrix = trigger_state.get('bounds_matrix')
     local_corners = [Vector(c) for c in ((-1,-1,-1), (1,-1,-1), (-1,1,-1), (1,1,-1), (-1,-1,1), (1,-1,1), (-1,1,1), (1,1,1))]
     world_corners = [(bounds_matrix @ c.to_4d()).xyz for c in local_corners]
+
+    xyz_min = (min(c.x for c in world_corners), min(c.y for c in world_corners), min(c.z for c in world_corners))
+    xyz_max = (max(c.x for c in world_corners), max(c.y for c in world_corners), max(c.z for c in world_corners))
     
+    # Get the div for this update cycle
+    # If this is the first call for this bounds object, or a new update cycle
+    if bounds_name not in _current_divs or bounds_name not in _target_divs or _current_divs[bounds_name] <= _target_divs[bounds_name]:
+        if is_viewport_update:
+            _current_divs[bounds_name] = MAX_DIV # Start at lowest resolution (highest div)
+            _target_divs[bounds_name] = MIN_DIV # Target highest resolution (lowest div)
+        else: # Manual update
+            _current_divs[bounds_name] = MIN_DIV # Manual updates go straight to highest resolution
+            _target_divs[bounds_name] = MIN_DIV # Target is the same as current
+    
+    # For progressive updates (only for viewport), decrement the current div towards the target
+    elif is_viewport_update and _current_divs[bounds_name] > _target_divs[bounds_name]:
+        _current_divs[bounds_name] -= 1 # Decrement for the next progressive step (higher resolution)
+
+    # The div to actually use for this meshing job
+    div_for_worker = _current_divs[bounds_name]
+
+    # Calculate the actual resolution to pass to libfive based on the div
+    base_resolution_setting = sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)
+    actual_resolution_for_libfive = max(3, int(base_resolution_setting / (1 << div_for_worker)))
+
     mesh_args = {
         'xyz_min': (min(c.x for c in world_corners), min(c.y for c in world_corners), min(c.z for c in world_corners)),
         'xyz_max': (max(c.x for c in world_corners), max(c.y for c in world_corners), max(c.z for c in world_corners)),
-        'resolution': max(3, int(sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)))
+        'resolution': actual_resolution_for_libfive
     }
 
     result_q = queue.Queue()
@@ -422,7 +376,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     
     worker_thread = threading.Thread(
         target=_mesh_generation_worker,
-        args=(result_q, is_cancelled_flag, final_combined_shape, mesh_args, bounds_name)
+        args=(result_q, is_cancelled_flag, final_combined_shape, bounds_name, base_resolution_setting, div_for_worker, xyz_min, xyz_max)
     )
     
     result_timer = bpy.app.timers.register(
@@ -528,17 +482,14 @@ def initial_update_check_all():
         if bounds_obj.name not in processed_bounds:
             processed_bounds.add(bounds_obj.name)
             try:
-                # Stagger checks slightly
-                bpy.app.timers.register(
-                        lambda name=bounds_obj.name: check_and_trigger_update(name, "initial_check"),
-                        first_interval=0.1 + count * 0.05
-                )
+                # Directly trigger update (no debounce)
+                check_and_trigger_update(bounds_obj.name, "initial_check")
                 count += 1
             except Exception as e:
-                print(f"FieldForge ERROR: Failed schedule initial check for {bounds_obj.name}: {e}")
+                print(f"FieldForge ERROR: Failed initial check for {bounds_obj.name}: {e}")
 
     if count > 0:
-        print(f"FieldForge: Scheduled initial checks for {count} bounds systems.")
+        print(f"FieldForge: Triggered initial checks for {count} bounds systems.")
         # Also trigger an initial redraw after checks are scheduled
         try:
             from .. import drawing # Assumes drawing module exists
@@ -552,20 +503,15 @@ def initial_update_check_all():
 # Called from unregister()
 def clear_timers_and_state():
     """Cancels all active timers and clears global state dictionaries."""
-    global _debounce_timers, _last_trigger_states, _updates_pending, _last_update_finish_times, _sdf_update_caches, _worker_threads
-    if bpy.app.timers: # Check if timers module is still valid
-        for bounds_name in list(_debounce_timers.keys()):
-             cancel_debounce_timer(bounds_name) # Use existing cancel function
-    
+    global _updates_pending, _sdf_update_caches, _worker_threads, _current_resolutions, _target_resolutions
     # Cancel all running worker threads
     for bounds_name in list(_worker_threads.keys()):
         _cancel_and_clear_worker(bounds_name)
 
-    _debounce_timers.clear()
-    _last_trigger_states.clear()
     _updates_pending.clear()
-    _last_update_finish_times.clear()
     _sdf_update_caches.clear()
     _worker_threads.clear()
+    _current_resolutions.clear()
+    _target_resolutions.clear()
 
     clear_link_caches()
