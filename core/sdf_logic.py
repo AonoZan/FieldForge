@@ -1,9 +1,9 @@
-"""
+'''
 Core SDF Shape Construction Logic for FieldForge Addon.
 
 Handles recursive processing of the Blender object hierarchy to build
 a combined libfive.Shape based on object properties and transformations.
-"""
+'''
 
 import math
 import bpy
@@ -13,14 +13,10 @@ try:
     import libfive.shape as libfive_shape_module
     _lf_imported_ok = True
 except ImportError:
-    print("FieldForge WARN (sdf_logic.py): libfive modules not found during import.")
     _lf_imported_ok = False
-    # Define dummy lf object so functions don't immediately crash on load,
-    # although they will fail if called without libfive.
     class LFDummy:
         def __getattr__(self, name):
-            if name == "emptiness":
-                return lambda: None
+            if name == "emptiness": return lambda: None
             raise RuntimeError(f"libfive not available (tried to access lf.{name})")
     lf = LFDummy()
     class ShapeDummy:
@@ -32,12 +28,33 @@ except ImportError:
         def Z(): raise RuntimeError("libfive not available (Shape.Z)")
     libfive_shape_module = type('module', (), {'Shape': ShapeDummy})()
 
-
 from mathutils import Vector, Matrix
+from .. import constants, utils
+from .raymarch_renderer import (TYPE_SPHERE, TYPE_BOX, TYPE_CYLINDER, TYPE_TORUS, TYPE_ROUND_BOX, TYPE_CONE, TYPE_RING, TYPE_CIRCLE, TYPE_POLYGON)
 
-from .. import constants
-from .. import utils
+# --- Data Structure for Raymarching --- 
+class SdfNode:
+    def __init__(self, obj, type_id, params, matrix, blend_factor, csg_op, round_radius=0.0):
+        self.obj = obj
+        self.type_id = type_id
+        self.params = params
+        self.matrix = matrix
+        self.blend_factor = blend_factor
+        self.csg_op = csg_op
+        self.round_radius = round_radius
 
+    def serialize(self):
+        # Pad params to 3 elements (for vec3 in shader)
+        padded_params = (self.params + [0.0, 0.0, 0.0])[:3]
+        return {
+            'params': [self.type_id] + padded_params,
+            'matrix': self.matrix.transposed(),
+            'blend_factor': self.blend_factor,
+            'csg_op': self.csg_op,
+            'round_radius': self.round_radius
+        }
+
+# --- libfive.Shape Meshing ---
 
 def reconstruct_shape(obj: bpy.types.Object) -> lf.Shape | None:
     """
@@ -596,8 +613,8 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 X_loc,Y_loc,Z_loc = libfive_shape_module.Shape.X(),libfive_shape_module.Shape.Y(),libfive_shape_module.Shape.Z()
                 try:
                     xp_loc=mat_obj_l2w[0][0]*X_loc+mat_obj_l2w[0][1]*Y_loc+mat_obj_l2w[0][2]*Z_loc+mat_obj_l2w[0][3]
-                    yp_loc=mat_obj_l2w[1][0]*X_loc+mat_obj_l2w[1][1]*Y_loc+mat_obj_l2w[1][2]*Z_loc+mat_obj_l2w[1][3]
-                    zp_loc=mat_obj_l2w[2][0]*X_loc+mat_obj_l2w[2][1]*Y_loc+mat_obj_l2w[2][2]*Z_loc+mat_obj_l2w[2][3]
+                    yp_loc=mat_obj_l2w[1][0]*X_loc+mat_obj_l2w[1][1]*Y_loc+mat_l2w[1][2]*Z_loc+mat_l2w[1][3]
+                    zp_loc=mat_obj_l2w[2][0]*X_loc+mat_obj_l2w[2][1]*Y_loc+mat_obj_l2w[2][2]*Z_loc+mat_l2w[2][3]
                     shape_in_local = current_shape.remap(xp_loc, yp_loc, zp_loc)
                 except Exception: return current_shape
                 if shape_in_local is None or shape_in_local is lf.emptiness(): return current_shape
@@ -660,3 +677,94 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
     if current_processing_shape is None and _lf_imported_ok: return lf.emptiness()
     return current_processing_shape
+
+# --- Raymarching Node Tree ---
+
+def _flatten_sdf_nodes_recursive(obj: bpy.types.Object, flat_list: list):
+    if not obj.visible_get(view_layer=bpy.context.view_layer): return
+
+    if utils.is_sdf_source(obj):
+        sdf_type = utils.get_sdf_param(obj, "sdf_type", "")
+        blend_factor = utils.get_sdf_param(obj, "sdf_blend_factor", 0.2)
+        csg_op_str = utils.get_sdf_param(obj, "sdf_csg_operation", "UNION")
+        csg_op = 0.0 # UNION
+        if csg_op_str == "DIFFERENCE": csg_op = 1.0
+        elif csg_op_str == "INTERSECT": csg_op = 2.0
+
+        node = None
+        if sdf_type == "sphere":
+            node = SdfNode(obj, TYPE_SPHERE, [0.5], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "cube":
+            node = SdfNode(obj, TYPE_BOX, [0.5, 0.5, 0.5], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "cylinder":
+            radius = utils.get_sdf_param(obj, "sdf_radius", 0.5)
+            height = utils.get_sdf_param(obj, "sdf_height", 1.0) * 0.5 # Convert total height to half-height
+            node = SdfNode(obj, TYPE_CYLINDER, [radius, height], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "cone":
+            radius = utils.get_sdf_param(obj, "sdf_radius", 0.5)
+            height = utils.get_sdf_param(obj, "sdf_height", 1.0) * 0.5 # Convert total height to half-height
+            node = SdfNode(obj, TYPE_CONE, [radius, height], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "torus":
+            major_radius = utils.get_sdf_param(obj, "sdf_torus_major_radius", 0.35)
+            minor_radius = utils.get_sdf_param(obj, "sdf_torus_minor_radius", 0.15)
+            node = SdfNode(obj, TYPE_TORUS, [major_radius, minor_radius], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "ring":
+            outer_radius = utils.get_sdf_param(obj, "sdf_outer_radius", 0.5)
+            inner_radius = utils.get_sdf_param(obj, "sdf_inner_radius", 0.25)
+            node = SdfNode(obj, TYPE_RING, [outer_radius, inner_radius], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "circle":
+            radius = utils.get_sdf_param(obj, "sdf_radius", 0.5)
+            node = SdfNode(obj, TYPE_CIRCLE, [radius], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "polygon":
+            radius = utils.get_sdf_param(obj, "sdf_radius", 0.5)
+            sides = utils.get_sdf_param(obj, "sdf_sides", 6)
+            node = SdfNode(obj, TYPE_POLYGON, [radius, sides], obj.matrix_world, blend_factor, csg_op)
+        elif sdf_type == "rounded_box":
+            size_x = utils.get_sdf_param(obj, "sdf_size_x", 1.0) * 0.5 # Convert to half-extents
+            size_y = utils.get_sdf_param(obj, "sdf_size_y", 1.0) * 0.5 # Convert to half-extents
+            size_z = utils.get_sdf_param(obj, "sdf_size_z", 1.0) * 0.5 # Convert to half-extents
+            roundness_prop = min(utils.get_sdf_param(obj, "sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"]), 0.5)
+            
+            # Calculate half_size based on the smallest dimension of the box
+            half_size = min(size_x, size_y, size_z)
+            
+            # Replicate libfive's internal_sdf_radius calculation
+            internal_sdf_radius = min(max(roundness_prop, 0.0), 1.0) * half_size
+            
+            # Replicate libfive's safe_sdf_radius clamping
+            safe_sdf_radius = min(internal_sdf_radius, half_size - 1e-5)
+            
+            node = SdfNode(obj, TYPE_ROUND_BOX, [size_x, size_y, size_z], obj.matrix_world, blend_factor, csg_op, round_radius=safe_sdf_radius)
+        elif sdf_type == "pyramid":
+            height = utils.get_sdf_param(obj, "sdf_pyramid_height", 1.0)
+            node = SdfNode(obj, constants.TYPE_PYRAMID, [height], obj.matrix_world, blend_factor, csg_op)
+        if node:
+            print(f"DEBUG (sdf_logic): Created SdfNode: type_id={node.type_id}, params={node.params}, round_radius={node.round_radius}")
+            flat_list.append(node)
+
+    for child in obj.children:
+        _flatten_sdf_nodes_recursive(child, flat_list)
+
+# --- Build and Cache Functions ---
+
+_sdf_tree_cache = {}
+_sdf_node_tree_cache = {}
+
+def get_cached_sdf_tree(bounds_name: str):
+    return _sdf_tree_cache.get(bounds_name)
+
+def build_sdf_tree(context: bpy.types.Context, bounds_obj: bpy.types.Object):
+    if not _lf_imported_ok: return None, None
+    settings = {}
+    for key, default_val in constants.DEFAULT_SETTINGS.items():
+        settings[key] = utils.get_sdf_param(bounds_obj, key, default_val)
+    shape = process_sdf_hierarchy(bounds_obj, settings)
+    if shape is None: return None, None
+    _sdf_tree_cache[bounds_obj.name] = shape
+    return shape, settings
+
+def build_sdf_node_tree(context: bpy.types.Context, bounds_obj: bpy.types.Object):
+    flat_list = []
+    _flatten_sdf_nodes_recursive(bounds_obj, flat_list)
+    _sdf_node_tree_cache[bounds_obj.name] = flat_list
+    return flat_list

@@ -28,6 +28,19 @@ AXIS_Z_BIT = 4
 
 _2D_SHAPE_TYPES = {"circle", "ring", "polygon", "text"}
 
+# Node type IDs
+TYPE_EMPTY = 0.0
+TYPE_SPHERE = 1.0
+TYPE_BOX = 2.0
+TYPE_CYLINDER = 3.0
+TYPE_TORUS = 4.0
+TYPE_ROUND_BOX = 5.0
+TYPE_PYRAMID = 6.0
+TYPE_CONE = 7.0
+TYPE_RING = 8.0
+TYPE_CIRCLE = 9.0
+TYPE_POLYGON = 10.0
+
 # --- Caching and Comparison ---
 
 # Tolerance for floating-point comparisons in caching state changes
@@ -141,11 +154,15 @@ DEFAULT_SOURCE_SETTINGS = {
     # Shape Specific Defaults (used in operators)
     "sdf_torus_major_radius": 0.35,
     "sdf_torus_minor_radius": 0.15,
-    "sdf_round_radius": 0.1,
+    "sdf_round_radius": 0.001,
     "sdf_extrusion_depth": 0.1,
     "sdf_inner_radius": 0.25, # Ring inner radius (unit space)
     "sdf_sides": 6,           # Polygon sides
     "sdf_text_string": "Text",
+    "sdf_radius": 0.5, # Default for sphere and cylinder
+    "sdf_height": 1.0, # Default for cylinder
+    "sdf_pyramid_height": 1.0,
+    "sdf_pyramid_base_size": 1.0,
     SDF_LINK_TARGET_NAME_PROP: "",
     SDF_PROCESS_LINKED_CHILDREN_PROP: False,
 }

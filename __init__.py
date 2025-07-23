@@ -72,6 +72,7 @@ if "bpy" in locals():
     from .core import sdf_logic
     from .core import state
     from .core import update_manager
+    from .core import raymarch_renderer
     from . import drawing
     from .ui import operators
     from .ui import panels
@@ -82,6 +83,7 @@ if "bpy" in locals():
     importlib.reload(sdf_logic)
     importlib.reload(state)
     importlib.reload(update_manager)
+    importlib.reload(raymarch_renderer)
     importlib.reload(drawing)
     importlib.reload(operators)
     importlib.reload(panels)
@@ -94,6 +96,7 @@ else:
     from .core import sdf_logic
     from .core import state
     from .core import update_manager
+    from .core import raymarch_renderer
     from . import drawing
     from .ui import operators
     from .ui import panels
@@ -241,6 +244,7 @@ def unregister():
     try:
         update_manager.clear_timers_and_state() # Assumes function exists in update_manager
         drawing.clear_draw_data() # Assumes function exists in drawing
+        raymarch_renderer.get_renderer().cleanup()
         # operators module might reset its flag automatically or on next invoke
     except Exception as e:
         print(f"  WARN: Error clearing addon state: {e}")

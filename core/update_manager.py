@@ -401,7 +401,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     
     t_sdf_start = time.perf_counter()
     sdf_settings = trigger_state.get('scene_settings')
-    final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
+    final_combined_shape, _ = sdf_logic.build_sdf_tree(context, bounds_obj)
     t_sdf_end = time.perf_counter()
 
     if final_combined_shape is None:
@@ -499,6 +499,14 @@ def ff_depsgraph_handler(scene, depsgraph):
     all_bounds_to_schedule_check = bounds_to_recheck_due_to_direct_change.union(bounds_to_recheck_due_to_link)
 
     if all_bounds_to_schedule_check:
+        from . import raymarch_renderer
+        renderer = raymarch_renderer.get_renderer()
+        if renderer.is_active:
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
+
         for bounds_name_to_check in all_bounds_to_schedule_check:
             # No need to check if bounds_obj exists here, check_and_trigger_update does it
             bpy.app.timers.register(

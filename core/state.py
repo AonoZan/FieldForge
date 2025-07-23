@@ -227,3 +227,22 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
             return True
 
     return False
+
+
+# --- Raymarching Data Serialization ---
+
+def get_sdf_tree_for_raymarching(context: bpy.types.Context, node_list: list) -> list:
+    """
+    Serializes a flat list of SdfNode objects into a list of dictionaries
+    suitable for consumption by the raymarch_renderer.
+    """
+    if not node_list:
+        return []
+
+    # The list is already flat, just serialize each node
+    serialized_data = []
+    for node in node_list:
+        if node:
+            serialized_data.append(node.serialize())
+
+    return serialized_data

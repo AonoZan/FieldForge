@@ -72,6 +72,18 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
 
     layout.separator()
 
+    # --- Raymarch Preview ---
+    from ..core.raymarch_renderer import get_renderer
+    renderer = get_renderer()
+    row_raymarch = layout.row()
+    op = row_raymarch.operator("object.toggle_raymarch_preview", 
+                               text="Raymarch Preview", 
+                               icon='PLAY' if not renderer.is_active else 'PAUSE', 
+                               depress=renderer.is_active)
+
+
+    layout.separator()
+
     # --- Material Assignment ---
     row_material_label = layout.row()
     row_material_label.label(text="Result Material:")

@@ -1480,6 +1480,36 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
         if _selection_handler_running: _selection_handler_running = False
         tag_redraw_all_view3d(); return {'CANCELLED'}
 
+# --- Raymarch Preview Operator ---
+
+class OBJECT_OT_toggle_raymarch_preview(Operator):
+    """Toggles the SDF Raymarching Preview in the viewport"""
+    bl_idname = "object.toggle_raymarch_preview"
+    bl_label = "Toggle Raymarch Preview"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        active_obj = context.active_object
+        if not active_obj:
+            return False
+        # This operator should be available if there is an active bounds object
+        return utils.find_parent_bounds(active_obj) is not None
+
+    def execute(self, context):
+        from ..core.raymarch_renderer import get_renderer
+        renderer = get_renderer()
+
+        if renderer.is_active:
+            renderer.stop()
+        else:
+            renderer.start()
+        
+        # Redraw all 3D views to update the UI (button icon)
+        tag_redraw_all_view3d()
+        return {'FINISHED'}
+
+
 # --- Function to Start Modal Handler (called by register) ---
 def start_select_handler_via_timer(max_attempts=5, interval=0.2):
     """ Uses a timer with retries to robustly start the modal handler. """
@@ -1536,4 +1566,5 @@ classes_to_register = (
     OBJECT_OT_fieldforge_toggle_process_linked_children,
     OBJECT_OT_sdf_manual_update,
     VIEW3D_OT_fieldforge_select_handler,
+    OBJECT_OT_toggle_raymarch_preview,
 )
