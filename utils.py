@@ -433,3 +433,108 @@ def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
     if hasattr(context, 'screen') and context.screen:
         for area in context.screen.areas:
             if area.type == 'OUTLINER': area.tag_redraw(); break
+
+# --- Node Helpers ---
+def get_sock(node, identifier, is_input=True):
+    sockets = node.inputs if is_input else node.outputs
+    s = sockets.get(identifier)
+    if s: 
+        return s
+    for s in sockets:
+        if s.name == identifier: 
+            return s
+    # Fallback for dynamically index-named boolean sockets
+    if "Boolean" in identifier:
+        bool_sockets = [sk for sk in sockets if "Boolean" in sk.name]
+        if ("001" in identifier or "_1" in identifier or "002" in identifier) and len(bool_sockets) > 1:
+            return bool_sockets[1]
+        if len(bool_sockets) > 0:
+            return bool_sockets[0]
+    return None
+
+def add_node(group, bl_idname, name, location, props=None, inputs=None):
+    n = group.nodes.new(bl_idname)
+    n.name = name
+    n.location = location
+    if props:
+        for p, v in props.items():
+            try: setattr(n, p, v)
+            except Exception: pass
+    if inputs:
+        for i, v in inputs.items():
+            s = get_sock(n, i, True)
+            if s:
+                try: s.default_value = v
+                except Exception: pass
+    return n
+
+def add_link(group, nodes, f_node, f_id, t_node, t_id):
+    out_s = get_sock(nodes.get(f_node), f_id, False)
+    in_s = get_sock(nodes.get(t_node), t_id, True)
+    if out_s and in_s:
+        group.links.new(out_s, in_s)
+
+def get_or_create_smooth_node_group() -> bpy.types.GeometryNodeTree:
+    """
+    Procedurally constructs a standard 'Smooth by Angle' geometry node group.
+    Avoids dependencies on external .blend file assets.
+    """
+    group_name = "FieldForge_Smooth_by_Angle"
+    if group_name in bpy.data.node_groups:
+        return bpy.data.node_groups[group_name]
+
+    # Create new geometry node tree
+    group = bpy.data.node_groups.new(name=group_name, type='GeometryNodeTree')
+    
+    # --- Interface Sockets ---
+    group.interface.new_socket(name='Mesh', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    group.interface.new_socket(name='Mesh', in_out='INPUT', socket_type='NodeSocketGeometry')
+    
+    angle_in = group.interface.new_socket(name='Angle', in_out='INPUT', socket_type='NodeSocketFloat')
+    try:
+        angle_in.default_value = 0.785398  # 45 degrees in radians
+        angle_in.min_value = 0.0
+        angle_in.max_value = 3.14159
+    except Exception:
+        pass
+
+    ignore_in = group.interface.new_socket(name='Ignore Sharpness', in_out='INPUT', socket_type='NodeSocketBool')
+    try:
+        ignore_in.default_value = False
+    except Exception:
+        pass
+
+    nodes = {}
+    
+    # --- Create Nodes ---
+    nodes['Set Shade Smooth'] = add_node(group, 'GeometryNodeSetShadeSmooth', 'Set Shade Smooth', (120.0, -80.0), {'domain': 'EDGE'}, None)
+    nodes['Set Shade Smooth.001'] = add_node(group, 'GeometryNodeSetShadeSmooth', 'Set Shade Smooth.001', (300.0, -80.0), {'domain': 'FACE'}, {'Selection': True, 'Shade Smooth': True})
+    nodes['Group Output'] = add_node(group, 'NodeGroupOutput', 'Group Output', (480.0, -80.0), None, None)
+    nodes['Edge Angle'] = add_node(group, 'GeometryNodeInputMeshEdgeAngle', 'Edge Angle', (-440.0, -240.0), None, None)
+    nodes['Group Input'] = add_node(group, 'NodeGroupInput', 'Group Input', (-80.0, -80.0), None, None)
+    nodes['Is Edge Smooth'] = add_node(group, 'GeometryNodeInputEdgeSmooth', 'Is Edge Smooth', (-260.0, -120.0), None, None)
+    nodes['Is Shade Smooth'] = add_node(group, 'GeometryNodeInputShadeSmooth', 'Is Shade Smooth', (-439.52, -396.63), None, None)
+    nodes['Compare'] = add_node(group, 'FunctionNodeCompare', 'Compare', (-260.0, -260.0), {'operation': 'LESS_EQUAL', 'data_type': 'FLOAT', 'mode': 'ELEMENT'}, {'C': 0.9, 'Epsilon': 0.001})
+    nodes['Boolean Math.001'] = add_node(group, 'FunctionNodeBooleanMath', 'Boolean Math.001', (-80.0, -260.0), {'operation': 'AND'}, None)
+    nodes['Group Input.001'] = add_node(group, 'NodeGroupInput', 'Group Input.001', (-439.52, -329.14), None, None)
+    nodes['Group Input.002'] = add_node(group, 'NodeGroupInput', 'Group Input.002', (-259.04, -188.66), None, None)
+    nodes['Boolean Math'] = add_node(group, 'FunctionNodeBooleanMath', 'Boolean Math', (-80.0, -149.14), {'operation': 'OR'}, None)
+    nodes['Boolean Math.002'] = add_node(group, 'FunctionNodeBooleanMath', 'Boolean Math.002', (-260.0, -380.0), {'operation': 'OR'}, None)
+    nodes['Group Input.003'] = add_node(group, 'NodeGroupInput', 'Group Input.003', (-440.0, -460.0), None, None)
+
+    # --- Setup Links ---
+    add_link(group, nodes, 'Edge Angle', 'Unsigned Angle', 'Compare', 'A')
+    add_link(group, nodes, 'Set Shade Smooth.001', 'Geometry', 'Group Output', 'Mesh')
+    add_link(group, nodes, 'Group Input.001', 'Angle', 'Compare', 'B')
+    add_link(group, nodes, 'Compare', 'Result', 'Boolean Math.001', 'Boolean')
+    add_link(group, nodes, 'Group Input', 'Mesh', 'Set Shade Smooth', 'Geometry')
+    add_link(group, nodes, 'Set Shade Smooth', 'Geometry', 'Set Shade Smooth.001', 'Geometry')
+    add_link(group, nodes, 'Boolean Math.001', 'Boolean', 'Set Shade Smooth', 'Shade Smooth')
+    add_link(group, nodes, 'Group Input.002', 'Ignore Sharpness', 'Boolean Math', 'Boolean_001')
+    add_link(group, nodes, 'Is Edge Smooth', 'Smooth', 'Boolean Math', 'Boolean')
+    add_link(group, nodes, 'Boolean Math', 'Boolean', 'Set Shade Smooth', 'Selection')
+    add_link(group, nodes, 'Group Input.003', 'Ignore Sharpness', 'Boolean Math.002', 'Boolean_001')
+    add_link(group, nodes, 'Is Shade Smooth', 'Smooth', 'Boolean Math.002', 'Boolean')
+    add_link(group, nodes, 'Boolean Math.002', 'Boolean', 'Boolean Math.001', 'Boolean_001')
+
+    return group

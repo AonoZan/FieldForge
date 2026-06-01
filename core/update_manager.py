@@ -3,7 +3,8 @@ Manages the automatic update process for FieldForge SDF systems.
 Includes debouncing, throttling, triggering mesh regeneration,
 and the Blender dependency graph handler.
 This version uses synchronous, throttled execution on the main thread
-to prevent multi-threading memory corruption and crashes.
+and procedurally constructs the geometry node smooth setup to avoid dependency on 
+external Blender assets.
 """
 
 import bpy
@@ -264,7 +265,6 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
              for poly in new_mesh_bdata.polygons:
                  poly.use_smooth = True
              
-             angle_input_identifier = "Input_1"
              addon_modifier_name = "FieldForge_Smooth"
              auto_smooth_angle_deg = sdf_settings_from_bounds.get("sdf_result_auto_smooth_angle", 45.0)
              auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
@@ -272,18 +272,35 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
              existing_mod = result_obj.modifiers.get(addon_modifier_name)
              if not existing_mod:
                  try:
-                    with context.temp_override(object=result_obj, active_object=result_obj, selected_objects=[result_obj]):
-                        bpy.ops.object.modifier_add_node_group(
-                            asset_library_type='ESSENTIALS', asset_library_identifier="Essentials", 
-                            relative_asset_identifier="geometry_nodes/smooth_by_angle.blend/NodeTree/Smooth by Angle")
-                    existing_mod = result_obj.modifiers[-1]
-                    existing_mod.name = addon_modifier_name
+                     # Instantly construct and apply the procedurally built modifier
+                     existing_mod = result_obj.modifiers.new(name=addon_modifier_name, type='NODES')
+                     existing_mod.node_group = utils.get_or_create_smooth_node_group()
                  except Exception as e_mod:
-                     print(f"FF WARN: Could not add 'Smooth by Angle' node group: {e_mod}")
+                     print(f"FF WARN: Could not dynamically assign 'Smooth by Angle' modifier: {e_mod}")
              
-             if existing_mod and existing_mod.node_group and angle_input_identifier in existing_mod:
-                 try: existing_mod[angle_input_identifier] = auto_smooth_angle_rad
-                 except Exception: pass
+             # Locate socket identifier dynamically by name to support future Blender modifications
+             angle_input_identifier = "Socket_2" # Set "Socket_2" as the default fallback
+             if existing_mod and existing_mod.node_group and hasattr(existing_mod.node_group, 'interface'):
+                 try:
+                     # Use Python's descriptor protocol to safely resolve the 'items' collection.
+                     # This completely bypasses the method shadowing naming conflict on the instance.
+                     interface = existing_mod.node_group.interface
+                     items_prop = bpy.types.NodeTreeInterface.items.__get__(interface, bpy.types.NodeTreeInterface)
+                     for item in items_prop:
+                         item_type = getattr(item, 'item_type', '')
+                         in_out = getattr(item, 'in_out', '')
+                         if item_type == 'SOCKET' and in_out == 'INPUT' and item.name == 'Angle':
+                             angle_input_identifier = item.identifier
+                             break
+                 except Exception:
+                     # Fallback to deterministic default "Socket_2" if custom lookup fails
+                     pass
+             
+             if existing_mod and angle_input_identifier in existing_mod:
+                 try: 
+                     existing_mod[angle_input_identifier] = auto_smooth_angle_rad
+                 except Exception: 
+                     pass
 
              # Set Material properties
              mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
