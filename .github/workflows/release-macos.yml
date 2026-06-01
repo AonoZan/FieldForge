@@ -123,4 +123,4 @@ jobs:
           # Use env.CLEAN_VERSION here
           files: FieldForge-mac-${{ env.CLEAN_VERSION }}.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}

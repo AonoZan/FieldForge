@@ -1,3 +1,15 @@
+# FieldForge
+# Copyright (C) 2026 Dejan Petrović <aonozan@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
 """
 Handles custom GPU drawing for FieldForge objects in the 3D Viewport.
 Includes the main draw callback, helper for offsetting vertices, redraw tagging,

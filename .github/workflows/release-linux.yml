@@ -149,4 +149,4 @@ jobs:
           prerelease: ${{ contains(env.CLEAN_VERSION, '-') }}
           files: FieldForge-lin-${{ env.CLEAN_VERSION }}.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}

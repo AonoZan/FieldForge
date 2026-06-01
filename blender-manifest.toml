@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+id = "fieldforge"
+version = "0.7.2"
+name = "FieldForge"
+tagline = "Dynamic SDF Modeling for Blender"
+maintainer = "Dejan Petrović <aonozan@gmail.com>"
+type = "add-on"
+blender_version_min = "5.0.0"
+license = ["GPL-3.0-or-later"]
+
+description = "FieldForge brings the power of Signed Distance Function (SDF) modeling directly into Blender, leveraging the robust libfive library. Create complex, non-destructive shapes with a deep, hierarchical workflow, procedural modifiers, and smooth blending capabilities."
+doc_url = "https://github.com/AonoZan/FieldForge"
+tracker_url = "https://github.com/AonoZan/FieldForge/issues"

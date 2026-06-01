@@ -1,16 +1,26 @@
-# FieldForge/__init__.py
-
+# FieldForge
+# Copyright (C) 2026 Dejan Petrović <aonozan@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
 bl_info = {
     "name": "FieldForge",
-    "author": "AonoZan & libfive Team",
-    "version": (0, 6, 0),
-    "blender": (4, 1, 0),
+    "author": "Dejan Petrović (AonoZan)",
+    "version": (0, 7, 2),
+    "blender": (5, 0, 0),
     "location": "View3D > Sidebar (N-Panel) > FieldForge Tab | Add > Mesh > Field Forge SDF",
     "description": "Adds and manages dynamic SDF shapes using libfive with hierarchical blending, extrusion, and custom visuals",
     "warning": "Requires compiled libfive libraries.",
     "doc_url": "",
-    "category": "Add Mesh",
-    "license": "GPL-3.0-only",
+    "category": "Mesh",
+    "license": "GPL-3.0-or-later",
 }
 
 import bpy

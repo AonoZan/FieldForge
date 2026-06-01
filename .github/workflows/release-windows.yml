@@ -179,4 +179,4 @@ jobs:
           prerelease: contains(env.VERSION, '-')
           files: ${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}

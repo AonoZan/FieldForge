@@ -1,0 +1,51 @@
+name: Bundle all platforms extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag to fetch and repackage (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Release Asset
+        run: |
+          export GH_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          
+          gh release download ${{ inputs.version_tag }} \
+            --pattern "FieldForge-lin-*.zip" \
+            --dir .
+          gh release download ${{ inputs.version_tag }} \
+            --pattern "FieldForge-win-*.zip" \
+            --dir .
+          gh release download ${{ inputs.version_tag }} \
+            --pattern "FieldForge-mac-*.zip" \
+            --dir .
+
+      - name: Prepare Staging and Zip
+        run: |
+          mkdir -p staging
+          mkdir -p win
+          mkdir -p mac
+          
+          unzip FieldForge-lin-*.zip -d staging
+          unzip FieldForge-win-*.zip -d win
+          unzip FieldForge-mac-*.zip -d mac
+          
+          mv win/FieldForge/libfive/src/* staging/FieldForge/libfive/src/
+          mv mac/FieldForge/libfive/src/* staging/FieldForge/libfive/src/
+          
+          cd staging
+          zip -r "../FieldForge-Blender-Extension-${{ inputs.version_tag }}.zip" FieldForge/
+          cd ..
+
+      - name: Upload as Release Asset
+        run: |
+          gh release upload ${{ inputs.version_tag }} \
+            FieldForge-Blender-Extension-${{ inputs.version_tag }}.zip
