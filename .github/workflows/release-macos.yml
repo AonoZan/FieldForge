@@ -3,20 +3,28 @@ name: Build macOS Addon Release
 on:
   push:
     tags:
-      - 'v*' # Trigger on tags like v1.0.0
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag to build (e.g., v1.0.0 or v1.1.0-beta)'
+        required: true
+        type: string
 
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'daa458279121a95b51482508bcfa906d6227442e'
+  LIBFIVE_COMMIT_SHA: 'c9e97343e0af998cd1696e85583eccba95532b96'
 
 jobs:
   build_and_package_macos:
     name: Build libfive and Package Addon (macOS)
-    runs-on: [self-hosted, macos, x64] # <-- ADJUST TO YOUR MACOS RUNNER LABELS
+    runs-on: macos-latest
+
+    permissions:
+      contents: write
 
     steps:
-      # --- Build libfive ---
       - name: Checkout libfive Source Code
         uses: actions/checkout@v4
         with:
@@ -24,59 +32,95 @@ jobs:
           ref: ${{ env.LIBFIVE_COMMIT_SHA }}
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
 
-      - name: Install libfive dependencies via Homebrew # Ensure brew works OR pre-install
-        run: brew install cmake eigen libpng
+      - name: Install libfive dependencies via Homebrew
+        run: brew install cmake eigen libpng boost
+      
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install setuptools --break-system-packages
+      
+
 
       - name: Configure CMake for libfive
-        run: cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} -DBUILD_SHARED_LIBS=ON -DLIBFIVE_BUILD_STUDIO=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install -DCMAKE_PREFIX_PATH=$(brew --prefix eigen);$(brew --prefix libpng)
-
+        run: |
+          BREW_PREFIX=$(brew --prefix)
+          # Define the path to your venv python
+          VENV_PYTHON="${{ github.workspace }}/venv/bin/python3"
+          
+          cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build \
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_GUI=OFF \
+            -DBUILD_STUDIO_APP=OFF \
+            -DBUILD_GUILE_BINDINGS=OFF \
+            -DBUILD_PYTHON_BINDINGS=ON \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install \
+            -DCMAKE_PREFIX_PATH="$BREW_PREFIX/opt/eigen:$BREW_PREFIX/opt/libpng:$BREW_PREFIX/opt/boost" \
+            -DBOOST_ROOT="$BREW_PREFIX/opt/boost" \
+            -DPYTHON_EXECUTABLE="$VENV_PYTHON" \
+            -DPYTHON_INSTALL_DIR="${{ github.workspace }}/install/python"
+      
       - name: Build and Install libfive
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --target install
 
-      # --- Package Addon ---
       - name: Checkout Addon Repository Code
         uses: actions/checkout@v4
         with:
           path: addon_code
-
-      - name: Get version from tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Create staging directory structure
+      
+      - name: Copy Addon Python files
         run: |
           mkdir -p staging/FieldForge
           mkdir -p staging/FieldForge/libfive/src
           mkdir -p staging/FieldForge/libfive/stdlib
+          mkdir -p staging/FieldForge/ui
+          mkdir -p staging/FieldForge/core
 
-      - name: Copy Addon Python files
+          cp build/libfive/stdlib/libfive-stdlib.dylib staging/FieldForge/libfive/src/
+          cp build/libfive/src/libfive.dylib staging/FieldForge/libfive/src/
+          
+          cp ${{ env.LIBFIVE_CHECKOUT_DIR }}/libfive/bind/python/libfive/*.py staging/FieldForge/libfive/
+          cp ${{ env.LIBFIVE_CHECKOUT_DIR }}/libfive/bind/python/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
+          
+          cp addon_code/*.py staging/FieldForge/
+          cp addon_code/LICENSE staging/FieldForge/
+          cp addon_code/ui/*.py staging/FieldForge/ui/
+          cp addon_code/core/*.py staging/FieldForge/core/
+
+      - name: Determine Version
+        id: get_version
         run: |
-          cp addon_code/__init__.py staging/FieldForge/
-          cp addon_code/libfive/*.py staging/FieldForge/libfive/
-          cp addon_code/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version_tag }}" >> $GITHUB_ENV
+          elif [[ $GITHUB_REF == refs/tags/* ]]; then
+            # Extract the tag name (e.g., v0.7.1) and remove the refs/tags/ prefix
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          else
+            # Fallback for branches
+            echo "VERSION=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+          fi
+        shell: bash
 
-      - name: Copy Compiled macOS Libraries from Build
-        # Copy directly from the install directory created earlier in THIS job
+      - name: Prepare Filename
         run: |
-          cp install/lib/libfive.dylib staging/FieldForge/libfive/src/
-          cp install/lib/libfive-stdlib.dylib staging/FieldForge/libfive/stdlib/
-
+          CLEAN_VERSION=$(echo "${{ env.VERSION }}" | sed 's/refs\/tags\///g' | sed 's/refs\/heads\///g' | sed 's/\//-/g')
+          echo "CLEAN_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
+      
       - name: Create macOS zip file
         run: |
           cd staging
-          zip -r ../FieldForge-mac-${{ env.VERSION }}.zip FieldForge/
-          cd ..
+          zip -r "../FieldForge-mac-${CLEAN_VERSION}.zip" FieldForge/
 
-      # --- Create/Update GitHub Release ---
-      - name: Create Release and Upload macOS Asset
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }} (libfive ${{ env.LIBFIVE_VERSION_TAG }})
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_tag || github.ref_name }}
+          # Use ${{ env.CLEAN_VERSION }} to access the variable
+          name: Release ${{ env.CLEAN_VERSION }} (libfive @${{ env.LIBFIVE_COMMIT_SHA }})
           draft: false
-          prerelease: contains(github.ref_name, '-')
-          # Upload ONLY the macos zip file from this job
-          files: FieldForge-mac-${{ env.VERSION }}.zip
+          # Use env.CLEAN_VERSION here too
+          prerelease: ${{ contains(env.CLEAN_VERSION, '-') }}
+          # Use env.CLEAN_VERSION here
+          files: FieldForge-mac-${{ env.CLEAN_VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

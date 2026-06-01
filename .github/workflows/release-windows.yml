@@ -3,7 +3,7 @@ name: Build Windows Addon Release
 on:
   push:
     tags:
-      - 'v*' # Trigger on tags like v1.0.0
+      - 'v*'
   workflow_dispatch:
     inputs:
       version_tag:
@@ -14,21 +14,19 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'daa458279121a95b51482508bcfa906d6227442e' # Consider updating periodically
+  LIBFIVE_COMMIT_SHA: 'c9e97343e0af998cd1696e85583eccba95532b96'
   ADDON_NAME: FieldForge
-  VCPKG_TRIPLET: x64-windows # Define vcpkg triplet
+  VCPKG_TRIPLET: x64-windows
 
 jobs:
   build_and_package_windows:
     name: Build libfive and Package Addon (Windows)
-    # Use a GitHub-hosted Windows runner with VS 2019 available
-    runs-on: [self-hosted, windows-2019, x64, local-run] # This runner should have VS 16 2019
+    runs-on: windows-latest
 
     permissions:
-      contents: write # Needed for creating releases
+      contents: write
 
     steps:
-      # --- Setup Environment ---
       - name: Checkout libfive Source Code
         uses: actions/checkout@v4
         with:
@@ -36,58 +34,48 @@ jobs:
           ref: ${{ env.LIBFIVE_COMMIT_SHA }}
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
           fetch-depth: 0
+      - name: Exclude build directory from Defender
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}\build"
 
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11 # Or latest stable v11/v12
+        uses: lukka/run-vcpkg@v11
         id: runvcpkg
         with:
-          vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f' # Use a known good commit or update
-          #vcpkgDirectory: ${{ runner.temporary }}/vcpkg # Use temp dir for vcpkg cache
+          vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f'
           vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
-          #runVcpkgInstall: true # Let run-vcpkg handle caching
+          runVcpkgInstall: false
 
-      - name: Install libfive dependencies via vcpkg
-        # Install dependencies using the defined triplet
-        run: vcpkg install eigen3 libpng zlib boost-math boost-algorithm boost-functional boost-lockfree boost-interval boost-bimap boost-container --triplet ${{ env.VCPKG_TRIPLET }}
-        shell: bash # vcpkg commands often work better in bash/pwsh
-
-      # === NEW STEP: Modify CMakeLists.txt using PowerShell ===
-      - name: Modify libfive CMake Options
-        run: |
-          $cmakeFile = "${{ env.LIBFIVE_CHECKOUT_DIR }}/CMakeLists.txt"
-          Write-Host "Modifying CMake options in $cmakeFile..."
-          # Use PowerShell's -replace operator (regex-based)
-          (Get-Content $cmakeFile -Raw) -replace '(?m)^option\(BUILD_STUDIO_APP.*\)',       'option(BUILD_STUDIO_APP "Build Studio application" OFF)' `
-                                        -replace '(?m)^option\(BUILD_GUILE_BINDINGS.*\)',    'option(BUILD_GUILE_BINDINGS "Build Guile bindings" OFF)' `
-                                        -replace '(?m)^option\(BUILD_PYTHON_BINDINGS.*\)', 'option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)' `
-                                        -replace '(?m)^option\(ENABLE_DEBUG.*\)',          'option(ENABLE_DEBUG "Add debugging Symbols to the binaries" OFF)' | Set-Content $cmakeFile -Encoding UTF8
-
-          Write-Host "CMake options modification complete. Verifying changes (first 50 lines):"
-          Get-Content $cmakeFile -TotalCount 50 # Print start of file for verification
+      - name: Install dependencies
         shell: powershell
-
-      - name: Configure CMake for libfive
-        # Specify the VS 16 2019 generator using -G
-        run: >
-          cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build `
-          -G "Visual Studio 16 2019" -A x64 `
-          -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} `
-          -DBUILD_SHARED_LIBS=ON `
-          -DLIBFIVE_BUILD_GUI=OFF `
-          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake"
-        # Removed explicit *_DIR hints, vcpkg toolchain file should handle finding dependencies
-        shell: powershell # CMake configuration often better in PowerShell on Windows
+        run: |
+          & "$env:RUNVCPKG_VCPKG_ROOT\vcpkg.exe" install pkgconf eigen3 libpng zlib boost-math boost-algorithm boost-functional boost-lockfree boost-interval boost-bimap boost-container --triplet x64-windows --binarysource=clear
+      
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        
+      - name: Configure CMake
+        shell: powershell
+        run: |
+          cmake -S libfive_src -B build `
+          -G Ninja `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DBUILD_STUDIO_APP=OFF `
+          -DBUILD_GUILE_BINDINGS=OFF `
+          -DBUILD_PYTHON_BINDINGS=ON `
+          -DENABLE_DEBUG=OFF `
+          -DCMAKE_TOOLCHAIN_FILE="$env:RUNVCPKG_VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+          -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build libfive
-        # Use --parallel flag if supported by the build tool (MSBuild supports it)
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --parallel
         shell: powershell
 
-      # --- Package Addon ---
       - name: Checkout Addon Repository Code
         uses: actions/checkout@v4
         with:
-          path: addon_code # Checkout your addon code to a separate directory
+          path: addon_code
 
       - name: Determine Version
         id: get_version
@@ -122,7 +110,7 @@ jobs:
           Write-Host "Copying addon files from addon_code to $addonDestDir ..."
           robocopy addon_code $addonDestDir /E `
                    /XD .git* .github* `
-                   /XF .gitignore Example.blend README.md screenshot.png libfive*
+                   /XF .gitignore Example.blend README.md screenshot.png libfive Screenshot.xcf GEMINI.md*
       
           # Store the exit code immediately
           $RoboExitCode = $LASTEXITCODE
@@ -161,27 +149,18 @@ jobs:
           Copy-Item build/libfive/bind/python/libfive/stdlib/*.py $stdlibDest/
         shell: powershell
 
-      - name: Copy Compiled Windows Libraries from Build
-        # Copy core lib, stdlib, and necessary dependencies from vcpkg installed dir
+      - name: Copy Compiled Libraries
+        shell: powershell
         run: |
           $buildDir = "build"
-          $targetDir = "staging/${{ env.ADDON_NAME }}/libfive/src" # Put all DLLs together in src/ for simplicity
-          $vcpkgBinDir = "${{ env.VCPKG_ROOT }}/installed/${{ env.VCPKG_TRIPLET }}/bin"
+          $targetDir = "staging/FieldForge/libfive/src"
+          Copy-Item "$buildDir/libfive/src/libfive.dll" -Destination $targetDir -Force
+          Copy-Item "$buildDir/libfive/stdlib/libfive-stdlib.dll" -Destination $targetDir -Force
 
-          Copy-Item "$buildDir/libfive/src/${{ env.CMAKE_BUILD_TYPE }}/libfive.dll"         -Destination $targetDir
-          Copy-Item "$buildDir/libfive/stdlib/${{ env.CMAKE_BUILD_TYPE }}/libfive-stdlib.dll" -Destination $targetDir
-          # Copy dependencies directly from vcpkg bin directory - this is more reliable
-          Copy-Item "$vcpkgBinDir/libpng*.dll" -Destination $targetDir -ErrorAction SilentlyContinue # Use wildcard
-          Copy-Item "$vcpkgBinDir/zlib*.dll"   -Destination $targetDir -ErrorAction SilentlyContinue # Use wildcard
-          # Add any other potential runtime dependencies identified (e.g., from Boost if needed)
-          # Copy-Item "$vcpkgBinDir/boost_*.dll" -Destination $targetDir -ErrorAction SilentlyContinue
-        shell: powershell
-
-      - name: Create Windows zip file
+      - name: Create Windows zip file (Using Tar)
         shell: powershell
         run: |
-          Compress-Archive -Path staging/${{ env.ADDON_NAME }} -DestinationPath "${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip" -Force
-          Write-Host "Created zip file: ${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip"
+          tar -a -c -f "${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip" -C staging "${{ env.ADDON_NAME }}"
       
       - name: Debug Zip and Tag
         run: |
@@ -192,7 +171,7 @@ jobs:
         shell: powershell
       
       - name: Create Release and Upload Windows Asset
-        uses: softprops/action-gh-release@v1 # Use v1 to match Linux workflow
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_tag || github.ref_name }}
           name: Release ${{ env.VERSION }} (libfive @${{ env.LIBFIVE_COMMIT_SHA }})

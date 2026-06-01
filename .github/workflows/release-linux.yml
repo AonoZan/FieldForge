@@ -3,10 +3,9 @@ name: Build Linux Addon Release
 on:
   push:
     tags:
-      - 'v*' # Trigger on tags like v1.0.0
+      - 'v*'
   workflow_dispatch:
     inputs:
-      # Define an input for the version/tag name when run manually
       version_tag:
         description: 'Version tag to build (e.g., v1.0.0 or v1.1.0-beta)'
         required: true
@@ -15,30 +14,39 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'daa458279121a95b51482508bcfa906d6227442e'
+  LIBFIVE_COMMIT_SHA: 'c9e97343e0af998cd1696e85583eccba95532b96'
 
 jobs:
   build_and_package_linux:
     name: Build libfive and Package Addon (Linux)
-    runs-on: [self-hosted, linux, x64, local-run] # <-- ADJUST TO YOUR LINUX RUNNER LABELS
+    runs-on: ubuntu-latest
 
     permissions:
       contents: write
 
     steps:
-      # --- Build libfive ---
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            libboost-all-dev \
+            guile-3.0-dev \
+            libeigen3-dev \
+            libpng-dev \
+            pkg-config \
+            python3-dev \
+            python3-setuptools \
+            chrpath \
+            zip
+
       - name: Checkout libfive Source Code
         uses: actions/checkout@v4
         with:
           repository: libfive/libfive
           ref: ${{ env.LIBFIVE_COMMIT_SHA }}
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
-
-      # - name: Install libfive dependencies via apt # Ensure apt/sudo works OR pre-install
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y build-essential cmake libeigen3-dev libpng-dev zlib1g-dev
-      # === END OF COMMENTED STEP ===
 
       - name: Modify libfive CMake Options
         run: |
@@ -57,34 +65,39 @@ jobs:
         shell: bash
 
       - name: Configure CMake for libfive
-        run: >
-          cmake -S ${{ env.LIBFIVE_CHECKOUT_DIR }} -B build
-          -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }}
-          -DBUILD_SHARED_LIBS=ON
-          -DLIBFIVE_BUILD_STUDIO=OFF
-          -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
-          -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
-          -DCMAKE_INSTALL_RPATH='$ORIGIN/../src'
-      
-      # === CHANGE: Build only, NO install ===
-      - name: Build libfive
-        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
+        run: |
+          cmake -S "${{ env.LIBFIVE_CHECKOUT_DIR }}" -B build \
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLIBFIVE_BUILD_STUDIO=OFF \
+            -DCMAKE_BUILD_PYTHON=ON \
+            -DCMAKE_CXX_FLAGS="-Wno-array-bounds" \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE \
+            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN/../src'
 
-      # --- Package Addon ---
+      - name: Build libfive
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --parallel 2
+
       - name: Checkout Addon Repository Code
         uses: actions/checkout@v4
         with:
           path: addon_code
 
-      - name: Determine Version
-        id: get_version
-        # If triggered manually, use the input. If triggered by tag, use the tag name.
+      - name: Determine and Sanitize Version
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version_tag }}" >> $GITHUB_ENV
+            RAW_VERSION="${{ github.event.inputs.version_tag }}"
+          elif [[ $GITHUB_REF == refs/tags/* ]]; then
+            RAW_VERSION="${GITHUB_REF#refs/tags/}"
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+            RAW_VERSION="${GITHUB_REF#refs/heads/}"
           fi
+          
+          CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/refs\/tags\///g' | sed 's/refs\/heads\///g' | sed 's/\//-/g')
+          
+          echo "VERSION=$RAW_VERSION" >> $GITHUB_ENV
+          echo "CLEAN_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
         shell: bash
 
       - name: Create staging directory structure
@@ -120,24 +133,20 @@ jobs:
           
       - name: Create Linux zip file
         run: |
+          SAFE_VERSION=$(echo "${{ env.VERSION }}" | sed 's/\//-/g')
+          
           cd staging
-          zip -r ../FieldForge-lin-${{ env.VERSION }}.zip FieldForge/
+          zip -r "../FieldForge-lin-${SAFE_VERSION}.zip" FieldForge/
           cd ..
-        shell: bash
+          echo "SAFE_VERSION=${SAFE_VERSION}" >> $GITHUB_ENV
 
-      # --- Create/Update GitHub Release ---
       - name: Create Release and Upload Linux Asset
-        uses: softprops/action-gh-release@v1
-        # NOTE: This will try to create/update a release named after the INPUT tag
-        # Be careful when running manually - ensure the input tag matches an intended release
+        uses: softprops/action-gh-release@v2
         with:
-          # Use the input tag name when run manually, otherwise the pushed tag
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_tag || github.ref_name }}
           name: Release ${{ env.VERSION }} (libfive @${{ env.LIBFIVE_COMMIT_SHA }})
           draft: false
-          # Prerelease check now uses the determined version string
-          prerelease: contains(env.VERSION, '-')
-          # Use determined version in the filename
-          files: FieldForge-lin-${{ env.VERSION }}.zip
+          prerelease: ${{ contains(env.CLEAN_VERSION, '-') }}
+          files: FieldForge-lin-${{ env.CLEAN_VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

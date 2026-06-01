@@ -1,0 +1,26 @@
+name: Trigger All Releases
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag for all releases'
+        required: true
+        type: string
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Trigger Workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release-linux.yml -f version_tag=${{ github.event.inputs.version_tag }}
+          gh workflow run release-windows.yml -f version_tag=${{ github.event.inputs.version_tag }}
+          gh workflow run release-macos.yml -f version_tag=${{ github.event.inputs.version_tag }}
