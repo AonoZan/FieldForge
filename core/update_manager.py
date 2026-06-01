@@ -169,57 +169,63 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     if not _lf_imported_ok:
         return
 
-    context = bpy.context
-    if not context or not context.scene:
-        return
-
-    scene = context.scene
-    bounds_obj = scene.objects.get(bounds_name)
-    if not bounds_obj:
-        return
-
-    # Generate the libfive shape hierarchy
-    sdf_settings = trigger_state.get('scene_settings')
-    final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
-    if final_combined_shape is None:
-        final_combined_shape = lf.emptiness()
-
-    # Calculate bounding box bounds
-    bounds_matrix = trigger_state.get('bounds_matrix')
-    local_corners = [Vector(c) for c in ((-1,-1,-1), (1,-1,-1), (-1,1,-1), (1,1,-1), (-1,-1,1), (1,-1,1), (-1,1,1), (1,1,1))]
-    world_corners = [(bounds_matrix @ c.to_4d()).xyz for c in local_corners]
-
-    xyz_min = (min(c.x for c in world_corners), min(c.y for c in world_corners), min(c.z for c in world_corners))
-    xyz_max = (max(c.x for c in world_corners), max(c.y for c in world_corners), max(c.z for c in world_corners))
-    
-    # Adjust progressive division levels
-    if bounds_name not in _current_divs or bounds_name not in _target_divs:
-        if is_viewport_update:
-            _current_divs[bounds_name] = MAX_DIV
-            _target_divs[bounds_name] = MIN_DIV
-        else:
-            _current_divs[bounds_name] = MIN_DIV
-            _target_divs[bounds_name] = MIN_DIV
-    elif is_viewport_update and _current_divs[bounds_name] > _target_divs[bounds_name]:
-        _current_divs[bounds_name] -= 1
-
-    div_to_use = _current_divs[bounds_name]
-    base_resolution_setting = sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)
-    actual_resolution = max(3, int(base_resolution_setting / (1 << div_to_use)))
+    global _updates_pending
 
     try:
-        t_mesh_start = time.perf_counter()
-        mesh_data = final_combined_shape.get_mesh(
-            xyz_min=xyz_min,
-            xyz_max=xyz_max,
-            resolution=actual_resolution
-        )
-        meshing_time = time.perf_counter() - t_mesh_start
-    except Exception as e:
-        print(f"FieldForge ERROR: libfive mesh generation failed for {bounds_name}: {e}")
-        return
+        context = bpy.context
+        if not context or not context.scene:
+            return
 
-    _apply_mesh_data(bounds_obj, trigger_state, mesh_data, meshing_time, div_to_use, is_viewport_update)
+        scene = context.scene
+        bounds_obj = scene.objects.get(bounds_name)
+        if not bounds_obj:
+            return
+
+        # Generate the libfive shape hierarchy
+        sdf_settings = trigger_state.get('scene_settings')
+        final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
+        if final_combined_shape is None:
+            final_combined_shape = lf.emptiness()
+
+        # Calculate bounding box bounds
+        bounds_matrix = trigger_state.get('bounds_matrix')
+        local_corners = [Vector(c) for c in ((-1,-1,-1), (1,-1,-1), (-1,1,-1), (1,1,-1), (-1,-1,1), (1,-1,1), (-1,1,1), (1,1,1))]
+        world_corners = [(bounds_matrix @ c.to_4d()).xyz for c in local_corners]
+
+        xyz_min = (min(c.x for c in world_corners), min(c.y for c in world_corners), min(c.z for c in world_corners))
+        xyz_max = (max(c.x for c in world_corners), max(c.y for c in world_corners), max(c.z for c in world_corners))
+        
+        # Adjust progressive division levels
+        if bounds_name not in _current_divs or bounds_name not in _target_divs:
+            if is_viewport_update:
+                _current_divs[bounds_name] = MAX_DIV
+                _target_divs[bounds_name] = MIN_DIV
+            else:
+                _current_divs[bounds_name] = MIN_DIV
+                _target_divs[bounds_name] = MIN_DIV
+        elif is_viewport_update and _current_divs[bounds_name] > _target_divs[bounds_name]:
+            _current_divs[bounds_name] -= 1
+
+        div_to_use = _current_divs[bounds_name]
+        base_resolution_setting = sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)
+        actual_resolution = max(3, int(base_resolution_setting / (1 << div_to_use)))
+
+        try:
+            t_mesh_start = time.perf_counter()
+            mesh_data = final_combined_shape.get_mesh(
+                xyz_min=xyz_min,
+                xyz_max=xyz_max,
+                resolution=actual_resolution
+            )
+            meshing_time = time.perf_counter() - t_mesh_start
+        except Exception as e:
+            print(f"FieldForge ERROR: libfive mesh generation failed for {bounds_name}: {e}")
+            return
+
+        _apply_mesh_data(bounds_obj, trigger_state, mesh_data, meshing_time, div_to_use, is_viewport_update)
+
+    finally:
+        _updates_pending[bounds_name] = False
 
 
 def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: float, actual_rendered_div: int, is_viewport_update: bool):
