@@ -5,6 +5,7 @@ Handles recursive processing of the Blender object hierarchy to build
 a combined libfive.Shape based on object properties and transformations.
 """
 
+from __future__ import annotations
 import math
 import bpy
 
@@ -21,6 +22,9 @@ except ImportError:
         def __getattr__(self, name):
             if name == "emptiness":
                 return lambda: None
+            if name == "Shape":
+                # Fallback object to satisfy type annotation evaluation at runtime
+                return object
             raise RuntimeError(f"libfive not available (tried to access lf.{name})")
     lf = LFDummy()
     class ShapeDummy:
