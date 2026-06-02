@@ -14,7 +14,7 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'c66eb59fb1c821771e8b58c36c770b89a6700101'
+  LIBFIVE_COMMIT_SHA: 'b38f1f8b1318f03e6e6fcf816c1d8dc47109f7dd'
   ADDON_NAME: FieldForge
   VCPKG_TRIPLET: x64-windows
 
@@ -156,6 +156,7 @@ jobs:
           $targetDir = "staging/FieldForge/libfive/src"
           Copy-Item "$buildDir/libfive/src/libfive.dll" -Destination $targetDir -Force
           Copy-Item "$buildDir/libfive/stdlib/libfive-stdlib.dll" -Destination $targetDir -Force
+          Copy-Item "$buildDir/custom_c_utils/custom_c_utils.dll" -Destination "$targetDir/libcustom_c_utils.dll" -Force
 
       - name: Create Windows zip file (Using Tar)
         shell: powershell

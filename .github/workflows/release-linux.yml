@@ -14,7 +14,7 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'c66eb59fb1c821771e8b58c36c770b89a6700101'
+  LIBFIVE_COMMIT_SHA: 'b38f1f8b1318f03e6e6fcf816c1d8dc47109f7dd'
 
 jobs:
   build_and_package_linux:
@@ -132,6 +132,7 @@ jobs:
         run: |
           cp build/libfive/src/libfive.so staging/FieldForge/libfive/src/
           cp build/libfive/stdlib/libfive-stdlib.so staging/FieldForge/libfive/src/
+          cp build/custom_c_utils/libcustom_c_utils.so staging/FieldForge/libfive/src/
           
       - name: Create Linux zip file
         run: |

@@ -14,7 +14,7 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'c66eb59fb1c821771e8b58c36c770b89a6700101'
+  LIBFIVE_COMMIT_SHA: 'b38f1f8b1318f03e6e6fcf816c1d8dc47109f7dd'
 
 jobs:
   build_and_package_macos:
@@ -78,6 +78,7 @@ jobs:
 
           cp build/libfive/stdlib/libfive-stdlib.dylib staging/FieldForge/libfive/src/
           cp build/libfive/src/libfive.dylib staging/FieldForge/libfive/src/
+          cp build/custom_c_utils/libcustom_c_utils.dylib staging/FieldForge/libfive/src/
           
           cp ${{ env.LIBFIVE_CHECKOUT_DIR }}/libfive/bind/python/libfive/*.py staging/FieldForge/libfive/
           cp ${{ env.LIBFIVE_CHECKOUT_DIR }}/libfive/bind/python/libfive/stdlib/*.py staging/FieldForge/libfive/stdlib/
