@@ -14,14 +14,14 @@
 Manages the automatic update process for FieldForge SDF systems.
 Includes debouncing, throttling, triggering mesh regeneration,
 and the Blender dependency graph handler.
-This version uses synchronous, throttled execution on the main thread
-and procedurally constructs the geometry node smooth setup to avoid dependency on 
-external Blender assets.
+This version uses asynchronous background threading to offload heavy
+mesh calculations from the Blender main thread.
 """
 
 import bpy
 import time
 import math
+import threading
 from mathutils import Matrix, Vector
 
 # Use relative imports assuming this file is in FieldForge/core/
@@ -52,6 +52,12 @@ _debounce_timers = {}
 _updates_pending = {}
 # Caches the last known state dictionary used for a successful update
 _sdf_update_caches = {}
+# Caches the serialized bytes representation of the compiled trees
+_serialized_tree_caches = {}
+# Keeps track of active background meshing threads
+_active_meshing_threads = {}
+# Stores queued states that are waiting for the active thread to complete
+_queued_updates = {}
 # Stores the current div being displayed for each bounds object
 _current_divs = {}
 # Stores the target div for each bounds object (can be lower than current)
@@ -121,6 +127,9 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
         _cancel_debounce_timer(bounds_name)
         _updates_pending.pop(bounds_name, None)
         _sdf_update_caches.pop(bounds_name, None)
+        _serialized_tree_caches.pop(bounds_name, None)
+        _active_meshing_threads.pop(bounds_name, None)
+        _queued_updates.pop(bounds_name, None)
         _current_divs.pop(bounds_name, None)
         _target_divs.pop(bounds_name, None)
         _last_update_times.pop(bounds_name, None)
@@ -176,12 +185,18 @@ def _execute_debounced_update(bounds_name: str, trigger_state: dict):
 
 def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bool = False):
     """
-    Runs the synchronous SDF generation and mesh update process on the main thread.
+    Runs the threaded SDF generation and mesh update process.
+    Meshing is offloaded to a background thread to prevent UI freezing.
     """
     if not _lf_imported_ok:
         return
 
-    global _updates_pending
+    global _updates_pending, _serialized_tree_caches, _sdf_update_caches, _active_meshing_threads, _queued_updates
+
+    # If a meshing thread is already active, queue this update state and return
+    if bounds_name in _active_meshing_threads:
+        _queued_updates[bounds_name] = trigger_state
+        return
 
     try:
         context = bpy.context
@@ -193,9 +208,42 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         if not bounds_obj:
             return
 
-        # Generate the libfive shape hierarchy
         sdf_settings = trigger_state.get('scene_settings')
-        final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
+        
+        # Check if we can reuse the serialized tree from cache to avoid expensive rebuild
+        cached_state = _sdf_update_caches.get(bounds_name)
+        state_changed = state.has_state_changed(trigger_state, cached_state)
+        
+        serialized_bytes = _serialized_tree_caches.get(bounds_name)
+        final_combined_shape = None
+        
+        if not state_changed and serialized_bytes:
+            try:
+                import libfive.ffi as lf_ffi
+                from libfive.shape import Shape
+                tree_ptr = lf_ffi.deserialize_tree(serialized_bytes)
+                if tree_ptr:
+                    final_combined_shape = Shape(tree_ptr)
+            except Exception as e_deser:
+                print(f"FieldForge WARN: Failed to deserialize cached tree for {bounds_name}: {e_deser}")
+                final_combined_shape = None
+
+        if final_combined_shape is None:
+            # Generate the libfive shape hierarchy from scratch
+            final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
+            
+            # Serialize and cache the newly compiled tree
+            if final_combined_shape is not None and final_combined_shape is not lf.emptiness():
+                try:
+                    import libfive.ffi as lf_ffi
+                    tree_attr = getattr(final_combined_shape, 'tree', None)
+                    if tree_attr:
+                        new_serialized = lf_ffi.serialize_tree(tree_attr)
+                        if new_serialized:
+                            _serialized_tree_caches[bounds_name] = new_serialized
+                except Exception as e_ser:
+                    print(f"FieldForge WARN: Failed to serialize tree for {bounds_name}: {e_ser}")
+
         if final_combined_shape is None:
             final_combined_shape = lf.emptiness()
 
@@ -222,21 +270,58 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         base_resolution_setting = sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)
         actual_resolution = max(3, int(base_resolution_setting / (1 << div_to_use)))
 
-        try:
-            t_mesh_start = time.perf_counter()
-            mesh_data = final_combined_shape.get_mesh(
-                xyz_min=xyz_min,
-                xyz_max=xyz_max,
-                resolution=actual_resolution
-            )
-            meshing_time = time.perf_counter() - t_mesh_start
-        except Exception as e:
-            print(f"FieldForge ERROR: libfive mesh generation failed for {bounds_name}: {e}")
-            return
+        # Define the background worker logic
+        def _bg_meshing_worker():
+            try:
+                t_mesh_start = time.perf_counter()
+                mesh_data = final_combined_shape.get_mesh(
+                    xyz_min=xyz_min,
+                    xyz_max=xyz_max,
+                    resolution=actual_resolution
+                )
+                meshing_time = time.perf_counter() - t_mesh_start
 
-        _apply_mesh_data(bounds_obj, trigger_state, mesh_data, meshing_time, div_to_use, is_viewport_update)
+                # Safely update Blender's mesh on the main thread
+                def main_thread_callback():
+                    global _active_meshing_threads, _queued_updates, _updates_pending
+                    try:
+                        ctx = bpy.context
+                        if not ctx or not ctx.scene:
+                            return None
+                        b_obj = ctx.scene.objects.get(bounds_name)
+                        if b_obj:
+                            _apply_mesh_data(b_obj, trigger_state, mesh_data, meshing_time, div_to_use, is_viewport_update)
+                    except Exception as e_apply:
+                        print(f"FieldForge ERROR: Failed to apply background mesh data: {e_apply}")
+                    finally:
+                        _active_meshing_threads.pop(bounds_name, None)
+                        _updates_pending[bounds_name] = False
 
-    finally:
+                        # Trigger the next queued update if states changed during worker thread runtime
+                        next_state = _queued_updates.pop(bounds_name, None)
+                        if next_state:
+                            run_sdf_update(bounds_name, next_state, is_viewport_update=is_viewport_update)
+                    return None
+
+                bpy.app.timers.register(main_thread_callback)
+
+            except Exception as e_mesh:
+                print(f"FieldForge ERROR: Background meshing failed: {e_mesh}")
+                def cleanup_callback():
+                    global _active_meshing_threads, _updates_pending
+                    _active_meshing_threads.pop(bounds_name, None)
+                    _updates_pending[bounds_name] = False
+                    return None
+                bpy.app.timers.register(cleanup_callback)
+
+        # Spawn background meshing thread
+        thread = threading.Thread(target=_bg_meshing_worker, daemon=True)
+        _active_meshing_threads[bounds_name] = thread
+        _updates_pending[bounds_name] = True
+        thread.start()
+
+    except Exception as e:
+        print(f"FieldForge ERROR: Failed to launch background meshing thread: {e}")
         _updates_pending[bounds_name] = False
 
 
@@ -273,16 +358,44 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
         new_mesh_bdata = result_obj.data
         new_mesh_bdata.clear_geometry()
 
-        if mesh_data and mesh_data[0]:
-            new_mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1])
+        if mesh_data and mesh_data[0] and mesh_data[1]:
+            num_verts = len(mesh_data[0])
+            num_tris = len(mesh_data[1])
+            try:
+                # Pre-allocate exact structures directly to bypass safe/slow validations
+                new_mesh_bdata.vertices.add(num_verts)
+                new_mesh_bdata.loops.add(num_tris * 3)
+                new_mesh_bdata.polygons.add(num_tris)
+
+                # Direct write of vertices
+                flat_verts = [val for vert in mesh_data[0] for val in vert]
+                new_mesh_bdata.vertices.foreach_set("co", flat_verts)
+
+                # Direct write of loop indices
+                flat_loops = [idx for tri in mesh_data[1] for idx in tri]
+                new_mesh_bdata.loops.foreach_set("vertex_index", flat_loops)
+
+                # Direct write of polygons (each is a triangle)
+                new_mesh_bdata.polygons.foreach_set("loop_start", range(0, num_tris * 3, 3))
+                new_mesh_bdata.polygons.foreach_set("loop_total", (3,) * num_tris)
+
+                # Enable smooth shading via array memory copy (replaces slow Python loop)
+                new_mesh_bdata.polygons.foreach_set("use_smooth", (True,) * num_tris)
+
+                mesh_update_successful = True
+            except Exception as e_fast:
+                print(f"FieldForge WARN: Fast mesh copy failed, falling back: {e_fast}")
+                # Safe fallback to standard from_pydata
+                new_mesh_bdata.clear_geometry()
+                new_mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1])
+                for poly in new_mesh_bdata.polygons:
+                    poly.use_smooth = True
+                mesh_update_successful = True
+        
         new_mesh_bdata.update()
-        mesh_update_successful = True
         
         # Apply smooth shading and modifier logic
         if mesh_update_successful and len(new_mesh_bdata.polygons) > 0:
-             for poly in new_mesh_bdata.polygons:
-                 poly.use_smooth = True
-             
              addon_modifier_name = "FieldForge_Smooth"
              auto_smooth_angle_deg = sdf_settings_from_bounds.get("sdf_result_auto_smooth_angle", 45.0)
              auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
@@ -290,7 +403,6 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
              existing_mod = result_obj.modifiers.get(addon_modifier_name)
              if not existing_mod:
                  try:
-                     # Instantly construct and apply the procedurally built modifier
                      existing_mod = result_obj.modifiers.new(name=addon_modifier_name, type='NODES')
                      existing_mod.node_group = utils.get_or_create_smooth_node_group()
                  except Exception as e_mod:
@@ -300,8 +412,6 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
              angle_input_identifier = "Socket_2" # Set "Socket_2" as the default fallback
              if existing_mod and existing_mod.node_group and hasattr(existing_mod.node_group, 'interface'):
                  try:
-                     # Use Python's descriptor protocol to safely resolve the 'items' collection.
-                     # This completely bypasses the method shadowing naming conflict on the instance.
                      interface = existing_mod.node_group.interface
                      items_prop = bpy.types.NodeTreeInterface.items.__get__(interface, bpy.types.NodeTreeInterface)
                      for item in items_prop:
@@ -319,6 +429,11 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
                      existing_mod[angle_input_identifier] = auto_smooth_angle_rad
                  except Exception: 
                      pass
+
+             # Viewport optimization: disable modifier evaluation during viewport updates to eliminate modifier stutters
+             # It turns back on for the high-resolution step (div == MIN_DIV)
+             if existing_mod:
+                 existing_mod.show_viewport = (not is_viewport_update) or (actual_rendered_div == MIN_DIV)
 
              # Set Material properties
              mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
@@ -444,7 +559,7 @@ def initial_update_check_all():
 
 def clear_timers_and_state():
     """Cancels all active timers and clears global state dictionaries."""
-    global _updates_pending, _sdf_update_caches, _current_divs, _target_divs, _last_update_times, _debounce_timers
+    global _updates_pending, _sdf_update_caches, _serialized_tree_caches, _current_divs, _target_divs, _last_update_times, _debounce_timers, _active_meshing_threads, _queued_updates
     
     # Cancel all active debounce timers safely
     for bounds_name in list(_debounce_timers.keys()):
@@ -452,9 +567,12 @@ def clear_timers_and_state():
 
     _updates_pending.clear()
     _sdf_update_caches.clear()
+    _serialized_tree_caches.clear()
     _current_divs.clear()
     _target_divs.clear()
     _last_update_times.clear()
     _debounce_timers.clear()
+    _active_meshing_threads.clear()
+    _queued_updates.clear()
 
     clear_link_caches()

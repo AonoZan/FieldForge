@@ -14,7 +14,7 @@ on:
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'c9e97343e0af998cd1696e85583eccba95532b96'
+  LIBFIVE_COMMIT_SHA: 'c66eb59fb1c821771e8b58c36c770b89a6700101'
   ADDON_NAME: FieldForge
   VCPKG_TRIPLET: x64-windows
 
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout libfive Source Code
         uses: actions/checkout@v4
         with:
-          repository: libfive/libfive
+          repository: AonoZan/libfive
           ref: ${{ env.LIBFIVE_COMMIT_SHA }}
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
           fetch-depth: 0
