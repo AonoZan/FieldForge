@@ -113,7 +113,7 @@ jobs:
           cp addon_code/*.py staging/FieldForge/
           cp addon_code/LICENSE staging/FieldForge/
           cp addon_code/CREDITS.md staging/FieldForge/
-          cp addon_code/blender-manifest.toml staging/FieldForge/
+          cp addon_code/blender_manifest.toml staging/FieldForge/
           cp addon_code/ui/*.py staging/FieldForge/ui/
           cp addon_code/core/*.py staging/FieldForge/core/
           
