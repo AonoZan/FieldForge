@@ -1,13 +1,13 @@
 # FieldForge - Dynamic SDF Modeling for Blender
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Blender Version](https://img.shields.io/badge/Blender-4.4+-orange.svg)](https://www.blender.org)
+[![Blender Version](https://img.shields.io/badge/Blender-5.0+-orange.svg)](https://www.blender.org)
 [![Powered by libfive](https://img.shields.io/badge/Powered%20by-libfive-blue)](https://libfive.com/)
 [![Gemini](https://img.shields.io/badge/GEMINI-5b5b5b?logo=googlegemini)](https://gemini.google.com/)
 
 FieldForge brings the power of Signed Distance Function (SDF) modeling directly into Blender, leveraging the robust **libfive** library. Create complex, non-destructive shapes with a deep, hierarchical workflow, procedural modifiers, and smooth blending capabilities.
 
-![FieldForge Screenshot](Screenshot.png)
+![Demo](demo.gif)
 
 ## Core Concepts
 
@@ -26,6 +26,7 @@ FieldForge brings the power of Signed Distance Function (SDF) modeling directly 
 -   **Direct Viewport Interaction:** Select and manipulate SDF objects by clicking their wireframe visuals directly in the 3D viewport.
 -   **Linking System:** Link one SDF object's parameters to another. This allows you to create complex, reusable components and instances.
 -   **Processing Order Control:** Easily reorder objects in the hierarchy to control the exact sequence of CSG (Union, Difference, Intersect) operations.
+-   **Automatic Material Assignment:** Materials are automatically gathered and assigned to leaf shapes in your hierarchy, streamlining your workflow.
 
 ### Object Types & Primitives
 
@@ -37,7 +38,7 @@ FieldForge brings the power of Signed Distance Function (SDF) modeling directly 
 
 -   **Standard CSG:** Combine shapes using Union, Difference, and Intersection.
 -   **Clearance:** A powerful subtractive mode that removes an offset (enlarged) version of a shape, perfect for creating sockets or joints.
--s   **Morph:** Smoothly interpolate between a parent's shape and a child's shape.
+-   **Morph:** Smoothly interpolate between a parent's shape and a child's shape.
 
 ### Modifiers (Per-Source)
 
@@ -61,8 +62,9 @@ FieldForge brings the power of Signed Distance Function (SDF) modeling directly 
 ### Performance & Management
 
 -   **Configurable Resolution:** Set independent mesh resolutions for the viewport and final renders.
--   **Debounced Updates:** The viewport only updates after a user-configurable delay, preventing lag during manipulation.
--   **Throttling:** Limit how frequently the addon can perform updates to maintain UI responsiveness.
+-   **Progressive Rendering:** The viewport renders progressively, starting at a low resolution and gradually refining to the target viewport resolution for better interactivity during modeling.
+-   **Adaptive Resolution Adjustment:** Resolution automatically adjusts based on meshing performance, dynamically increasing or decreasing to maintain responsiveness.
+-   **Background Thread Mesh Generation:** Mesh generation is offloaded to background threads, keeping the UI responsive and interactive.
 -   **Manual Update:** Disable automatic updates and regenerate the mesh only when you choose.
 -   **File Size Management:** An option to discard the generated mesh when saving the `.blend` file, keeping your project files lightweight.
 
@@ -85,13 +87,15 @@ FieldForge brings the power of Signed Distance Function (SDF) modeling directly 
 
 ## Troubleshooting
 
--   **"libfive not available" / Addon fails to enable:** This means the bundled libfive libraries are missing or incompatible. Ensure you installed from the correct, complete ZIP file for your operating system. Check the Blender System Console for detailed error messages.
--   **Slow Performance:** Lower the "Viewport Resolution" in the Bounds settings, increase the "Inactive Delay," or disable "Auto Viewport Update" and use the manual button.
+-   **"libfive not available" / Addon fails to enable:** This means the bundled libfive libraries are missing or incompatible. Ensure you installed from the correct, complete ZIP file for your operating system and Blender version. If the libfive folder is missing, the addon includes a fallback mechanism to help diagnose the issue.
+-   **Slow Performance:** Lower the "Viewport Resolution" in the Bounds settings, or disable "Auto Viewport Update" and use the manual button for high-quality renders. The progressive rendering system should help maintain interactivity during viewport updates.
+-   **Blender 5.0 Compatibility Issues:** FieldForge automatically adjusts compatibility settings for Blender 5.0+. If you encounter issues, ensure you're using a build that supports your Blender version.
 
 ## License
 
-FieldForge is licensed under the **GNU General Public License v3.0**. See the [GPLv3 License](https://www.gnu.org/licenses/gpl-3.0.en.html) for details.
+FieldForge is licensed under the **GNU General Public License v3.0** or later. See the [GPLv3 License](https://www.gnu.org/licenses/gpl-3.0.en.html) for details.
 
 ## Acknowledgements
 
 *   **libfive:** The core SDF library. [https://libfive.com/](https://libfive.com/)
+*   **Blender Foundation**: For providing the platform and API that makes this extension possible. [https://www.blender.org/](https://www.blender.org/)
