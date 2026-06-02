@@ -22,6 +22,9 @@ import bpy
 import time
 import math
 import threading
+import ctypes
+import os
+import sys
 from mathutils import Matrix, Vector
 
 # Use relative imports assuming this file is in FieldForge/core/
@@ -52,8 +55,6 @@ _debounce_timers = {}
 _updates_pending = {}
 # Caches the last known state dictionary used for a successful update
 _sdf_update_caches = {}
-# Caches the serialized bytes representation of the compiled trees
-_serialized_tree_caches = {}
 # Keeps track of active background meshing threads
 _active_meshing_threads = {}
 # Stores queued states that are waiting for the active thread to complete
@@ -107,6 +108,205 @@ def _cancel_debounce_timer(bounds_name: str):
             pass
 
 
+def _gather_leaf_shapes_and_properties(obj, context):
+    """
+    Recursively gathers leaf sources, their effective inverse matrices,
+    colors, and blend factors, correctly resolving linked group/object instances
+    and inheriting parent array modifier parameters.
+    """
+    results = [] # List of tuples: (src_obj, effective_matrix_inv, array_params, group_obj)
+
+    def recurse(current_obj, current_logical_parent, transform_matrix_inv, active_array_params, active_group):
+        if not current_obj or not current_obj.visible_get(view_layer=context.view_layer):
+            return
+
+        is_source = utils.is_sdf_source(current_obj) and not utils.is_sdf_canvas(current_obj)
+        is_canvas = utils.is_sdf_canvas(current_obj)
+
+        if is_source:
+            # The base inverse world matrix of the source
+            base_inv = current_obj.matrix_world.inverted()
+            # If we are under a linked instance, apply the reparenting transform
+            effective_inv = base_inv @ transform_matrix_inv
+            results.append((current_obj, effective_inv, active_array_params.copy(), active_group))
+
+        elif is_canvas:
+            for child in current_obj.children:
+                if utils.is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                    base_inv = child.matrix_world.inverted()
+                    effective_inv = base_inv @ transform_matrix_inv
+                    results.append((child, effective_inv, active_array_params.copy(), active_group))
+
+        # Recurse children of the current object
+        for child in current_obj.children:
+            if is_canvas and utils.is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                continue # Skip direct 2D shapes as they are already gathered
+            
+            # Inherit and override array parameters if parent is an active arraying group
+            child_array_params = active_array_params.copy()
+            child_group = active_group
+            if utils.is_sdf_group(current_obj):
+                array_mode = utils.get_sdf_param(current_obj, "sdf_main_array_mode", 'NONE')
+                if array_mode != 'NONE':
+                    child_group = current_obj
+                    child_array_params['mode'] = array_mode
+                    center_on_origin = utils.get_sdf_param(current_obj, "sdf_array_center_on_origin", True)
+                    
+                    if array_mode == 'LINEAR':
+                        ax = utils.get_sdf_param(current_obj, "sdf_array_active_x", False)
+                        ay = utils.get_sdf_param(current_obj, "sdf_array_active_y", False) and ax
+                        az = utils.get_sdf_param(current_obj, "sdf_array_active_z", False) and ay
+                        
+                        nx = int(utils.get_sdf_param(current_obj, "sdf_array_count_x", 2)) if ax else 1
+                        ny = int(utils.get_sdf_param(current_obj, "sdf_array_count_y", 2)) if ay else 1
+                        nz = int(utils.get_sdf_param(current_obj, "sdf_array_count_z", 2)) if az else 1
+                        
+                        child_array_params['nx'] = nx
+                        child_array_params['ny'] = ny
+                        child_array_params['nz'] = nz
+                        
+                        # Calculate spacings matching the logic of _apply_array_to_shape in sdf_logic.py
+                        child_local_pos = (current_obj.matrix_world.inverted() @ child.matrix_world).translation
+                        
+                        dx_val = (child_local_pos.x * 2.0 / (nx - 1)) if (ax and nx > 1) else 0.0
+                        dy_val = (child_local_pos.y * 2.0 / (ny - 1)) if (ay and ny > 1) else 0.0
+                        dz_val = (child_local_pos.z * 2.0 / (nz - 1)) if (az and nz > 1) else 0.0
+                        
+                        default_small_delta = 1.0
+                        if ax and nx > 1 and abs(dx_val) < 1e-5:
+                            dx_val = default_small_delta * (1 if child_local_pos.x >= 0 else -1) if abs(child_local_pos.x) < 1e-5 else dx_val
+                        if ay and ny > 1 and abs(dy_val) < 1e-5:
+                            dy_val = default_small_delta * (1 if child_local_pos.y >= 0 else -1) if abs(child_local_pos.y) < 1e-5 else dy_val
+                        if az and nz > 1 and abs(dz_val) < 1e-5:
+                            dz_val = default_small_delta * (1 if child_local_pos.z >= 0 else -1) if abs(child_local_pos.z) < 1e-5 else dz_val
+                            
+                        child_array_params['dx'] = dx_val
+                        child_array_params['dy'] = dy_val
+                        child_array_params['dz'] = dz_val
+                        
+                        # Pass the raw child local positions as the shifting offsets
+                        child_array_params['sh_x'] = child_local_pos.x
+                        child_array_params['sh_y'] = child_local_pos.y
+                        child_array_params['sh_z'] = child_local_pos.z
+                        
+                    elif array_mode == 'RADIAL':
+                        radial_count = int(utils.get_sdf_param(current_obj, "sdf_radial_count", 1))
+                        child_array_params['radial_count'] = radial_count
+                        
+                        try:
+                            center_prop = utils.get_sdf_param(current_obj, "sdf_radial_center", (0.0, 0.0))
+                            rcx = float(center_prop[0])
+                            rcy = float(center_prop[1])
+                        except Exception:
+                            rcx = 0.0
+                            rcy = 0.0
+                        
+                        # If center_on_origin is True, geometry shifts making the rotation center (0,0) on the mesh
+                        if center_on_origin:
+                            child_array_params['radial_cx'] = 0.0
+                            child_array_params['radial_cy'] = 0.0
+                            child_local_pos = (current_obj.matrix_world.inverted() @ child.matrix_world).translation
+                            child_array_params['radial_child_x'] = child_local_pos.x - rcx
+                            child_array_params['radial_child_y'] = child_local_pos.y - rcy
+                        else:
+                            child_array_params['radial_cx'] = rcx
+                            child_array_params['radial_cy'] = rcy
+                            child_local_pos = (current_obj.matrix_world.inverted() @ child.matrix_world).translation
+                            child_array_params['radial_child_x'] = child_local_pos.x
+                            child_array_params['radial_child_y'] = child_local_pos.y
+                            
+            recurse(child, current_logical_parent, transform_matrix_inv, child_array_params, child_group)
+
+        # Handle linked instances recursively if active
+        obj_processes_linked_children = current_obj.get(constants.SDF_PROCESS_LINKED_CHILDREN_PROP, False)
+        if utils.is_sdf_linked(current_obj) and obj_processes_linked_children:
+            linked_target = utils.get_effective_sdf_object(current_obj)
+            if linked_target and linked_target != current_obj:
+                W_target = linked_target.matrix_world
+                W_linker_inv = current_obj.matrix_world.inverted()
+                reparent_inv = W_target @ W_linker_inv
+                
+                # Compose with any outer reparenting transforms already active
+                new_transform_inv = reparent_inv @ transform_matrix_inv
+                
+                # Recurse into the linked target's children as linked instances
+                for linked_child in linked_target.children:
+                    recurse(linked_child, current_obj, new_transform_inv, active_array_params, active_group)
+
+    # Start recursion from the root bounds system with empty default array parameters
+    default_params = {
+        'mode': 'NONE',
+        'nx': 1, 'ny': 1, 'nz': 1,
+        'dx': 0.0, 'dy': 0.0, 'dz': 0.0,
+        'sh_x': 0.0, 'sh_y': 0.0, 'sh_z': 0.0,
+        'radial_count': 1,
+        'radial_cx': 0.0, 'radial_cy': 0.0,
+        'radial_child_x': 0.0, 'radial_child_y': 0.0
+    }
+    recurse(obj, obj, Matrix.Identity(4), default_params, None)
+    return results
+
+
+def _ensure_sdf_material(result_obj: bpy.types.Object):
+    """
+    Ensures that a standard node material is created and configured 
+    to map the vertex color attribute to the shader's base color input.
+    """
+    mat_name = "SDF_Material"
+    color_attr_name = "SDF_Color"
+    
+    material = bpy.data.materials.get(mat_name)
+
+    if not material:
+        material = bpy.data.materials.new(name=mat_name)
+        material.use_nodes = True
+        nodes = material.node_tree.nodes
+        links = material.node_tree.links
+        
+        bsdf = nodes.get('Principled BSDF')
+        if bsdf:
+            nodes.remove(bsdf)
+
+        bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
+        bsdf.location = (0, 0)
+        
+        attr_node = nodes.new(type='ShaderNodeAttribute')
+        attr_node.attribute_name = color_attr_name
+        attr_node.location = (-200, 200)
+        
+        links.new(attr_node.outputs['Color'], bsdf.inputs['Base Color'])
+        
+        output_node = nodes.get('Material Output')
+        if output_node:
+            links.new(bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+
+    # Assign to the first material slot of the mesh
+    if not result_obj.data.materials or result_obj.data.materials[0] != material:
+        if not result_obj.data.materials:
+            result_obj.data.materials.append(material)
+        else:
+            result_obj.data.materials[0] = material
+
+
+def _resolve_tree_pointer(shape):
+    """
+    Robustly inspects a libfive.Shape object to extract the raw C++ pointer,
+    handling nested wrappers (e.g. shape.tree.ptr) automatically.
+    """
+    if shape is None:
+        return None
+    
+    # Check common pointer attribute names
+    for attr in ('tree', 'ptr', '_tree', '_ptr'):
+        val = getattr(shape, attr, None)
+        if val is not None:
+            # If the value is another object, recurse into it
+            if hasattr(val, 'ptr') or hasattr(val, 'tree') or hasattr(val, '_tree') or hasattr(val, '_ptr'):
+                return _resolve_tree_pointer(val)
+            return val
+    return None
+
+
 # --- Debounce and Throttle Logic (Per Bounds) ---
 
 def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
@@ -127,7 +327,6 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
         _cancel_debounce_timer(bounds_name)
         _updates_pending.pop(bounds_name, None)
         _sdf_update_caches.pop(bounds_name, None)
-        _serialized_tree_caches.pop(bounds_name, None)
         _active_meshing_threads.pop(bounds_name, None)
         _queued_updates.pop(bounds_name, None)
         _current_divs.pop(bounds_name, None)
@@ -191,7 +390,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     if not _lf_imported_ok:
         return
 
-    global _updates_pending, _serialized_tree_caches, _sdf_update_caches, _active_meshing_threads, _queued_updates
+    global _updates_pending, _sdf_update_caches, _active_meshing_threads, _queued_updates
 
     # If a meshing thread is already active, queue this update state and return
     if bounds_name in _active_meshing_threads:
@@ -209,43 +408,136 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
             return
 
         sdf_settings = trigger_state.get('scene_settings')
-        
-        # Check if we can reuse the serialized tree from cache to avoid expensive rebuild
-        cached_state = _sdf_update_caches.get(bounds_name)
-        state_changed = state.has_state_changed(trigger_state, cached_state)
-        
-        serialized_bytes = _serialized_tree_caches.get(bounds_name)
-        final_combined_shape = None
-        
-        if not state_changed and serialized_bytes:
-            try:
-                import libfive.ffi as lf_ffi
-                from libfive.shape import Shape
-                tree_ptr = lf_ffi.deserialize_tree(serialized_bytes)
-                if tree_ptr:
-                    final_combined_shape = Shape(tree_ptr)
-            except Exception as e_deser:
-                print(f"FieldForge WARN: Failed to deserialize cached tree for {bounds_name}: {e_deser}")
-                final_combined_shape = None
 
-        if final_combined_shape is None:
-            # Generate the libfive shape hierarchy from scratch
-            final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
-            
-            # Serialize and cache the newly compiled tree
-            if final_combined_shape is not None and final_combined_shape is not lf.emptiness():
-                try:
-                    import libfive.ffi as lf_ffi
-                    tree_attr = getattr(final_combined_shape, 'tree', None)
-                    if tree_attr:
-                        new_serialized = lf_ffi.serialize_tree(tree_attr)
-                        if new_serialized:
-                            _serialized_tree_caches[bounds_name] = new_serialized
-                except Exception as e_ser:
-                    print(f"FieldForge WARN: Failed to serialize tree for {bounds_name}: {e_ser}")
-
+        # Recompile the combined system tree from scratch (extremely fast, stable, and accurate)
+        final_combined_shape = sdf_logic.process_sdf_hierarchy(bounds_obj, sdf_settings)
         if final_combined_shape is None:
             final_combined_shape = lf.emptiness()
+
+        # Gather color-related properties safely on the main thread (replaces raw _gather_leaf_shapes)
+        import libfive.ffi as lf_ffi
+        gathered_data = _gather_leaf_shapes_and_properties(bounds_obj, context)
+        num_sdfs = len(gathered_data)
+
+        sdf_bytes_list = []
+        sdf_sizes = []
+        matrices_list = []
+        child_matrices_list = [] # local transition matrices from group space to child space
+        colors_list = []
+        
+        # Parallel arrays for modifier parameters (Direction C)
+        blend_factors_list = []
+        clearance_offsets_list = []
+        use_shell_list = []
+        shell_offsets_list = []
+
+        # Arrays for Group arrays (Direction C + Arrays)
+        array_modes_list = []
+        array_counts_x_list = []
+        array_counts_y_list = []
+        array_counts_z_list = []
+        array_spacings_x_list = []
+        array_spacings_y_list = []
+        array_spacings_z_list = []
+        array_shifts_x_list = []
+        array_shifts_y_list = []
+        array_shifts_z_list = []
+        radial_counts_list = []
+        radial_centers_x_list = []
+        radial_centers_y_list = []
+        radial_children_x_list = []
+        radial_children_y_list = []
+
+        for src, effective_inv, array_params, group_obj in gathered_data:
+            # Resolve the effective linked object to read properties from (important for individual linked shapes)
+            effective_src = utils.get_effective_sdf_object(src)
+            if not effective_src:
+                effective_src = src
+
+            unit_shape = sdf_logic.reconstruct_shape(effective_src)
+            serialized = None
+            
+            # Resolve tree pointer robustly via our helper
+            tree_ptr = _resolve_tree_pointer(unit_shape)
+
+            if tree_ptr is not None:
+                serialized = lf_ffi.serialize_tree(tree_ptr)
+            
+            if serialized is None:
+                empty_sh = lf.emptiness()
+                empty_ptr = _resolve_tree_pointer(empty_sh)
+                if empty_ptr is not None:
+                    serialized = lf_ffi.serialize_tree(empty_ptr)
+            
+            if serialized is not None:
+                sdf_bytes_list.append(serialized)
+                sdf_sizes.append(len(serialized))
+
+                # Compute group inverse and local transition matrix
+                if group_obj is not None:
+                    m_group_inv = group_obj.matrix_world.inverted()
+                    m_group_to_child = effective_inv @ group_obj.matrix_world
+                else:
+                    m_group_inv = effective_inv
+                    m_group_to_child = Matrix.Identity(4)
+
+                # Write effective group inverse matrix in Column-Major order
+                for col in range(4):
+                    for row in range(4):
+                        matrices_list.append(m_group_inv[row][col])
+
+                # Write effective group-to-child transition matrix in Column-Major order
+                for col in range(4):
+                    for row in range(4):
+                        child_matrices_list.append(m_group_to_child[row][col])
+
+                # Extract shape color safely from the effective linked object
+                raw_color = getattr(effective_src, "sdf_color", (0.8, 0.8, 0.8, 1.0))
+                colors_list.extend(raw_color)
+
+                # Collect Blend Factor safely from the effective linked object
+                blend_val = utils.get_sdf_param(effective_src, "sdf_blend_factor", 0.0)
+                blend_factors_list.append(blend_val)
+
+                # Collect Clearance Offset (only if use_clearance is checked) safely from effective object
+                if utils.get_sdf_param(effective_src, "sdf_use_clearance", False):
+                    clearance_offsets_list.append(utils.get_sdf_param(effective_src, "sdf_clearance_offset", 0.0))
+                else:
+                    clearance_offsets_list.append(0.0)
+
+                # Collect Shell Modifier Parameters safely from effective object
+                if utils.get_sdf_param(effective_src, "sdf_use_shell", False):
+                    use_shell_list.append(1)
+                    shell_offsets_list.append(utils.get_sdf_param(effective_src, "sdf_shell_offset", 0.0))
+                else:
+                    use_shell_list.append(0)
+                    shell_offsets_list.append(0.0)
+
+                # Pack Group Array parameters
+                mode_str = array_params.get('mode', 'NONE')
+                mode_map = {'NONE': 0, 'LINEAR': 1, 'RADIAL': 2}
+                array_modes_list.append(mode_map.get(mode_str, 0))
+                
+                array_counts_x_list.append(array_params.get('nx', 1))
+                array_counts_y_list.append(array_params.get('ny', 1))
+                array_counts_z_list.append(array_params.get('nz', 1))
+                
+                array_spacings_x_list.append(array_params.get('dx', 0.0))
+                array_spacings_y_list.append(array_params.get('dy', 0.0))
+                array_spacings_z_list.append(array_params.get('dz', 0.0))
+
+                array_shifts_x_list.append(array_params.get('sh_x', 0.0))
+                array_shifts_y_list.append(array_params.get('sh_y', 0.0))
+                array_shifts_z_list.append(array_params.get('sh_z', 0.0))
+                
+                radial_counts_list.append(array_params.get('radial_count', 1))
+                radial_centers_x_list.append(array_params.get('radial_cx', 0.0))
+                radial_centers_y_list.append(array_params.get('radial_cy', 0.0))
+                
+                radial_children_x_list.append(array_params.get('radial_child_x', 0.0))
+                radial_children_y_list.append(array_params.get('radial_child_y', 0.0))
+
+        all_sdf_bytes = b"".join(sdf_bytes_list)
 
         # Calculate bounding box bounds
         bounds_matrix = trigger_state.get('bounds_matrix')
@@ -281,6 +573,87 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                 )
                 meshing_time = time.perf_counter() - t_mesh_start
 
+                # Calculate vertex color mappings asynchronously inside the C++ utility library
+                calculated_colors = None
+                c_utils_lib = getattr(lf_ffi, 'custom_c_utils', None)
+                if c_utils_lib is not None and num_sdfs > 0 and mesh_data and mesh_data[0]:
+                    try:
+                        import ctypes
+                        flat_verts = [coord for vert in mesh_data[0] for coord in vert]
+                        num_verts = len(mesh_data[0])
+
+                        # --- Dynamic Properties Array Conversion (Direction C) ---
+                        c_verts = (ctypes.c_float * (num_verts * 3))(*flat_verts)
+                        c_matrices = (ctypes.c_float * (num_sdfs * 16))(*matrices_list)
+                        c_child_matrices = (ctypes.c_float * (num_sdfs * 16))(*child_matrices_list)
+                        c_sdf_data = (ctypes.c_uint8 * len(all_sdf_bytes)).from_buffer_copy(all_sdf_bytes)
+                        c_sizes = (ctypes.c_int * num_sdfs)(*sdf_sizes)
+                        c_colors_in = (ctypes.c_float * (num_sdfs * 4))(*colors_list)
+                        
+                        # Convert parameters to flat ctypes arrays
+                        c_blend_factors = (ctypes.c_float * num_sdfs)(*blend_factors_list)
+                        c_clearance_offsets = (ctypes.c_float * num_sdfs)(*clearance_offsets_list)
+                        c_use_shell = (ctypes.c_int * num_sdfs)(*use_shell_list)
+                        c_shell_offsets = (ctypes.c_float * num_sdfs)(*shell_offsets_list)
+
+                        # Convert Array parameters to flat ctypes arrays
+                        c_array_modes = (ctypes.c_int * num_sdfs)(*array_modes_list)
+                        c_array_counts_x = (ctypes.c_int * num_sdfs)(*array_counts_x_list)
+                        c_array_counts_y = (ctypes.c_int * num_sdfs)(*array_counts_y_list)
+                        c_array_counts_z = (ctypes.c_int * num_sdfs)(*array_counts_z_list)
+                        c_array_spacings_x = (ctypes.c_float * num_sdfs)(*array_spacings_x_list)
+                        c_array_spacings_y = (ctypes.c_float * num_sdfs)(*array_spacings_y_list)
+                        c_array_spacings_z = (ctypes.c_float * num_sdfs)(*array_spacings_z_list)
+                        c_array_shifts_x = (ctypes.c_float * num_sdfs)(*array_shifts_x_list)
+                        c_array_shifts_y = (ctypes.c_float * num_sdfs)(*array_shifts_y_list)
+                        c_array_shifts_z = (ctypes.c_float * num_sdfs)(*array_shifts_z_list)
+                        c_radial_counts = (ctypes.c_int * num_sdfs)(*radial_counts_list)
+                        c_radial_centers_x = (ctypes.c_float * num_sdfs)(*radial_centers_x_list)
+                        c_radial_centers_y = (ctypes.c_float * num_sdfs)(*radial_centers_y_list)
+                        c_radial_children_x = (ctypes.c_float * num_sdfs)(*radial_children_x_list)
+                        c_radial_children_y = (ctypes.c_float * num_sdfs)(*radial_children_y_list)
+
+                        # Allocated output buffer
+                        c_colors_out = (ctypes.c_float * (num_verts * 4))()
+
+                        # Call the C++ library
+                        c_utils_lib.calculate_colors(
+                            c_verts,
+                            num_verts,
+                            c_matrices,
+                            c_child_matrices,
+                            c_sdf_data,
+                            c_sizes,
+                            c_colors_in,
+                            
+                            c_blend_factors,
+                            c_clearance_offsets,
+                            c_use_shell,
+                            c_shell_offsets,
+
+                            c_array_modes,
+                            c_array_counts_x,
+                            c_array_counts_y,
+                            c_array_counts_z,
+                            c_array_spacings_x,
+                            c_array_spacings_y,
+                            c_array_spacings_z,
+                            c_array_shifts_x,
+                            c_array_shifts_y,
+                            c_array_shifts_z,
+                            c_radial_counts,
+                            c_radial_centers_x,
+                            c_radial_centers_y,
+                            c_radial_children_x,
+                            c_radial_children_y,
+                            
+                            num_sdfs,
+                            c_colors_out
+                        )
+                        calculated_colors = list(c_colors_out)
+                    except Exception as e_col:
+                        print(f"FieldForge ERROR: Color evaluation failed: {e_col}")
+
                 # Safely update Blender's mesh on the main thread
                 def main_thread_callback():
                     global _active_meshing_threads, _queued_updates, _updates_pending
@@ -290,7 +663,11 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                             return None
                         b_obj = ctx.scene.objects.get(bounds_name)
                         if b_obj:
-                            _apply_mesh_data(b_obj, trigger_state, mesh_data, meshing_time, div_to_use, is_viewport_update)
+                            _apply_mesh_data(
+                                b_obj, trigger_state, mesh_data, 
+                                meshing_time, div_to_use, is_viewport_update, 
+                                colors_data=calculated_colors
+                            )
                     except Exception as e_apply:
                         print(f"FieldForge ERROR: Failed to apply background mesh data: {e_apply}")
                     finally:
@@ -325,7 +702,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         _updates_pending[bounds_name] = False
 
 
-def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: float, actual_rendered_div: int, is_viewport_update: bool):
+def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: float, actual_rendered_div: int, is_viewport_update: bool, colors_data=None):
     global _current_divs, _target_divs
     bounds_name = bounds_obj.name
     context = bpy.context
@@ -381,6 +758,18 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
 
                 # Enable smooth shading via array memory copy (replaces slow Python loop)
                 new_mesh_bdata.polygons.foreach_set("use_smooth", (True,) * num_tris)
+
+                # Map calculated vertex colors directly to Mesh Point Attributes
+                if colors_data and len(colors_data) == num_verts * 4:
+                    color_layer_name = "SDF_Color"
+                    color_attr = new_mesh_bdata.color_attributes.get(color_layer_name)
+                    if not color_attr:
+                        color_attr = new_mesh_bdata.color_attributes.new(
+                            name=color_layer_name,
+                            type='FLOAT_COLOR',
+                            domain='POINT'
+                        )
+                    color_attr.data.foreach_set("color", colors_data)
 
                 mesh_update_successful = True
             except Exception as e_fast:
@@ -439,10 +828,17 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
              mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
              if mat_name:
                  material = bpy.data.materials.get(mat_name)
-                 if material and (not new_mesh_bdata.materials or new_mesh_bdata.materials.get(material.name) is None):
-                     new_mesh_bdata.materials.append(material)
-             elif len(new_mesh_bdata.materials) > 0:
-                 new_mesh_bdata.materials.clear()
+                 if material:
+                     if not new_mesh_bdata.materials:
+                         new_mesh_bdata.materials.append(material)
+                     else:
+                         new_mesh_bdata.materials[0] = material
+             else:
+                 # Auto-provision standard color attribute shader if computed colors are present
+                 if colors_data:
+                     _ensure_sdf_material(result_obj)
+                 elif len(new_mesh_bdata.materials) > 0:
+                     new_mesh_bdata.materials.clear()
 
     update_sdf_cache(trigger_state, bounds_name)
 
@@ -567,7 +963,6 @@ def clear_timers_and_state():
 
     _updates_pending.clear()
     _sdf_update_caches.clear()
-    _serialized_tree_caches.clear()
     _current_divs.clear()
     _target_divs.clear()
     _last_update_times.clear()

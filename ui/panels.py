@@ -416,6 +416,9 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         label_type_row.label(text="(Canvas Element)", icon='INFO')
     else:
         label_type_row.label(text=f"SDF Type: {sdf_type.capitalize()}")
+    
+    layout.prop(obj_for_props, "sdf_color", text="Shape Color")
+    layout.separator()
 
     # --- Processing Order and Hierarchy Buttons ---
     if obj.parent:
@@ -472,6 +475,7 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         op_down.direction = 'DOWN'
 
     layout.separator()
+    
 
     ## --- Interaction Mode (CSG with parent/canvas) ---
     row_csg_buttons = layout.row(align=True)

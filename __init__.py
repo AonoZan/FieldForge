@@ -26,6 +26,7 @@ bl_info = {
 import bpy
 import os
 import sys
+import traceback
 
 # --- Libfive Loading and Setup ---
 addon_dir = os.path.dirname(os.path.realpath(__file__))
@@ -183,6 +184,15 @@ def register():
         bpy.app.timers.register(update_manager.initial_update_check_all, first_interval=1.0)
     except Exception as e:
         print(f"  ERROR: Failed to schedule initial update check: {e}")
+    
+    bpy.types.Object.sdf_color = bpy.props.FloatVectorProperty(
+        name="Color",
+        subtype='COLOR',
+        size=4,
+        default=(0.8, 0.8, 0.8, 1.0),
+        min=0.0, max=1.0,
+        description="RGBA color associated with this shape"
+    )
 
     # Force redraw after registration
     drawing.tag_redraw_all_view3d()
