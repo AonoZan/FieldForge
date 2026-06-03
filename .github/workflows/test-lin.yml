@@ -18,4 +18,77 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      
+      - name: Install System Dependencies for Blender
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1 \
+            libxi6 \
+            libxrender1 \
+            libxxf86vm1 \
+            libfontconfig1 \
+            libxext6 \
+            libsm6
+
+      - name: Download Blender
+        run: |
+          # Configure target Blender version (e.g., 4.2 LTS)
+          # Note: Adjust these variables if a different version is needed
+          BLENDER_VERSION="5.0.1"
+          BLENDER_MAJOR_MINOR="5.0"
+          
+          echo "Downloading Blender $BLENDER_VERSION..."
+          curl -L -O "https://download.blender.org/release/Blender${BLENDER_MAJOR_MINOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          tar -xf "blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          
+          # Add Blender to the PATH environment variable
+          echo "$(pwd)/blender-${BLENDER_VERSION}-linux-x64" >> $GITHUB_PATH
+          echo "BLENDER_VERSION_MM=${BLENDER_MAJOR_MINOR}" >> $GITHUB_ENV
+
+      - name: Download Extension Asset from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch matching release artifacts based on input version tag
+          gh release download ${{ github.event.inputs.version_tag }} \
+            --repo ${{ github.repository }} \
+            --pattern "FieldForge-lin-*.zip" \
+            --dir .
+          
+          # Detect the downloaded zip file path dynamically
+          ZIP_FILE=$(find . -maxdepth 1 -name "FieldForge-lin-*.zip" -print -quit)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Error: No matching asset found for pattern 'FieldForge-lin-*.zip'"
+            exit 1
+          fi
+          echo "Detected asset: $ZIP_FILE"
+          echo "ADDON_ZIP=$ZIP_FILE" >> $GITHUB_ENV
+
+      - name: Execute Headless Integration Test
+        run: |
+          # Establish path mappings matching the downloaded Blender version context
+          ADDONS_DIR="$HOME/.config/blender/${{ env.BLENDER_VERSION_MM }}/scripts/addons"
+          echo "Targeting installation directory: $ADDONS_DIR"
+          mkdir -p "$ADDONS_DIR"
+          
+          # Extract addon archive structure to destination path
+          unzip -q "${{ env.ADDON_ZIP }}" -d "$ADDONS_DIR"
+          
+          if [ ! -d "$ADDONS_DIR/FieldForge" ]; then
+              echo "Error: Extraction verification failed. 'FieldForge' directory not found inside: $ADDONS_DIR"
+              exit 1
+          fi
+          
+          # Set the target environment variable for outputs
+          export TEST_OUTPUT_DIR="$(pwd)"
+          
+          echo "Starting headless verification test inside Blender..."
+          blender --background --python test_sdf.py
+          
+          # Verify the generation output file
+          if [ -f "$(pwd)/test_output.stl" ]; then
+              echo "Success: test_output.stl found in runner workspace."
+          else
+              echo "Error: Expected output file (test_output.stl) was not created."
+              exit 1
+          fi

@@ -1,4 +1,4 @@
-name: Test SDF Extension
+name: Test SDF Extension (macOS)
 
 on:
   workflow_dispatch:
@@ -18,4 +18,83 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      
+      - name: Download and Install Blender
+        run: |
+          # Configure target Blender version (e.g., 4.2 LTS)
+          BLENDER_VERSION="5.0.1"
+          BLENDER_MAJOR_MINOR="5.0"
+          
+          # Detect runner architecture (arm64 for Apple Silicon, x86_64 for Intel)
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ]; then
+            BLENDER_ARCH="arm64"
+          else
+            BLENDER_ARCH="x64"
+          fi
+          
+          DMG_NAME="blender-${BLENDER_VERSION}-macos-${BLENDER_ARCH}.dmg"
+          URL="https://download.blender.org/release/Blender${BLENDER_MAJOR_MINOR}/${DMG_NAME}"
+          
+          echo "Downloading Blender for macOS ($ARCH)..."
+          curl -L -O "$URL"
+          
+          echo "Mounting DMG volume..."
+          sudo hdiutil attach "$DMG_NAME" -mountpoint /Volumes/Blender
+          
+          echo "Installing Blender.app to Applications directory..."
+          sudo cp -R /Volumes/Blender/Blender.app /Applications/
+          
+          echo "Unmounting DMG volume..."
+          sudo hdiutil detach /Volumes/Blender
+          
+          # Add Blender executable path to environment path
+          echo "/Applications/Blender.app/Contents/MacOS" >> $GITHUB_PATH
+          echo "BLENDER_VERSION_MM=${BLENDER_MAJOR_MINOR}" >> $GITHUB_ENV
+
+      - name: Download FieldForge Extension from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch matching release artifacts (assuming FieldForge-mac-*.zip naming convention)
+          gh release download ${{ github.event.inputs.version_tag }} \
+            --repo ${{ github.repository }} \
+            --pattern "FieldForge-mac-*.zip" \
+            --dir .
+          
+          # Locate the downloaded file dynamically
+          ZIP_FILE=$(find . -maxdepth 1 -name "FieldForge-mac-*.zip" -print -quit)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Error: No matching asset found for pattern 'FieldForge-mac-*.zip'"
+            exit 1
+          fi
+          echo "Detected asset: $ZIP_FILE"
+          echo "ADDON_ZIP=$ZIP_FILE" >> $GITHUB_ENV
+
+      - name: Run Integration Tests
+        run: |
+          # macOS specific preferences directory structure
+          ADDONS_DIR="$HOME/Library/Application Support/Blender/${{ env.BLENDER_VERSION_MM }}/scripts/addons"
+          echo "Preparing addon directory: $ADDONS_DIR"
+          mkdir -p "$ADDONS_DIR"
+          
+          # Extract the downloaded zip
+          unzip -q "${{ env.ADDON_ZIP }}" -d "$ADDONS_DIR"
+          
+          if [ ! -d "$ADDONS_DIR/FieldForge" ]; then
+              echo "Error: 'FieldForge' directory structure missing inside $ADDONS_DIR"
+              exit 1
+          fi
+          
+          # Set the target environment variable for outputs
+          export TEST_OUTPUT_DIR="$(pwd)"
+          
+          echo "Launching Blender headless test..."
+          Blender --background --python test_sdf.py
+          
+          # Verify the generation output file
+          if [ -f "$(pwd)/test_output.stl" ]; then
+              echo "Success: test_output.stl generated inside workspace."
+          else
+              echo "Error: No STL output was found after test execution."
+              exit 1
+          fi

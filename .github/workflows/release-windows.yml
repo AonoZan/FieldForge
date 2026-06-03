@@ -7,14 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Version tag to build (e.g., v1.0.0 or v1.1.0-beta)'
+        description: 'Version tag to build (e.g., v1.0.0)'
         required: true
         type: string
 
 env:
   LIBFIVE_CHECKOUT_DIR: libfive_src
   CMAKE_BUILD_TYPE: Release
-  LIBFIVE_COMMIT_SHA: 'b38f1f8b1318f03e6e6fcf816c1d8dc47109f7dd'
+  LIBFIVE_COMMIT_SHA: '379a54dbbdfd0724100baa6feddb7083ab0e6767'
   ADDON_NAME: FieldForge
   VCPKG_TRIPLET: x64-windows
 
@@ -34,6 +34,7 @@ jobs:
           ref: ${{ env.LIBFIVE_COMMIT_SHA }}
           path: ${{ env.LIBFIVE_CHECKOUT_DIR }}
           fetch-depth: 0
+
       - name: Exclude build directory from Defender
         shell: powershell
         run: |
@@ -41,7 +42,6 @@ jobs:
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
-        id: runvcpkg
         with:
           vcpkgGitCommitId: 'b322364f06308bdd24823f9d8f03fe0cc86fd46f'
           vcpkgDirectory: ${{ github.workspace }}/vcpkg_root
@@ -50,23 +50,26 @@ jobs:
       - name: Install dependencies
         shell: powershell
         run: |
-          & "$env:RUNVCPKG_VCPKG_ROOT\vcpkg.exe" install pkgconf eigen3 libpng zlib boost-math boost-algorithm boost-functional boost-lockfree boost-interval boost-bimap boost-container --triplet x64-windows --binarysource=clear
+          & "${{ github.workspace }}\vcpkg_root\vcpkg.exe" install pkgconf eigen3 libpng zlib boost-math boost-algorithm boost-functional boost-lockfree boost-interval boost-bimap boost-container --triplet ${{ env.VCPKG_TRIPLET }} --binarysource=clear
       
       - name: Enable Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
         
-      - name: Configure CMake
+      - name: Configure CMake (Forcing VS 2019 Toolset)
         shell: powershell
         run: |
+          # The -T v142 flag forces VS 2022 to use the VS 2019 compiler, matching your local build!
           cmake -S libfive_src -B build `
-          -G Ninja `
+          -G "Visual Studio 17 2022" -T v142 `
           -DCMAKE_BUILD_TYPE=Release `
+          -DBUILD_SHARED_LIBS=ON `
           -DBUILD_STUDIO_APP=OFF `
           -DBUILD_GUILE_BINDINGS=OFF `
           -DBUILD_PYTHON_BINDINGS=ON `
           -DENABLE_DEBUG=OFF `
-          -DCMAKE_TOOLCHAIN_FILE="$env:RUNVCPKG_VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_root/scripts/buildsystems/vcpkg.cmake" `
+          -DVCPKG_TARGET_TRIPLET=${{ env.VCPKG_TRIPLET }} `
+          -DCMAKE_CXX_FLAGS="/DEIGEN_MAX_ALIGN_BYTES=0 /DEIGEN_DONT_VECTORIZE=ON /D_CRT_SECURE_NO_WARNINGS"
 
       - name: Build libfive
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }} --parallel
@@ -85,54 +88,28 @@ jobs:
           else
             echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
           fi
-          echo "Determined version: ${{ env.VERSION }}"
         shell: bash
   
       - name: Prepare Staging Directory and Copy Addon Files
         run: |
-          $ErrorActionPreference = "Stop" # Stop on any error to catch issues
+          $ErrorActionPreference = "Stop"
           $stagingRoot = "staging"
           $addonDestDir = Join-Path -Path $stagingRoot -ChildPath "${{ env.ADDON_NAME }}"
       
-          # Ensure staging root exists
           if (-not (Test-Path $stagingRoot)) { mkdir $stagingRoot | Out-Null }
-      
-          # Clean up specific addon files, preserving libfive
           if (Test-Path $addonDestDir) {
-            Write-Host "Cleaning up existing addon files in: $addonDestDir (preserving libfive)"
             Get-ChildItem -Path $addonDestDir -Exclude "libfive" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          } else {
-            Write-Host "Creating addon destination: $addonDestDir"
-            mkdir $addonDestDir | Out-Null
-          }
+          } else { mkdir $addonDestDir | Out-Null }
       
-          # Use robocopy to copy source, excluding specified files and directories
-          Write-Host "Copying addon files from addon_code to $addonDestDir ..."
-          robocopy addon_code $addonDestDir /E `
-                   /XD .git* .github* `
-                   /XF .gitignore Example.blend README.md screenshot.png libfive Screenshot.xcf GEMINI.md*
+          robocopy addon_code $addonDestDir /E /XD .git* .github* tests /XF .gitignore Example.blend README.md screenshot.png libfive Screenshot.xcf GEMINI.md* demo.gif
+          if ($LASTEXITCODE -ge 8) { exit $LASTEXITCODE }
       
-          # Store the exit code immediately
-          $RoboExitCode = $LASTEXITCODE
-      
-          # Check Robocopy exit code (allow codes < 8)
-          if ($RoboExitCode -ge 8) {
-              Write-Error "Robocopy failed with exit code $RoboExitCode"
-              exit $RoboExitCode
-          } else {
-              Write-Host "Robocopy completed with exit code $RoboExitCode (considered success)."
-          }
-      
-          # Verify libfive directory structure exists
           $libfiveBase = Join-Path -Path $addonDestDir -ChildPath "libfive"
           $libfiveSrc = Join-Path -Path $libfiveBase -ChildPath "src"
           $libfiveStdlib = Join-Path -Path $libfiveBase -ChildPath "stdlib"
           if (-not (Test-Path $libfiveBase))   { mkdir $libfiveBase | Out-Null }
           if (-not (Test-Path $libfiveSrc))    { mkdir $libfiveSrc | Out-Null }
           if (-not (Test-Path $libfiveStdlib)) { mkdir $libfiveStdlib | Out-Null }
-          Write-Host "Ensured libfive directory structure exists in $addonDestDir"
-      
-          # Explicitly exit with success code
           exit 0
         shell: powershell
 
@@ -140,11 +117,6 @@ jobs:
         run: |
           $libfiveDest = "staging/${{ env.ADDON_NAME }}/libfive"
           $stdlibDest = "staging/${{ env.ADDON_NAME }}/libfive/stdlib"
-      
-          # Ensure target directories exist
-          if (-not (Test-Path $libfiveDest)) { mkdir $libfiveDest }
-          if (-not (Test-Path $stdlibDest)) { mkdir $stdlibDest }
-      
           Copy-Item build/libfive/bind/python/libfive/*.py $libfiveDest/
           Copy-Item build/libfive/bind/python/libfive/stdlib/*.py $stdlibDest/
         shell: powershell
@@ -154,22 +126,18 @@ jobs:
         run: |
           $buildDir = "build"
           $targetDir = "staging/FieldForge/libfive/src"
-          Copy-Item "$buildDir/libfive/src/libfive.dll" -Destination $targetDir -Force
-          Copy-Item "$buildDir/libfive/stdlib/libfive-stdlib.dll" -Destination $targetDir -Force
-          Copy-Item "$buildDir/custom_c_utils/custom_c_utils.dll" -Destination "$targetDir/libcustom_c_utils.dll" -Force
+          
+          Copy-Item "$buildDir/libfive/src/Release/libfive.dll" -Destination $targetDir -Force
+          Copy-Item "$buildDir/libfive/stdlib/Release/libfive-stdlib.dll" -Destination $targetDir -Force
+          Copy-Item "$buildDir/custom_c_utils/Release/custom_c_utils.dll" -Destination "$targetDir/libcustom_c_utils.dll" -Force
+          
+          $vcpkgBinDir = "${{ github.workspace }}/vcpkg_root/installed/${{ env.VCPKG_TRIPLET }}/bin"
+          Copy-Item "$vcpkgBinDir/libpng16.dll" -Destination $targetDir -Force
+          Copy-Item "$vcpkgBinDir/zlib1.dll" -Destination $targetDir -Force
 
       - name: Create Windows zip file (Using Tar)
         shell: powershell
-        run: |
-          tar -a -c -f "${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip" -C staging "${{ env.ADDON_NAME }}"
-      
-      - name: Debug Zip and Tag
-        run: |
-          echo "Checking if zip exists:"
-          dir "${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip"
-          echo "GitHub Event Name: ${{ github.event_name }}"
-          echo "Tag Name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version_tag || github.ref_name }}"
-        shell: powershell
+        run: tar -a -c -f "${{ env.ADDON_NAME }}-win-${{ env.VERSION }}.zip" -C staging "${{ env.ADDON_NAME }}"
       
       - name: Create Release and Upload Windows Asset
         uses: softprops/action-gh-release@v2

@@ -1,4 +1,4 @@
-name: Test SDF Extension
+name: Test SDF Extension (Windows)
 
 on:
   workflow_dispatch:
@@ -14,8 +14,108 @@ jobs:
     permissions:
       contents: read
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Download and Unzip Blender
+        run: |
+          # Configure target Blender version (e.g., 4.2 LTS)
+          BLENDER_VERSION="5.0.1"
+          BLENDER_MAJOR_MINOR="5.0"
+          
+          ZIP_NAME="blender-${BLENDER_VERSION}-windows-x64.zip"
+          URL="https://download.blender.org/release/Blender${BLENDER_MAJOR_MINOR}/${ZIP_NAME}"
+          
+          echo "Downloading Blender for Windows..."
+          curl -L -O "$URL"
+          
+          echo "Extracting Blender package..."
+          unzip -q "$ZIP_NAME"
+          
+          # Add Blender directory to system PATH
+          # Note: The unzip folder structure usually matches 'blender-VERSION-windows-x64'
+          echo "$(pwd)/blender-${BLENDER_VERSION}-windows-x64" >> $GITHUB_PATH
+          echo "BLENDER_VERSION_MM=${BLENDER_MAJOR_MINOR}" >> $GITHUB_ENV
+
+      - name: Download FieldForge Extension from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch matching release artifacts (assuming FieldForge-win-*.zip naming convention)
+          gh release download ${{ github.event.inputs.version_tag }} \
+            --repo ${{ github.repository }} \
+            --pattern "FieldForge-win-*.zip" \
+            --dir .
+          
+          # Locate the downloaded file dynamically
+          ZIP_FILE=$(find . -maxdepth 1 -name "FieldForge-win-*.zip" -print -quit)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Error: No matching asset found for pattern 'FieldForge-win-*.zip'"
+            exit 1
+          fi
+          echo "Detected asset: $ZIP_FILE"
+          echo "ADDON_ZIP=$ZIP_FILE" >> $GITHUB_ENV
       
+      - name: Inject Diagnostics into Test Script
+        run: |
+          python -c "
+          with open('test_sdf.py', 'r') as f:
+              lines = f.readlines()
+          
+          new_lines = []
+          for line in lines:
+              if 'mesh_data = final_combined_shape.get_mesh(' in line:
+                  # Detect the exact indentation of the target line
+                  indent = len(line) - len(line.lstrip())
+                  sp = ' ' * indent
+                  
+                  # Inject diagnostics with matching indentation
+                  new_lines.append(f'{sp}print(\"=== DIAGNOSTICS ===\")\n')
+                  new_lines.append(f'{sp}print(\"final_combined_shape:\", final_combined_shape)\n')
+                  new_lines.append(f'{sp}if final_combined_shape is not None:\n')
+                  new_lines.append(f'{sp}    print(\"final_combined_shape.ptr:\", getattr(final_combined_shape, \"ptr\", \"None\"))\n')
+                  new_lines.append(f'{sp}print(\"xyz_min:\", xyz_min)\n')
+                  new_lines.append(f'{sp}print(\"xyz_max:\", xyz_max)\n')
+                  new_lines.append(f'{sp}print(\"base_resolution_setting:\", base_resolution_setting)\n')
+                  new_lines.append(f'{sp}print(\"===================\")\n')
+              new_lines.append(line)
+              
+          with open('test_sdf.py', 'w') as f:
+              f.writelines(new_lines)
+          "
+
+      - name: Run Integration Tests
+        run: |
+          # Resolve the Windows AppData directory path to UNIX format
+          APPDATA_UNIX=$(cygpath "$APPDATA")
+          ADDONS_DIR="${APPDATA_UNIX}/Blender Foundation/Blender/${{ env.BLENDER_VERSION_MM }}/scripts/addons"
+          
+          echo "Preparing addon directory: $ADDONS_DIR"
+          mkdir -p "$ADDONS_DIR"
+          
+          # Extract the downloaded zip
+          unzip -q "${{ env.ADDON_ZIP }}" -d "$ADDONS_DIR"
+          
+          if [ ! -d "$ADDONS_DIR/FieldForge" ]; then
+              echo "Error: 'FieldForge' directory structure missing inside $ADDONS_DIR"
+              exit 1
+          fi
+          
+          # Set the target environment variable for outputs
+          export TEST_OUTPUT_DIR="$(pwd)"
+          
+          echo "Launching Blender headless test..."
+          blender.exe --background --python test_sdf.py
+          
+          # Verify the generation output file
+          if [ -f "$(pwd)/test_output.stl" ]; then
+              echo "Success: test_output.stl generated inside workspace."
+          else
+              echo "Error: No STL output was found after test execution."
+              exit 1
+          fi
