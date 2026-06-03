@@ -15,16 +15,19 @@ jobs:
       contents: write
     steps:
       - name: Download Release Asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          export GH_TOKEN=${{ secrets.GITHUB_TOKEN }}
-          
           gh release download ${{ inputs.version_tag }} \
+            --repo ${{ github.repository }} \
             --pattern "FieldForge-lin-*.zip" \
             --dir .
           gh release download ${{ inputs.version_tag }} \
+            --repo ${{ github.repository }} \
             --pattern "FieldForge-win-*.zip" \
             --dir .
           gh release download ${{ inputs.version_tag }} \
+            --repo ${{ github.repository }} \
             --pattern "FieldForge-mac-*.zip" \
             --dir .
 
@@ -46,6 +49,10 @@ jobs:
           cd ..
 
       - name: Upload as Release Asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload ${{ inputs.version_tag }} \
-            FieldForge-Blender-Extension-${{ inputs.version_tag }}.zip
+            FieldForge-Blender-Extension-${{ inputs.version_tag }}.zip \
+            --repo ${{ github.repository }} \
+            --clobber
