@@ -440,37 +440,32 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
 
     # Compare current state to the cached state
     cached_state = _sdf_update_caches.get(bounds_name)
-    if state.has_state_changed(current_state, cached_state):
-        # Check if the ONLY change is sdf_final_resolution for viewport updates
-        if cached_state is not None and \
-           len(current_state) == len(cached_state) and \
-           all(k in cached_state and current_state[k] == cached_state[k] for k in current_state if k != 'scene_settings') and \
-           current_state.get('scene_settings', {}).get('sdf_final_resolution') != cached_state.get('scene_settings', {}).get('sdf_final_resolution'):
-            return
+    if not state.has_state_changed(current_state, cached_state):
+        return
 
-        # Abort any progressive refinement steps scheduled for the outdated state
-        _cancel_progressive_timer(bounds_name)
+    # Abort any progressive refinement steps scheduled for the outdated state
+    _cancel_progressive_timer(bounds_name)
 
-        _current_divs[bounds_name] = MAX_DIV
-        _target_divs[bounds_name] = MIN_DIV
-        _update_progress[bounds_name] = 0.0
-        _update_type[bounds_name] = 'VIEWPORT'
+    _current_divs[bounds_name] = MAX_DIV
+    _target_divs[bounds_name] = MIN_DIV
+    _update_progress[bounds_name] = 0.0
+    _update_type[bounds_name] = 'VIEWPORT'
 
-        now = time.perf_counter()
-        last_time = _last_update_times.get(bounds_name, 0.0)
-        elapsed = now - last_time
+    now = time.perf_counter()
+    last_time = _last_update_times.get(bounds_name, 0.0)
+    elapsed = now - last_time
 
-        if elapsed >= THROTTLE_INTERVAL:
-            _last_update_times[bounds_name] = now
-            _cancel_debounce_timer(bounds_name)
-            run_sdf_update(bounds_name, current_state, is_viewport_update=True)
-        else:
-            remaining = THROTTLE_INTERVAL - elapsed
-            _register_debounce_timer(
-                bounds_name,
-                remaining,
-                lambda: _execute_debounced_update(bounds_name, current_state)
-            )
+    if elapsed >= THROTTLE_INTERVAL:
+        _last_update_times[bounds_name] = now
+        _cancel_debounce_timer(bounds_name)
+        run_sdf_update(bounds_name, current_state, is_viewport_update=True)
+    else:
+        remaining = THROTTLE_INTERVAL - elapsed
+        _register_debounce_timer(
+            bounds_name,
+            remaining,
+            lambda: _execute_debounced_update(bounds_name, current_state)
+        )
 
 def _execute_debounced_update(bounds_name: str, trigger_state: dict):
     global _last_update_times, _current_divs, _target_divs, _update_progress
