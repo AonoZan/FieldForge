@@ -132,7 +132,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                             value = round(float(value), 5)
                         props_to_track[key] = value
                 
-                obj_state = {'matrix': actual_child_obj.matrix_world.copy(), 'props': props_to_track}
+                obj_state = {'matrix': actual_child_obj.matrix_local.copy(), 'props': props_to_track}
                 current_state['source_objects'][child_name] = obj_state
                 queue.append(actual_child_obj)
 
@@ -145,7 +145,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                         if isinstance(default_val, float):
                             value = round(float(value), 5)
                         props_to_track_group[key] = value
-                group_obj_state = {'matrix': actual_child_obj.matrix_world.copy(), 'props': props_to_track_group}
+                group_obj_state = {'matrix': actual_child_obj.matrix_local.copy(), 'props': props_to_track_group}
                 current_state['group_objects'][child_name] = group_obj_state
                 queue.append(actual_child_obj)
 
@@ -158,7 +158,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                         if isinstance(default_val, float):
                             value = round(float(value), 5)
                         props_to_track_canvas[key] = value
-                canvas_obj_state = {'matrix': actual_child_obj.matrix_world.copy(), 'props': props_to_track_canvas}
+                canvas_obj_state = {'matrix': actual_child_obj.matrix_local.copy(), 'props': props_to_track_canvas}
                 current_state['canvas_objects'][child_name] = canvas_obj_state
                 queue.append(actual_child_obj)
             elif actual_child_obj.visible_get(view_layer=context.view_layer) and actual_child_obj.children:
@@ -169,23 +169,21 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
 def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
     """
     Compares the current state to the cached state for a specific bounds object.
-    Uses helper functions for tolerant comparison of matrices, vectors, floats.
-
-    Returns True if a relevant change is detected, False otherwise.
+    Excludes viewport and final resolution changes from triggering automatic updates.
     """
     if not current_state:
         return False # Cannot compare if no current state
     if not cached_state:
         return True # No cache exists, so state has effectively changed
 
-    # 1. Compare Settings stored on the bounds object
-    # Use utils.compare_dicts for tolerance
-    if not utils.compare_dicts(current_state.get('scene_settings'), cached_state.get('scene_settings')):
+    # 1. Compare Settings stored on the bounds object, excluding resolution parameters
+    cur_settings = {k: v for k, v in current_state.get('scene_settings', {}).items() if k not in {'sdf_viewport_resolution', 'sdf_final_resolution'}}
+    cac_settings = {k: v for k, v in cached_state.get('scene_settings', {}).items() if k not in {'sdf_viewport_resolution', 'sdf_final_resolution'}}
+    if not utils.compare_dicts(cur_settings, cac_settings):
         return True
 
-    # 2. Compare Bounds Matrix
-    # Use utils.compare_matrices for tolerance
-    if not utils.compare_matrices(current_state.get('bounds_matrix'), cached_state.get('bounds_matrix')):
+    # 2. Compare Bounds Matrix (with tolerant threshold)
+    if not utils.compare_matrices(current_state.get('bounds_matrix'), cached_state.get('bounds_matrix'), tolerance=1e-4):
         return True
 
     # 3. Compare the set of active source objects (keys of the dict)
@@ -204,12 +202,13 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
              return True
 
         # Compare matrix
-        if not utils.compare_matrices(current_obj_state.get('matrix'), cached_obj_state.get('matrix')):
+        if not utils.compare_matrices(current_obj_state.get('matrix'), cached_obj_state.get('matrix'), tolerance=1e-4):
             return True
         # Compare properties dict
         if not utils.compare_dicts(current_obj_state.get('props'), cached_obj_state.get('props')):
             return True
 
+    # 5. Compare group objects
     current_group_names = set(current_state.get('group_objects', {}).keys())
     cached_group_names = set(cached_state.get('group_objects', {}).keys())
     if current_group_names != cached_group_names:
@@ -219,11 +218,12 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
     for obj_name, current_group_obj_state in current_groups.items():
         cached_group_obj_state = cached_groups.get(obj_name)
         if not cached_group_obj_state: return True
-        if not utils.compare_matrices(current_group_obj_state.get('matrix'), cached_group_obj_state.get('matrix')):
+        if not utils.compare_matrices(current_group_obj_state.get('matrix'), cached_group_obj_state.get('matrix'), tolerance=1e-4):
             return True
         if not utils.compare_dicts(current_group_obj_state.get('props'), cached_group_obj_state.get('props')):
             return True
 
+    # 6. Compare canvas objects
     current_canvas_names = set(current_state.get('canvas_objects', {}).keys())
     cached_canvas_names = set(cached_state.get('canvas_objects', {}).keys())
     if current_canvas_names != cached_canvas_names:
@@ -233,7 +233,7 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
     for obj_name, current_canvas_obj_state in current_canvases.items():
         cached_canvas_obj_state = cached_canvases.get(obj_name)
         if not cached_canvas_obj_state: return True # Should be caught by key set check
-        if not utils.compare_matrices(current_canvas_obj_state.get('matrix'), cached_canvas_obj_state.get('matrix')):
+        if not utils.compare_matrices(current_canvas_obj_state.get('matrix'), cached_canvas_obj_state.get('matrix'), tolerance=1e-4):
             return True
         if not utils.compare_dicts(current_canvas_obj_state.get('props'), cached_canvas_obj_state.get('props')):
             return True

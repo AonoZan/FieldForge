@@ -63,11 +63,42 @@ _queued_updates = {}
 _current_divs = {}
 # Stores the target div for each bounds object (can be lower than current)
 _target_divs = {}
+# Explicitly stores the current progress ratio (0.0 to 1.0)
+_update_progress = {}
+# Tracks whether the current active pass is viewport-driven or manual
+_update_type = {}
 
 MAX_DIV = 5 # Corresponds to lowest resolution (highest div)
 MIN_DIV = 0 # Corresponds to highest resolution (lowest div)
 THROTTLE_INTERVAL = 0.15 # Minimum seconds between viewport updates during active dragging
 
+# --- Module State ---
+_progressive_timers = {} # Isolated storage for progressive refinement steps
+
+# --- Isolated Progressive Timers ---
+def _register_progressive_timer(bounds_name: str, delay: float, callback):
+    """Registers a progressive refinement timer, completely separate from drag debouncing."""
+    global _progressive_timers
+    _cancel_progressive_timer(bounds_name)
+
+    def timer_wrapper():
+        _progressive_timers.pop(bounds_name, None)
+        callback()
+        return None # Do not repeat
+
+    _progressive_timers[bounds_name] = timer_wrapper
+    bpy.app.timers.register(timer_wrapper, first_interval=delay)
+
+def _cancel_progressive_timer(bounds_name: str):
+    """Cancels any pending progressive refinement timer for this bounds."""
+    global _progressive_timers
+    timer_func = _progressive_timers.pop(bounds_name, None)
+    if timer_func:
+        try:
+            if bpy.app.timers.is_registered(timer_func):
+                bpy.app.timers.unregister(timer_func)
+        except Exception:
+            pass
 
 def clear_link_caches(): # Call from clear_timers_and_state
     state.clear_link_caches()
@@ -325,6 +356,7 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
     if not bounds_obj or not bounds_obj.get(constants.SDF_BOUNDS_MARKER):
         # Clean up potentially orphaned state if object is gone
         _cancel_debounce_timer(bounds_name)
+        _cancel_progressive_timer(bounds_name) # Cancel progressive timer
         _updates_pending.pop(bounds_name, None)
         _sdf_update_caches.pop(bounds_name, None)
         _active_meshing_threads.pop(bounds_name, None)
@@ -352,21 +384,23 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
            current_state.get('scene_settings', {}).get('sdf_final_resolution') != cached_state.get('scene_settings', {}).get('sdf_final_resolution'):
             return
 
-        # Prepare progressive rendering step values
+        # Abort any progressive refinement steps scheduled for the outdated state
+        _cancel_progressive_timer(bounds_name)
+
         _current_divs[bounds_name] = MAX_DIV
         _target_divs[bounds_name] = MIN_DIV
+        _update_progress[bounds_name] = 0.0
+        _update_type[bounds_name] = 'VIEWPORT'
 
         now = time.perf_counter()
         last_time = _last_update_times.get(bounds_name, 0.0)
         elapsed = now - last_time
 
         if elapsed >= THROTTLE_INTERVAL:
-            # Perform synchronous update immediately (throttled)
             _last_update_times[bounds_name] = now
             _cancel_debounce_timer(bounds_name)
             run_sdf_update(bounds_name, current_state, is_viewport_update=True)
         else:
-            # Postpone/debounce update until active dragging pauses
             remaining = THROTTLE_INTERVAL - elapsed
             _register_debounce_timer(
                 bounds_name,
@@ -375,7 +409,20 @@ def check_and_trigger_update(bounds_name: str, reason: str="unknown"):
             )
 
 def _execute_debounced_update(bounds_name: str, trigger_state: dict):
-    global _last_update_times
+    global _last_update_times, _current_divs, _target_divs, _update_progress
+    
+    cached_state = _sdf_update_caches.get(bounds_name)
+    
+    if not state.has_state_changed(trigger_state, cached_state):
+        return
+
+    # Abort any progressive refinement steps scheduled for the outdated state
+    _cancel_progressive_timer(bounds_name)
+
+    _current_divs[bounds_name] = MAX_DIV
+    _target_divs[bounds_name] = MIN_DIV
+    _update_progress[bounds_name] = 0.0
+
     _last_update_times[bounds_name] = time.perf_counter()
     run_sdf_update(bounds_name, trigger_state, is_viewport_update=True)
 
@@ -390,11 +437,11 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     if not _lf_imported_ok:
         return
 
-    global _updates_pending, _sdf_update_caches, _active_meshing_threads, _queued_updates
+    global _updates_pending, _sdf_update_caches, _active_meshing_threads, _queued_updates, _update_progress, _update_type
 
-    # If a meshing thread is already active, queue this update state and return
+    # If a meshing thread is already active, queue trigger state and the viewport update flag
     if bounds_name in _active_meshing_threads:
-        _queued_updates[bounds_name] = trigger_state
+        _queued_updates[bounds_name] = (trigger_state, is_viewport_update)
         return
 
     try:
@@ -547,22 +594,32 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         xyz_min = (min(c.x for c in world_corners), min(c.y for c in world_corners), min(c.z for c in world_corners))
         xyz_max = (max(c.x for c in world_corners), max(c.y for c in world_corners), max(c.z for c in world_corners))
         
-        # Adjust progressive division levels
-        if bounds_name not in _current_divs or bounds_name not in _target_divs:
-            if is_viewport_update:
+        # 1. Adjust progressive division levels and progress tracking
+        if is_viewport_update:
+            _update_type[bounds_name] = 'VIEWPORT'
+            if bounds_name not in _current_divs or bounds_name not in _target_divs:
                 _current_divs[bounds_name] = MAX_DIV
                 _target_divs[bounds_name] = MIN_DIV
-            else:
-                _current_divs[bounds_name] = MIN_DIV
-                _target_divs[bounds_name] = MIN_DIV
-        elif is_viewport_update and _current_divs[bounds_name] > _target_divs[bounds_name]:
-            _current_divs[bounds_name] -= 1
+            elif _current_divs[bounds_name] > _target_divs[bounds_name]:
+                _current_divs[bounds_name] -= 1
+            div_to_use = _current_divs[bounds_name]
+            
+            div_range = MAX_DIV - MIN_DIV
+            _update_progress[bounds_name] = (MAX_DIV - div_to_use) / div_range if div_range > 0 else 1.0
+        else:
+            _update_type[bounds_name] = 'MANUAL'
+            _current_divs[bounds_name] = MAX_DIV
+            _target_divs[bounds_name] = MIN_DIV
+            div_to_use = MIN_DIV
+            _update_progress[bounds_name] = 0.0
 
-        div_to_use = _current_divs[bounds_name]
+        # 2. Get the base resolution setting (viewport or final)
         base_resolution_setting = sdf_settings.get("sdf_viewport_resolution" if is_viewport_update else "sdf_final_resolution", 10)
+
+        # 3. Calculate actual resolution using the base resolution
         actual_resolution = max(3, int(base_resolution_setting / (1 << div_to_use)))
 
-        # Define the background worker logic
+        # 4. Define the background worker logic
         def _bg_meshing_worker():
             try:
                 t_mesh_start = time.perf_counter()
@@ -654,7 +711,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                     except Exception as e_col:
                         print(f"FieldForge ERROR: Color evaluation failed: {e_col}")
 
-                # Safely update Blender's mesh on the main thread
+               # Safely update Blender's mesh on the main thread
                 def main_thread_callback():
                     global _active_meshing_threads, _queued_updates, _updates_pending
                     try:
@@ -672,12 +729,39 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                         print(f"FieldForge ERROR: Failed to apply background mesh data: {e_apply}")
                     finally:
                         _active_meshing_threads.pop(bounds_name, None)
-                        _updates_pending[bounds_name] = False
+                        
+                        if is_viewport_update:
+                            _updates_pending[bounds_name] = False
+                        else:
+                            # Keep it showing Green (100%) for 0.5 seconds so the user gets a clear success cue
+                            def delay_clear_pending():
+                                _updates_pending[bounds_name] = False
+                                _current_divs[bounds_name] = 0
+                                try:
+                                    from .. import drawing
+                                    drawing.tag_redraw_all_view3d()
+                                except Exception:
+                                    pass
+                                return None
+                            bpy.app.timers.register(delay_clear_pending, first_interval=0.5)
 
                         # Trigger the next queued update if states changed during worker thread runtime
-                        next_state = _queued_updates.pop(bounds_name, None)
-                        if next_state:
-                            run_sdf_update(bounds_name, next_state, is_viewport_update=is_viewport_update)
+                        queued_item = _queued_updates.pop(bounds_name, None)
+                        if queued_item:
+                            next_state, next_is_viewport = queued_item
+                            
+                            # Discard the queued update if we have already successfully finalized the exact same state
+                            cached_state = _sdf_update_caches.get(bounds_name)
+                            if next_is_viewport and _current_divs.get(bounds_name, MAX_DIV) == MIN_DIV and not state.has_state_changed(next_state, cached_state):
+                                pass 
+                            else:
+                                # A true state change is present in the queued update.
+                                # Reset progressive refinement so the new state compiles progressively starting at MAX_DIV.
+                                if next_is_viewport:
+                                    _current_divs[bounds_name] = MAX_DIV
+                                    _target_divs[bounds_name] = MIN_DIV
+                                    _update_progress[bounds_name] = 0.0
+                                run_sdf_update(bounds_name, next_state, is_viewport_update=next_is_viewport)
                     return None
 
                 bpy.app.timers.register(main_thread_callback)
@@ -703,20 +787,26 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
 
 
 def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: float, actual_rendered_div: int, is_viewport_update: bool, colors_data=None):
-    global _current_divs, _target_divs
+    global _current_divs, _target_divs, _update_progress, _update_type
     bounds_name = bounds_obj.name
     context = bpy.context
     scene = context.scene
 
-    _current_divs[bounds_name] = actual_rendered_div
-
     # Adaptive progressive level updates
     if is_viewport_update:
+        _current_divs[bounds_name] = actual_rendered_div
+        div_range = MAX_DIV - MIN_DIV
+        _update_progress[bounds_name] = (MAX_DIV - actual_rendered_div) / div_range if div_range > 0 else 1.0
+
         target_div = _target_divs.get(bounds_name, MIN_DIV)
-        if meshing_time < 0.05: # Fast evaluation, allow higher quality
+        if meshing_time < 0.05:
             _target_divs[bounds_name] = max(MIN_DIV, target_div - 1)
-        elif meshing_time > 0.5: # Slow evaluation, keep resolution lower
+        elif meshing_time > 0.5:
             _target_divs[bounds_name] = min(MAX_DIV, target_div + 1)
+    else:
+        # Manual update completed successfully, set progress to 100% (Green)
+        _current_divs[bounds_name] = MIN_DIV
+        _update_progress[bounds_name] = 1.0
 
     sdf_settings_from_bounds = trigger_state.get('scene_settings')
     result_name = bounds_obj.get(constants.SDF_RESULT_OBJ_NAME_PROP)
@@ -844,12 +934,14 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
 
     # Schedule progressive refinement to higher resolution steps
     if is_viewport_update and _current_divs.get(bounds_name, MAX_DIV) > _target_divs.get(bounds_name, MIN_DIV):
-        if utils.get_bounds_setting(bounds_obj, "sdf_auto_update"):
-            _register_debounce_timer(
-                bounds_name,
-                0.01,
-                lambda: run_sdf_update(bounds_name, trigger_state, is_viewport_update)
-            )
+        # Skip progressive refinement of this state if a newer state is already queued
+        if bounds_name not in _queued_updates:
+            if utils.get_bounds_setting(bounds_obj, "sdf_auto_update"):
+                _register_progressive_timer(
+                    bounds_name,
+                    0.01,
+                    lambda: run_sdf_update(bounds_name, trigger_state, is_viewport_update)
+                )
 
 
 # --- Scene Update Handler (Dependency Graph) ---
@@ -955,11 +1047,13 @@ def initial_update_check_all():
 
 def clear_timers_and_state():
     """Cancels all active timers and clears global state dictionaries."""
-    global _updates_pending, _sdf_update_caches, _serialized_tree_caches, _current_divs, _target_divs, _last_update_times, _debounce_timers, _active_meshing_threads, _queued_updates
+    global _updates_pending, _sdf_update_caches, _serialized_tree_caches, _current_divs, _target_divs, _last_update_times, _debounce_timers, _active_meshing_threads, _queued_updates, _update_progress, _update_type, _progressive_timers
     
-    # Cancel all active debounce timers safely
+    # Cancel all active progressive and debounce timers safely
     for bounds_name in list(_debounce_timers.keys()):
         _cancel_debounce_timer(bounds_name)
+    for bounds_name in list(_progressive_timers.keys()):
+        _cancel_progressive_timer(bounds_name)
 
     _updates_pending.clear()
     _sdf_update_caches.clear()
@@ -967,7 +1061,10 @@ def clear_timers_and_state():
     _target_divs.clear()
     _last_update_times.clear()
     _debounce_timers.clear()
+    _progressive_timers.clear()
     _active_meshing_threads.clear()
     _queued_updates.clear()
+    _update_progress.clear()
+    _update_type.clear()
 
     clear_link_caches()

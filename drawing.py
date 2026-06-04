@@ -20,6 +20,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 import math
+import time
 from mathutils import Vector
 
 from . import constants
@@ -31,8 +32,83 @@ _draw_handle = None
 # Double Buffering for picking data to avoid race conditions with event handlers
 _draw_line_data_read = {}  # Data for event handlers to read (stable from previous frame)
 _draw_line_data_write = {} # Data for draw callback to write to (current frame)
+_geometry_cache = {}       # Cached geometry data per object
+_animation_timer_registered = False # Tracks if continuous animation redraw is active
 
 # --- Drawing Helpers ---
+
+def _animation_redraw_check():
+    """
+    Timer function that forces viewport redraws for smooth flashing animations
+    only while a background update is actively running. Unregisters itself
+    when updates finish.
+    """
+    global _animation_timer_registered
+    context = bpy.context
+    if not context or not context.scene:
+        _animation_timer_registered = False
+        return None
+
+    try:
+        from .core import update_manager
+        any_updating = False
+        for obj in context.scene.objects:
+            if obj.get(constants.SDF_BOUNDS_MARKER, False):
+                bounds_name = obj.name
+                if update_manager._updates_pending.get(bounds_name, False) or update_manager._current_divs.get(bounds_name, 0) > 0:
+                    any_updating = True
+                    break
+
+        if any_updating:
+            tag_redraw_all_view3d()
+            return 0.033 # Redraw ~30 FPS for animation fluidity
+    except Exception:
+        pass
+
+    _animation_timer_registered = False
+    return None
+
+def get_object_geom_state(obj, camera_location, is_persp) -> tuple:
+    """
+    Returns a state signature tuple consisting of the object's matrix_world copy,
+    relevant custom properties, and camera location/perspective mode (if view-dependent).
+    """
+    sdf_type = obj.get("sdf_type", "NONE")
+    props = (
+        sdf_type,
+        obj.get("sdf_round_radius", None),
+        obj.get("sdf_inner_radius", None),
+        obj.get("sdf_sides", None),
+        obj.get("sdf_text_string", None),
+        obj.get("sdf_torus_major_radius", None),
+        obj.get("sdf_torus_minor_radius", None),
+    )
+    if sdf_type in {"cylinder", "cone"}:
+        cam_val = tuple(camera_location) if camera_location is not None else None
+        return (obj.matrix_world.copy(), props, cam_val, is_persp)
+    else:
+        return (obj.matrix_world.copy(), props)
+
+def is_cache_valid(cached_state: tuple, current_state: tuple) -> bool:
+    """ Compares two state signature tuples to determine if cached geometry is valid. """
+    if len(cached_state) != len(current_state):
+        return False
+        
+    if not utils.compare_matrices(cached_state[0], current_state[0]):
+        return False
+        
+    if cached_state[1] != current_state[1]:
+        return False
+        
+    if len(cached_state) > 2:
+        cached_cam, cached_persp = cached_state[2], cached_state[3]
+        current_cam, current_persp = current_state[2], current_state[3]
+        if cached_persp != current_persp:
+            return False
+        if cached_cam != current_cam:
+            return False
+            
+    return True
 
 def offset_vertices(vertices, region_data: bpy.types.RegionView3D, camera_loc: Vector, offset_factor: float) -> list:
     """
@@ -90,9 +166,10 @@ def tag_redraw_all_view3d():
     except Exception: pass
 
 def clear_draw_data():
-    """Clears the internal write buffer and the shared WM property."""
-    global _draw_line_data_write
+    """Clears the internal write buffer, the geometry cache, and the shared WM property."""
+    global _draw_line_data_write, _geometry_cache
     _draw_line_data_write.clear()
+    _geometry_cache.clear()
 
     wm = getattr(bpy.context, 'window_manager', None)
     if wm and "fieldforge_draw_data" in wm:
@@ -102,14 +179,310 @@ def clear_draw_data():
             pass
 
 
+def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
+    """ Generates geometry data for drawing and selection purposes. """
+    line_segments_for_picking_for_this_obj = []
+    # This list will store all vertices for drawing this object if it's selected/active
+    # For indexed shapes like cube, this won't be used directly for batch creation.
+    all_world_verts_for_batch_if_selected = [] 
+    
+    # Specific storage for indexed shapes (like cube)
+    indexed_world_verts = None # e.g., list of Vector for cube vertices
+    indices_for_batch = None   # e.g., constants.unit_cube_indices
+    # --- Generate Geometry Data ---
+    # Cube
+    if sdf_type_prop == "cube":
+        indices_for_batch = constants.unit_cube_indices # Store for later
+        local_verts=[Vector(v) for v in constants.unit_cube_verts]
+        indexed_world_verts =[(mat @ v.to_4d()).xyz.copy() for v in local_verts] # Store for later
+        if indexed_world_verts:
+            for i,j in indices_for_batch:
+                if i<len(indexed_world_verts) and j<len(indexed_world_verts): 
+                    line_segments_for_picking_for_this_obj.append((indexed_world_verts[i].copy(), indexed_world_verts[j].copy()))
+    # Sphere
+    elif sdf_type_prop == "sphere":
+        seg=24; r=0.5; lx=Vector((1,0,0)); ly=Vector((0,1,0)); lz=Vector((0,0,1))
+        loops=[[(lx*math.cos(a)+ly*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]],
+               [(ly*math.cos(a)+lz*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]],
+               [(lx*math.cos(a)+lz*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]]]
+        for local_v_loop in loops:
+            if not local_v_loop: continue
+            world_l=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_loop] 
+            if world_l:
+                for i in range(len(world_l)): 
+                    v1=world_l[i]; v2=world_l[(i+1)%len(world_l)]
+                    line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                    all_world_verts_for_batch_if_selected.extend([v1,v2])
+    # Cylinder
+    elif sdf_type_prop == "cylinder":
+        seg=16; l_top, l_bot = utils.create_unit_cylinder_cap_vertices(seg)
+        w_top_cyl=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_top]; 
+        w_bot_cyl=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_bot]
+        if w_top_cyl:
+            for i in range(len(w_top_cyl)): 
+                v1=w_top_cyl[i]; v2=w_top_cyl[(i+1)%len(w_top_cyl)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+        if w_bot_cyl:
+            for i in range(len(w_bot_cyl)): 
+                v1=w_bot_cyl[i]; v2=w_bot_cyl[(i+1)%len(w_bot_cyl)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+        if w_top_cyl and w_bot_cyl: 
+            try:
+                z_ax=mat.col[2].xyz.normalized()
+                obj_loc_cyl = mat.translation
+                view_origin = camera_location if camera_location else Vector((0,0,10)) 
+                view_d=(obj_loc_cyl - view_origin)
+                view_d.z=0; 
+                view_dir_normalized = view_d.normalized() if view_d.length > 1e-5 else Vector((1,0,0))
+                r_dir=z_ax.cross(view_dir_normalized).normalized()
+                t_max=-float('inf'); b_max=-float('inf'); t_min=float('inf'); b_min=float('inf')
+                t_pr=w_top_cyl[0]; t_pl=w_top_cyl[0]; b_pr=w_bot_cyl[0]; b_pl=w_bot_cyl[0]
+                for i in range(len(w_top_cyl)): 
+                    dt=w_top_cyl[i].dot(r_dir); db=w_bot_cyl[i].dot(r_dir) 
+                    if dt > t_max: t_max = dt; t_pr = w_top_cyl[i]
+                    if dt < t_min: t_min = dt; t_pl = w_top_cyl[i]
+                    if db > b_max: b_max = db; b_pr = w_bot_cyl[i]
+                    if db < b_min: b_min = db; b_pl = w_bot_cyl[i]
+                sides_d_cyl=[t_pr, b_pr, t_pl, b_pl] # Corrected order for two lines
+                line_segments_for_picking_for_this_obj.append((t_pr.copy(), b_pr.copy()))
+                line_segments_for_picking_for_this_obj.append((t_pl.copy(), b_pl.copy()))
+                all_world_verts_for_batch_if_selected.extend(sides_d_cyl)
+            except Exception as e_calc: print(f"FF Draw Calc Error (Cyl Sides): {obj.name} - {e_calc}")
+    # Cone
+    elif sdf_type_prop == "cone":
+        seg=16; h_draw_cone=1.0; apex_z_local_cone=h_draw_cone; base_z_local_cone=0.0; 
+        l_bot_raw_cone=utils.create_unit_circle_vertices_xy(seg)
+        l_bot_transformed_z_cone = [(v[0], v[1], base_z_local_cone) for v in l_bot_raw_cone]
+        w_bot_cone=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_bot_transformed_z_cone]
+        if w_bot_cone:
+            for i in range(len(w_bot_cone)): 
+                v1=w_bot_cone[i]; v2=w_bot_cone[(i+1)%len(w_bot_cone)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+        w_apex_cone = (mat @ Vector((0,0,apex_z_local_cone)).to_4d()).xyz.copy()
+        if w_bot_cone: 
+            try:
+                obj_loc_cone = mat.translation
+                center_base_cone=(mat @ Vector((0,0,base_z_local_cone)).to_4d()).xyz
+                view_origin_cone = camera_location if camera_location else Vector((0,0,10))
+                view_dir_cone=(obj_loc_cone - view_origin_cone)
+                view_dir_cone.z=0; 
+                view_dir_normalized_cone = view_dir_cone.normalized() if view_dir_cone.length > 1e-5 else Vector((1,0,0))
+                z_axis_cone=mat.col[2].xyz.normalized()
+                right_dir_cone=z_axis_cone.cross(view_dir_normalized_cone).normalized()
+                b_max_cone=-float('inf'); b_min_cone=float('inf')
+                b_pr_cone=w_bot_cone[0]; b_pl_cone=w_bot_cone[0]
+                for v_base_world_cone in w_bot_cone:
+                    db_cone = v_base_world_cone.dot(right_dir_cone)
+                    if db_cone > b_max_cone: b_max_cone = db_cone; b_pr_cone = v_base_world_cone
+                    if db_cone < b_min_cone: b_min_cone = db_cone; b_pl_cone = v_base_world_cone
+                sides_d_cone=[w_apex_cone, b_pr_cone, w_apex_cone, b_pl_cone]
+                line_segments_for_picking_for_this_obj.append((w_apex_cone.copy(), b_pr_cone.copy()))
+                line_segments_for_picking_for_this_obj.append((w_apex_cone.copy(), b_pl_cone.copy()))
+                all_world_verts_for_batch_if_selected.extend(sides_d_cone)
+            except Exception as e_calc: print(f"FF Draw Calc Error (Cone Sides): {obj.name} - {e_calc}")
+    # Pyramid
+    elif sdf_type_prop == "pyramid":
+        local_base_verts_pyramid = [
+            Vector((-0.5, -0.5, 0.0)), Vector(( 0.5, -0.5, 0.0)),
+            Vector(( 0.5,  0.5, 0.0)), Vector((-0.5,  0.5, 0.0))
+        ]
+        local_apex_pyramid = Vector((0.0, 0.0, 1.0))
+
+        world_base_verts_pyramid = [(mat @ v.to_4d()).xyz.copy() for v in local_base_verts_pyramid]
+        world_apex_pyramid = (mat @ local_apex_pyramid.to_4d()).xyz.copy()
+
+        for i in range(len(world_base_verts_pyramid)):
+            v1 = world_base_verts_pyramid[i]
+            v2 = world_base_verts_pyramid[(i + 1) % len(world_base_verts_pyramid)]
+            line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
+            all_world_verts_for_batch_if_selected.extend([v1, v2])
+        
+        for v_base in world_base_verts_pyramid:
+            line_segments_for_picking_for_this_obj.append((v_base.copy(), world_apex_pyramid.copy()))
+            all_world_verts_for_batch_if_selected.extend([v_base, world_apex_pyramid])
+    # Rounded box
+    elif sdf_type_prop == "rounded_box":
+        cs = 4
+        roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
+        effective_prop_for_draw = min(max(roundness_prop, 0.0), 0.5)
+        internal_draw_radius = effective_prop_for_draw * (0.25 / 0.5)
+
+        lx = Vector((1, 0, 0)); ly = Vector((0, 1, 0)); lz = Vector((0, 0, 1))
+        loops = [
+            utils.create_unit_rounded_rectangle_plane(lx, ly, internal_draw_radius, cs), # XY
+            utils.create_unit_rounded_rectangle_plane(lx, lz, internal_draw_radius, cs), # XZ
+            utils.create_unit_rounded_rectangle_plane(ly, lz, internal_draw_radius, cs), # YZ
+        ]
+        for local_v_loop in loops:
+            if not local_v_loop: continue
+            world_loop = [(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_loop]
+            if world_loop:
+                for i in range(len(world_loop)):
+                    v1 = world_loop[i]
+                    v2 = world_loop[(i + 1) % len(world_loop)]
+                    line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
+                    all_world_verts_for_batch_if_selected.extend([v1, v2])
+    # Circle
+    elif sdf_type_prop == "circle":
+        seg_circle=24; local_v_circle=utils.create_unit_circle_vertices_xy(seg_circle)
+        world_o_circle=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_circle]
+        if world_o_circle:
+            for i in range(len(world_o_circle)): 
+                v1=world_o_circle[i]; v2=world_o_circle[(i+1)%len(world_o_circle)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+    # Ring
+    elif sdf_type_prop == "ring":
+        seg_ring=24; r_o_ring=0.5; 
+        r_i_prop_ring = obj.get("sdf_inner_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_inner_radius"])
+        r_i_ring = max(0.0, min(float(r_i_prop_ring), r_o_ring - 1e-5))
+        l_outer_local_xy_ring=utils.create_unit_circle_vertices_xy(seg_ring)
+        l_inner_local_xy_ring=[(v[0]*r_i_ring/r_o_ring, v[1]*r_i_ring/r_o_ring, 0.0) for v in l_outer_local_xy_ring] if r_i_ring > 1e-6 else []
+        w_outer_ring=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_outer_local_xy_ring]; 
+        w_inner_ring=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_inner_local_xy_ring]
+        if w_outer_ring:
+            for i in range(len(w_outer_ring)): 
+                v1=w_outer_ring[i]; v2=w_outer_ring[(i+1)%len(w_outer_ring)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+        if w_inner_ring:
+            for i in range(len(w_inner_ring)): 
+                v1=w_inner_ring[i]; v2=w_inner_ring[(i+1)%len(w_inner_ring)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+    # Polygon
+    elif sdf_type_prop == "polygon":
+        sides_poly = max(3, obj.get("sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"]))
+        local_v_poly=utils.create_unit_polygon_vertices_xy(sides_poly)
+        world_o_poly=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_poly]
+        if world_o_poly:
+            for i in range(len(world_o_poly)): 
+                v1=world_o_poly[i]; v2=world_o_poly[(i+1)%len(world_o_poly)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+    # Text
+    elif sdf_type_prop == "text":
+        text_string = obj.get("sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
+        if text_string.strip():
+            # Approximate unit bounds for text (height ~1, width estimated)
+            # This matches the rough centering in reconstruct_shape
+            num_chars = len(text_string)
+            est_unit_width = num_chars * 0.7  # Very rough estimate
+            est_unit_height = 1.0 # Based on libfive's font definition
+
+            half_w = est_unit_width / 2.0
+            half_h = est_unit_height / 2.0
+
+            # Local corners of the bounding box (2D in XY plane, centered around where text starts)
+            # The text in reconstruct_shape starts at (-est_width/2, -0.5)
+            # So the box should be relative to that.
+            # If text starts at (sx, sy) and has width w, height h, then box is
+            # (sx, sy), (sx+w, sy), (sx+w, sy+h), (sx, sy+h)
+            # Our start_pos_x = -half_w, start_pos_y = -0.5 (baseline)
+            # So, local corners are approximately:
+            # (-half_w, -0.5) , (half_w, -0.5), (half_w, 0.5), (-half_w, 0.5)
+            # This centers the box horizontally and makes its vertical center at y=0
+            local_rect_verts = [
+                Vector((-half_w, -half_h, 0.0)), Vector(( half_w, -half_h, 0.0)),
+                Vector(( half_w,  half_h, 0.0)), Vector((-half_w,  half_h, 0.0))
+            ]
+            
+            world_rect_verts = [(mat @ v.to_4d()).xyz.copy() for v in local_rect_verts]
+
+            if world_rect_verts:
+                for i in range(len(world_rect_verts)):
+                    v1 = world_rect_verts[i]
+                    v2 = world_rect_verts[(i + 1) % len(world_rect_verts)]
+                    line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
+                    all_world_verts_for_batch_if_selected.extend([v1, v2])
+    # Half space
+    elif sdf_type_prop == "half_space":
+        draw_plane_size_hs=2.0; arrow_len_factor_hs=0.5 
+        plane_verts_local_hs = [
+            Vector(( draw_plane_size_hs/2,  draw_plane_size_hs/2, 0)), Vector((-draw_plane_size_hs/2,  draw_plane_size_hs/2, 0)),
+            Vector((-draw_plane_size_hs/2, -draw_plane_size_hs/2, 0)), Vector(( draw_plane_size_hs/2, -draw_plane_size_hs/2, 0)) ]
+        plane_verts_world_hs = [(mat @ v.to_4d()).xyz for v in plane_verts_local_hs]
+        if plane_verts_world_hs:
+            for i in range(len(plane_verts_world_hs)): 
+                v1=plane_verts_world_hs[i]; v2=plane_verts_world_hs[(i+1)%len(plane_verts_world_hs)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+        arrow_start_local_hs = Vector((0,0,0)); arrow_end_local_hs = Vector((0,0, arrow_len_factor_hs))
+        arrow_start_world_hs = (mat @ arrow_start_local_hs.to_4d()).xyz; arrow_end_world_hs = (mat @ arrow_end_local_hs.to_4d()).xyz
+        arrow_head_size_hs = arrow_len_factor_hs * 0.2
+        ah1_local_hs = Vector(( arrow_head_size_hs,0,arrow_len_factor_hs-arrow_head_size_hs*1.5)); ah2_local_hs = Vector((-arrow_head_size_hs,0,arrow_len_factor_hs-arrow_head_size_hs*1.5))
+        ah3_local_hs = Vector((0,arrow_head_size_hs,arrow_len_factor_hs-arrow_head_size_hs*1.5)); ah4_local_hs = Vector((0,-arrow_head_size_hs,arrow_len_factor_hs-arrow_head_size_hs*1.5))
+        ah1w = (mat @ ah1_local_hs.to_4d()).xyz; ah2w = (mat @ ah2_local_hs.to_4d()).xyz; ah3w = (mat @ ah3_local_hs.to_4d()).xyz; ah4w = (mat @ ah4_local_hs.to_4d()).xyz
+        hs_arrow_lines = [
+            (arrow_start_world_hs, arrow_end_world_hs), (arrow_end_world_hs, ah1w),
+            (arrow_end_world_hs, ah2w), (arrow_end_world_hs, ah3w), (arrow_end_world_hs, ah4w) ]
+        for v_start, v_end in hs_arrow_lines:
+            line_segments_for_picking_for_this_obj.append((v_start.copy(), v_end.copy()))
+            all_world_verts_for_batch_if_selected.extend([v_start, v_end])
+    # Torus
+    elif sdf_type_prop == "torus":
+        mseg_torus=24; minor_seg_torus=12
+        r_maj_torus=max(0.01,float(obj.get("sdf_torus_major_radius",0.35))) # Ensure float conversion
+        r_min_torus=max(0.005,float(obj.get("sdf_torus_minor_radius",0.15))) # Ensure float conversion
+        r_min_torus=min(r_min_torus, r_maj_torus-1e-5)
+        
+        # Main ring
+        l_main_local_torus=[(math.cos(a)*r_maj_torus, math.sin(a)*r_maj_torus, 0.0) for a in [(i/mseg_torus)*2*math.pi for i in range(mseg_torus)]]
+        w_main_torus=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_main_local_torus]
+        if w_main_torus:
+            for i in range(len(w_main_torus)): 
+                v1=w_main_torus[i]; v2=w_main_torus[(i+1)%len(w_main_torus)]
+                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                all_world_verts_for_batch_if_selected.extend([v1,v2])
+        
+        # Minor rings
+        if r_min_torus > 1e-5:
+            # Original logic for l_centers, l_tangents, l_axis1
+            l_centers_local_torus=[Vector((0,r_maj_torus,0)),Vector((0,-r_maj_torus,0)),Vector((r_maj_torus,0,0)),Vector((-r_maj_torus,0,0))]
+            l_tangents_local_torus=[Vector((1,0,0)),Vector((-1,0,0)),Vector((0,1,0)),Vector((0,-1,0))]
+            l_axis1_local_torus=Vector((0,0,1)) # Z-axis for XY plane circles
+
+            for i, l_center_local in enumerate(l_centers_local_torus):
+                l_tangent_local=l_tangents_local_torus[i]
+                l_axis2_local=l_tangent_local.cross(l_axis1_local_torus).normalized() # Plane for minor circle
+
+                # Generate points for this minor circle
+                l_minor_local_points = []
+                for j in range(minor_seg_torus):
+                    angle_minor = (j/minor_seg_torus)*2*math.pi
+                    # Point on the minor circle in its local plane, then add center
+                    point = l_center_local + (l_axis1_local_torus * math.cos(angle_minor) + l_axis2_local * math.sin(angle_minor)) * r_min_torus
+                    l_minor_local_points.append(point)
+
+                w_minor_torus_points=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_minor_local_points]
+                if w_minor_torus_points:
+                    for k in range(len(w_minor_torus_points)): 
+                        v1=w_minor_torus_points[k]; v2=w_minor_torus_points[(k+1)%len(w_minor_torus_points)]
+                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
+                        all_world_verts_for_batch_if_selected.extend([v1,v2])
+
+    return (
+        line_segments_for_picking_for_this_obj,
+        all_world_verts_for_batch_if_selected,
+        indexed_world_verts,
+        indices_for_batch
+    )
+
+
 # --- Main Draw Callback ---
 
 def ff_draw_callback():
     """Draw callback function - Iterates through scene objects using bpy.context"""
-    global _draw_line_data_write # Access write buffer
+    global _draw_line_data_write, _geometry_cache, _animation_timer_registered
     context = bpy.context
-    wm = getattr(context, 'window_manager', None) # Get WM early
+    wm = getattr(context, 'window_manager', None)
     scene = getattr(context, 'scene', None)
+
+    # Resolve local imports to prevent packaging/circular import chains
+    from .core import update_manager
 
     space_data = None; area = context.area
     if area and area.type == 'VIEW_3D': space_data = area.spaces.active
@@ -156,8 +529,73 @@ def ff_draw_callback():
     DEPTH_OFFSET_FACTOR = 0.01
 
     # --- Prepare Data Storage ---
-    _draw_line_data_write.clear() # Clear the WRITE buffer
+    _draw_line_data_write.clear()
     active_object = getattr(context.view_layer.objects, 'active', None)
+    seen_objects = set()
+    any_updating = False
+
+    # --- SDF Bounds Visual Cues (Flashing and Color Transition) ---
+    for obj in scene.objects:
+        try:
+            if obj.get(constants.SDF_BOUNDS_MARKER, False):
+                bounds_name = obj.name
+                is_pending = update_manager._updates_pending.get(bounds_name, False)
+                current_div = update_manager._current_divs.get(bounds_name, 0)
+                update_type = update_manager._update_type.get(bounds_name, 'VIEWPORT')
+
+                if is_pending or (update_type == 'VIEWPORT' and current_div > 0):
+                    any_updating = True
+                    
+                    # Pre-calculated RGB color steps matching divisions 0 to 5
+                    div_colors = (
+                        (0.0, 1.0, 0.0),  # DIV 0: Pure Green (100% completed)
+                        (0.4, 1.0, 0.0),  # DIV 1: Lime Green
+                        (0.8, 1.0, 0.0),  # DIV 2: Yellow-Green
+                        (1.0, 0.8, 0.0),  # DIV 3: Yellow
+                        (1.0, 0.4, 0.0),  # DIV 4: Orange
+                        (1.0, 0.0, 0.0)   # DIV 5: Pure Red (0% progress)
+                    )
+                    
+                    # Securely clamp the division index to [0, 5]
+                    color_idx = max(0, min(5, current_div))
+                    r, g, b = div_colors[color_idx]
+                    
+                    # 2 Hz slow pulsing animation on opacity
+                    flash_freq = 2.0
+                    flash = 0.2 + 0.8 * (0.5 + 0.5 * math.sin(time.time() * 2.0 * math.pi * flash_freq))
+                    bounds_color = (r, g, b, flash)
+
+                    mat = obj.matrix_world
+                    local_verts = [
+                        Vector((-1.0, -1.0, -1.0)), Vector(( 1.0, -1.0, -1.0)),
+                        Vector((-1.0,  1.0, -1.0)), Vector(( 1.0,  1.0, -1.0)),
+                        Vector((-1.0, -1.0,  1.0)), Vector(( 1.0, -1.0,  1.0)),
+                        Vector((-1.0,  1.0,  1.0)), Vector(( 1.0,  1.0,  1.0))
+                    ]
+                    world_verts = [(mat @ v.to_4d()).xyz.copy() for v in local_verts]
+                    
+                    offset_v = offset_vertices(world_verts, region_3d, camera_location, DEPTH_OFFSET_FACTOR)
+                    
+                    # Explicitly map the 12 edges of our local coordinate sequence to avoid crosses
+                    bounds_box_indices = [
+                        (0, 1), (1, 3), (3, 2), (2, 0), # Bottom face
+                        (4, 5), (5, 7), (7, 6), (6, 4), # Top face
+                        (0, 4), (1, 5), (2, 6), (3, 7)  # Vertical pillars
+                    ]
+                    
+                    try:
+                        batch = batch_for_shader(shader, 'LINES', {"pos": offset_v}, indices=bounds_box_indices)
+                        shader.uniform_float("color", bounds_color)
+                        batch.draw(shader)
+                    except Exception as e_bounds:
+                        print(f"FF Draw Bounds Outline Error: {bounds_name} - {e_bounds}")
+        except Exception:
+            pass
+
+    # --- Keep Redrawing While Animation is Active ---
+    if any_updating and not _animation_timer_registered:
+        _animation_timer_registered = True
+        bpy.app.timers.register(_animation_redraw_check, first_interval=0.033)
 
     # --- Gather data loop ---
     for obj in scene.objects:
@@ -167,298 +605,39 @@ def ff_draw_callback():
             if not utils.is_sdf_source(obj): continue
             parent_bounds = utils.find_parent_bounds(obj)
             if not parent_bounds or not utils.get_bounds_setting(parent_bounds, "sdf_show_source_empties"): continue
-            sdf_type_prop = obj.get("sdf_type", "NONE");
+            sdf_type_prop = obj.get("sdf_type", "NONE")
             if sdf_type_prop == "NONE": continue
 
-            obj_name=obj.name; is_selected=obj.select_get(); is_active=(active_object==obj)
+            obj_name = obj.name
+            seen_objects.add(obj_name)
+            is_selected = obj.select_get()
+            is_active = (active_object == obj)
 
-            line_segments_for_picking_for_this_obj = []
-            # This list will store all vertices for drawing this object if it's selected/active
-            # For indexed shapes like cube, this won't be used directly for batch creation.
-            all_world_verts_for_batch_if_selected = [] 
-            
-            # Specific storage for indexed shapes (like cube)
-            indexed_world_verts = None # e.g., list of Vector for cube vertices
-            indices_for_batch = None   # e.g., constants.unit_cube_indices
+            mat = obj.matrix_world
+            primitive_type = 'LINES'
 
-            mat=obj.matrix_world
-            primitive_type='LINES'
+            is_persp = getattr(region_3d, 'is_perspective', True)
+            current_state = get_object_geom_state(obj, camera_location, is_persp)
 
-            # --- Generate Geometry Data ---
-            # Cube
-            if sdf_type_prop == "cube":
-                indices_for_batch = constants.unit_cube_indices # Store for later
-                local_verts=[Vector(v) for v in constants.unit_cube_verts]
-                indexed_world_verts =[(mat @ v.to_4d()).xyz.copy() for v in local_verts] # Store for later
-                if indexed_world_verts:
-                    for i,j in indices_for_batch:
-                        if i<len(indexed_world_verts) and j<len(indexed_world_verts): 
-                            line_segments_for_picking_for_this_obj.append((indexed_world_verts[i].copy(), indexed_world_verts[j].copy()))
-            # Sphere
-            elif sdf_type_prop == "sphere":
-                seg=24; r=0.5; lx=Vector((1,0,0)); ly=Vector((0,1,0)); lz=Vector((0,0,1))
-                loops=[[(lx*math.cos(a)+ly*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]],
-                       [(ly*math.cos(a)+lz*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]],
-                       [(lx*math.cos(a)+lz*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]]]
-                for local_v_loop in loops:
-                    if not local_v_loop: continue
-                    world_l=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_loop] 
-                    if world_l:
-                        for i in range(len(world_l)): 
-                            v1=world_l[i]; v2=world_l[(i+1)%len(world_l)]
-                            line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                            all_world_verts_for_batch_if_selected.extend([v1,v2])
-            # Cylinder
-            elif sdf_type_prop == "cylinder":
-                seg=16; l_top, l_bot = utils.create_unit_cylinder_cap_vertices(seg)
-                w_top_cyl=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_top]; 
-                w_bot_cyl=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_bot]
-                if w_top_cyl:
-                    for i in range(len(w_top_cyl)): 
-                        v1=w_top_cyl[i]; v2=w_top_cyl[(i+1)%len(w_top_cyl)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-                if w_bot_cyl:
-                    for i in range(len(w_bot_cyl)): 
-                        v1=w_bot_cyl[i]; v2=w_bot_cyl[(i+1)%len(w_bot_cyl)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-                if w_top_cyl and w_bot_cyl: 
-                    try:
-                        z_ax=mat.col[2].xyz.normalized()
-                        obj_loc_cyl = mat.translation
-                        view_origin = camera_location if camera_location else Vector((0,0,10)) 
-                        view_d=(obj_loc_cyl - view_origin)
-                        view_d.z=0; 
-                        view_dir_normalized = view_d.normalized() if view_d.length > 1e-5 else Vector((1,0,0))
-                        r_dir=z_ax.cross(view_dir_normalized).normalized()
-                        t_max=-float('inf'); b_max=-float('inf'); t_min=float('inf'); b_min=float('inf')
-                        t_pr=w_top_cyl[0]; t_pl=w_top_cyl[0]; b_pr=w_bot_cyl[0]; b_pl=w_bot_cyl[0]
-                        for i in range(len(w_top_cyl)): 
-                            dt=w_top_cyl[i].dot(r_dir); db=w_bot_cyl[i].dot(r_dir) 
-                            if dt > t_max: t_max = dt; t_pr = w_top_cyl[i]
-                            if dt < t_min: t_min = dt; t_pl = w_top_cyl[i]
-                            if db > b_max: b_max = db; b_pr = w_bot_cyl[i]
-                            if db < b_min: b_min = db; b_pl = w_bot_cyl[i]
-                        sides_d_cyl=[t_pr, b_pr, t_pl, b_pl] # Corrected order for two lines
-                        line_segments_for_picking_for_this_obj.append((t_pr.copy(), b_pr.copy()))
-                        line_segments_for_picking_for_this_obj.append((t_pl.copy(), b_pl.copy()))
-                        all_world_verts_for_batch_if_selected.extend(sides_d_cyl)
-                    except Exception as e_calc: print(f"FF Draw Calc Error (Cyl Sides): {obj_name} - {e_calc}")
-            # Cone
-            elif sdf_type_prop == "cone":
-                seg=16; h_draw_cone=1.0; apex_z_local_cone=h_draw_cone; base_z_local_cone=0.0; 
-                l_bot_raw_cone=utils.create_unit_circle_vertices_xy(seg)
-                l_bot_transformed_z_cone = [(v[0], v[1], base_z_local_cone) for v in l_bot_raw_cone]
-                w_bot_cone=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_bot_transformed_z_cone]
-                if w_bot_cone:
-                    for i in range(len(w_bot_cone)): 
-                        v1=w_bot_cone[i]; v2=w_bot_cone[(i+1)%len(w_bot_cone)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-                w_apex_cone = (mat @ Vector((0,0,apex_z_local_cone)).to_4d()).xyz.copy()
-                if w_bot_cone: 
-                    try:
-                        obj_loc_cone = mat.translation
-                        center_base_cone=(mat @ Vector((0,0,base_z_local_cone)).to_4d()).xyz
-                        view_origin_cone = camera_location if camera_location else Vector((0,0,10))
-                        view_dir_cone=(obj_loc_cone - view_origin_cone)
-                        view_dir_cone.z=0; 
-                        view_dir_normalized_cone = view_dir_cone.normalized() if view_dir_cone.length > 1e-5 else Vector((1,0,0))
-                        z_axis_cone=mat.col[2].xyz.normalized()
-                        right_dir_cone=z_axis_cone.cross(view_dir_normalized_cone).normalized()
-                        b_max_cone=-float('inf'); b_min_cone=float('inf')
-                        b_pr_cone=w_bot_cone[0]; b_pl_cone=w_bot_cone[0];
-                        for v_base_world_cone in w_bot_cone:
-                            db_cone = v_base_world_cone.dot(right_dir_cone)
-                            if db_cone > b_max_cone: b_max_cone = db_cone; b_pr_cone = v_base_world_cone
-                            if db_cone < b_min_cone: b_min_cone = db_cone; b_pl_cone = v_base_world_cone
-                        sides_d_cone=[w_apex_cone, b_pr_cone, w_apex_cone, b_pl_cone]
-                        line_segments_for_picking_for_this_obj.append((w_apex_cone.copy(), b_pr_cone.copy()))
-                        line_segments_for_picking_for_this_obj.append((w_apex_cone.copy(), b_pl_cone.copy()))
-                        all_world_verts_for_batch_if_selected.extend(sides_d_cone)
-                    except Exception as e_calc: print(f"FF Draw Calc Error (Cone Sides): {obj_name} - {e_calc}")
-            # Pyramid
-            elif sdf_type_prop == "pyramid":
-                local_base_verts_pyramid = [
-                    Vector((-0.5, -0.5, 0.0)), Vector(( 0.5, -0.5, 0.0)),
-                    Vector(( 0.5,  0.5, 0.0)), Vector((-0.5,  0.5, 0.0))
-                ]
-                local_apex_pyramid = Vector((0.0, 0.0, 1.0))
-
-                world_base_verts_pyramid = [(mat @ v.to_4d()).xyz.copy() for v in local_base_verts_pyramid]
-                world_apex_pyramid = (mat @ local_apex_pyramid.to_4d()).xyz.copy()
-
-                for i in range(len(world_base_verts_pyramid)):
-                    v1 = world_base_verts_pyramid[i]
-                    v2 = world_base_verts_pyramid[(i + 1) % len(world_base_verts_pyramid)]
-                    line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
-                    all_world_verts_for_batch_if_selected.extend([v1, v2])
+            cached_entry = _geometry_cache.get(obj_name)
+            if cached_entry and is_cache_valid(cached_entry['state'], current_state):
+                line_segments_for_picking_for_this_obj = cached_entry['line_segments']
+                all_world_verts_for_batch_if_selected = cached_entry['all_world_verts']
+                indexed_world_verts = cached_entry['indexed_world_verts']
+                indices_for_batch = cached_entry['indices']
+                primitive_type = cached_entry['primitive_type']
+            else:
+                line_segments_for_picking_for_this_obj, all_world_verts_for_batch_if_selected, indexed_world_verts, indices_for_batch = generate_geometry_data(obj, sdf_type_prop, mat, camera_location)
                 
-                for v_base in world_base_verts_pyramid:
-                    line_segments_for_picking_for_this_obj.append((v_base.copy(), world_apex_pyramid.copy()))
-                    all_world_verts_for_batch_if_selected.extend([v_base, world_apex_pyramid])
-            # Rounded box
-            elif sdf_type_prop == "rounded_box":
-                cs = 4
-                roundness_prop = obj.get("sdf_round_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_round_radius"])
-                effective_prop_for_draw = min(max(roundness_prop, 0.0), 0.5)
-                internal_draw_radius = effective_prop_for_draw * (0.25 / 0.5)
+                _geometry_cache[obj_name] = {
+                    'state': current_state,
+                    'line_segments': line_segments_for_picking_for_this_obj,
+                    'all_world_verts': all_world_verts_for_batch_if_selected,
+                    'indexed_world_verts': indexed_world_verts,
+                    'indices': indices_for_batch,
+                    'primitive_type': primitive_type
+                }
 
-                lx = Vector((1, 0, 0)); ly = Vector((0, 1, 0)); lz = Vector((0, 0, 1))
-                loops = [
-                    utils.create_unit_rounded_rectangle_plane(lx, ly, internal_draw_radius, cs), # XY
-                    utils.create_unit_rounded_rectangle_plane(lx, lz, internal_draw_radius, cs), # XZ
-                    utils.create_unit_rounded_rectangle_plane(ly, lz, internal_draw_radius, cs), # YZ
-                ]
-                for local_v_loop in loops:
-                    if not local_v_loop: continue
-                    world_loop = [(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_loop]
-                    if world_loop:
-                        for i in range(len(world_loop)):
-                            v1 = world_loop[i]
-                            v2 = world_loop[(i + 1) % len(world_loop)]
-                            line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
-                            all_world_verts_for_batch_if_selected.extend([v1, v2])
-            # Circle
-            elif sdf_type_prop == "circle":
-                seg_circle=24; local_v_circle=utils.create_unit_circle_vertices_xy(seg_circle)
-                world_o_circle=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_circle]
-                if world_o_circle:
-                    for i in range(len(world_o_circle)): 
-                        v1=world_o_circle[i]; v2=world_o_circle[(i+1)%len(world_o_circle)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-            # Ring
-            elif sdf_type_prop == "ring":
-                seg_ring=24; r_o_ring=0.5; 
-                r_i_prop_ring = obj.get("sdf_inner_radius", constants.DEFAULT_SOURCE_SETTINGS["sdf_inner_radius"])
-                r_i_ring = max(0.0, min(float(r_i_prop_ring), r_o_ring - 1e-5))
-                l_outer_local_xy_ring=utils.create_unit_circle_vertices_xy(seg_ring)
-                l_inner_local_xy_ring=[(v[0]*r_i_ring/r_o_ring, v[1]*r_i_ring/r_o_ring, 0.0) for v in l_outer_local_xy_ring] if r_i_ring > 1e-6 else []
-                w_outer_ring=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_outer_local_xy_ring]; 
-                w_inner_ring=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_inner_local_xy_ring]
-                if w_outer_ring:
-                    for i in range(len(w_outer_ring)): 
-                        v1=w_outer_ring[i]; v2=w_outer_ring[(i+1)%len(w_outer_ring)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-                if w_inner_ring:
-                    for i in range(len(w_inner_ring)): 
-                        v1=w_inner_ring[i]; v2=w_inner_ring[(i+1)%len(w_inner_ring)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-            # Polygon
-            elif sdf_type_prop == "polygon":
-                sides_poly = max(3, obj.get("sdf_sides", constants.DEFAULT_SOURCE_SETTINGS["sdf_sides"]))
-                local_v_poly=utils.create_unit_polygon_vertices_xy(sides_poly)
-                world_o_poly=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_poly]
-                if world_o_poly:
-                    for i in range(len(world_o_poly)): 
-                        v1=world_o_poly[i]; v2=world_o_poly[(i+1)%len(world_o_poly)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-            # Text
-            elif sdf_type_prop == "text":
-                text_string = obj.get("sdf_text_string", constants.DEFAULT_SOURCE_SETTINGS["sdf_text_string"])
-                if not text_string.strip(): continue # Don't draw if empty
-
-                # Approximate unit bounds for text (height ~1, width estimated)
-                # This matches the rough centering in reconstruct_shape
-                num_chars = len(text_string)
-                est_unit_width = num_chars * 0.7  # Very rough estimate
-                est_unit_height = 1.0 # Based on libfive's font definition
-
-                half_w = est_unit_width / 2.0
-                half_h = est_unit_height / 2.0
-
-                # Local corners of the bounding box (2D in XY plane, centered around where text starts)
-                # The text in reconstruct_shape starts at (-est_width/2, -0.5)
-                # So the box should be relative to that.
-                # If text starts at (sx, sy) and has width w, height h, then box is
-                # (sx, sy), (sx+w, sy), (sx+w, sy+h), (sx, sy+h)
-                # Our start_pos_x = -half_w, start_pos_y = -0.5 (baseline)
-                # So, local corners are approximately:
-                # (-half_w, -0.5) , (half_w, -0.5), (half_w, 0.5), (-half_w, 0.5)
-                # This centers the box horizontally and makes its vertical center at y=0
-                local_rect_verts = [
-                    Vector((-half_w, -half_h, 0.0)), Vector(( half_w, -half_h, 0.0)),
-                    Vector(( half_w,  half_h, 0.0)), Vector((-half_w,  half_h, 0.0))
-                ]
-                
-                world_rect_verts = [(mat @ v.to_4d()).xyz.copy() for v in local_rect_verts]
-
-                if world_rect_verts:
-                    for i in range(len(world_rect_verts)):
-                        v1 = world_rect_verts[i]
-                        v2 = world_rect_verts[(i + 1) % len(world_rect_verts)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(), v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1, v2])
-            # Half space
-            elif sdf_type_prop == "half_space":
-                draw_plane_size_hs=2.0; arrow_len_factor_hs=0.5 
-                plane_verts_local_hs = [
-                    Vector(( draw_plane_size_hs/2,  draw_plane_size_hs/2, 0)), Vector((-draw_plane_size_hs/2,  draw_plane_size_hs/2, 0)),
-                    Vector((-draw_plane_size_hs/2, -draw_plane_size_hs/2, 0)), Vector(( draw_plane_size_hs/2, -draw_plane_size_hs/2, 0)) ]
-                plane_verts_world_hs = [(mat @ v.to_4d()).xyz for v in plane_verts_local_hs]
-                if plane_verts_world_hs:
-                    for i in range(len(plane_verts_world_hs)): 
-                        v1=plane_verts_world_hs[i]; v2=plane_verts_world_hs[(i+1)%len(plane_verts_world_hs)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-                arrow_start_local_hs = Vector((0,0,0)); arrow_end_local_hs = Vector((0,0, arrow_len_factor_hs))
-                arrow_start_world_hs = (mat @ arrow_start_local_hs.to_4d()).xyz; arrow_end_world_hs = (mat @ arrow_end_local_hs.to_4d()).xyz
-                arrow_head_size_hs = arrow_len_factor_hs * 0.2
-                ah1_local_hs = Vector(( arrow_head_size_hs,0,arrow_len_factor_hs-arrow_head_size_hs*1.5)); ah2_local_hs = Vector((-arrow_head_size_hs,0,arrow_len_factor_hs-arrow_head_size_hs*1.5))
-                ah3_local_hs = Vector((0,arrow_head_size_hs,arrow_len_factor_hs-arrow_head_size_hs*1.5)); ah4_local_hs = Vector((0,-arrow_head_size_hs,arrow_len_factor_hs-arrow_head_size_hs*1.5))
-                ah1w = (mat @ ah1_local_hs.to_4d()).xyz; ah2w = (mat @ ah2_local_hs.to_4d()).xyz; ah3w = (mat @ ah3_local_hs.to_4d()).xyz; ah4w = (mat @ ah4_local_hs.to_4d()).xyz
-                hs_arrow_lines = [
-                    (arrow_start_world_hs, arrow_end_world_hs), (arrow_end_world_hs, ah1w),
-                    (arrow_end_world_hs, ah2w), (arrow_end_world_hs, ah3w), (arrow_end_world_hs, ah4w) ]
-                for v_start, v_end in hs_arrow_lines:
-                    line_segments_for_picking_for_this_obj.append((v_start.copy(), v_end.copy()))
-                    all_world_verts_for_batch_if_selected.extend([v_start, v_end])
-            # Torus
-            elif sdf_type_prop == "torus":
-                mseg_torus=24; minor_seg_torus=12
-                r_maj_torus=max(0.01,float(obj.get("sdf_torus_major_radius",0.35))) # Ensure float conversion
-                r_min_torus=max(0.005,float(obj.get("sdf_torus_minor_radius",0.15))) # Ensure float conversion
-                r_min_torus=min(r_min_torus, r_maj_torus-1e-5)
-                
-                # Main ring
-                l_main_local_torus=[(math.cos(a)*r_maj_torus, math.sin(a)*r_maj_torus, 0.0) for a in [(i/mseg_torus)*2*math.pi for i in range(mseg_torus)]]
-                w_main_torus=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_main_local_torus]
-                if w_main_torus:
-                    for i in range(len(w_main_torus)): 
-                        v1=w_main_torus[i]; v2=w_main_torus[(i+1)%len(w_main_torus)]
-                        line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                        all_world_verts_for_batch_if_selected.extend([v1,v2])
-                
-                # Minor rings
-                if r_min_torus > 1e-5:
-                    # Original logic for l_centers, l_tangents, l_axis1
-                    l_centers_local_torus=[Vector((0,r_maj_torus,0)),Vector((0,-r_maj_torus,0)),Vector((r_maj_torus,0,0)),Vector((-r_maj_torus,0,0))]
-                    l_tangents_local_torus=[Vector((1,0,0)),Vector((-1,0,0)),Vector((0,1,0)),Vector((0,-1,0))]
-                    l_axis1_local_torus=Vector((0,0,1)) # Z-axis for XY plane circles
-
-                    for i, l_center_local in enumerate(l_centers_local_torus):
-                        l_tangent_local=l_tangents_local_torus[i]
-                        l_axis2_local=l_tangent_local.cross(l_axis1_local_torus).normalized() # Plane for minor circle
-
-                        # Generate points for this minor circle
-                        l_minor_local_points = []
-                        for j in range(minor_seg_torus):
-                            angle_minor = (j/minor_seg_torus)*2*math.pi
-                            # Point on the minor circle in its local plane, then add center
-                            point = l_center_local + (l_axis1_local_torus * math.cos(angle_minor) + l_axis2_local * math.sin(angle_minor)) * r_min_torus
-                            l_minor_local_points.append(point)
-
-                        w_minor_torus_points=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_minor_local_points]
-                        if w_minor_torus_points:
-                            for k in range(len(w_minor_torus_points)): 
-                                v1=w_minor_torus_points[k]; v2=w_minor_torus_points[(k+1)%len(w_minor_torus_points)]
-                                line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
-                                all_world_verts_for_batch_if_selected.extend([v1,v2])
             if line_segments_for_picking_for_this_obj:
                 _draw_line_data_write[obj.name] = line_segments_for_picking_for_this_obj
 
@@ -489,6 +668,9 @@ def ff_draw_callback():
         except Exception as e_prop:
              print(f"FF Draw ERROR: Failed to set WM property: {e_prop}")
         finally: # Restore state
+            for name in list(_geometry_cache.keys()):
+                if name not in seen_objects:
+                    del _geometry_cache[name]
             if old_line_width is not None: gpu.state.line_width_set(old_line_width)
             if old_blend is not None: gpu.state.blend_set(old_blend)
             if old_depth_test is not None: gpu.state.depth_test_set(old_depth_test)
