@@ -1,4 +1,4 @@
-name: Test SDF Extension (macOS)
+name: Test SDF Extension on MacOS
 
 on:
   workflow_dispatch:

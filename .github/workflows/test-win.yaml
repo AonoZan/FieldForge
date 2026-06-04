@@ -1,4 +1,4 @@
-name: Test SDF Extension (Windows)
+name: Test SDF Extension on Windows
 
 on:
   workflow_dispatch:
