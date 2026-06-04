@@ -61,34 +61,6 @@ jobs:
           echo "Detected asset: $ZIP_FILE"
           echo "ADDON_ZIP=$ZIP_FILE" >> $GITHUB_ENV
       
-      - name: Inject Diagnostics into Test Script
-        run: |
-          python -c "
-          with open('test_sdf.py', 'r') as f:
-              lines = f.readlines()
-          
-          new_lines = []
-          for line in lines:
-              if 'mesh_data = final_combined_shape.get_mesh(' in line:
-                  # Detect the exact indentation of the target line
-                  indent = len(line) - len(line.lstrip())
-                  sp = ' ' * indent
-                  
-                  # Inject diagnostics with matching indentation
-                  new_lines.append(f'{sp}print(\"=== DIAGNOSTICS ===\")\n')
-                  new_lines.append(f'{sp}print(\"final_combined_shape:\", final_combined_shape)\n')
-                  new_lines.append(f'{sp}if final_combined_shape is not None:\n')
-                  new_lines.append(f'{sp}    print(\"final_combined_shape.ptr:\", getattr(final_combined_shape, \"ptr\", \"None\"))\n')
-                  new_lines.append(f'{sp}print(\"xyz_min:\", xyz_min)\n')
-                  new_lines.append(f'{sp}print(\"xyz_max:\", xyz_max)\n')
-                  new_lines.append(f'{sp}print(\"base_resolution_setting:\", base_resolution_setting)\n')
-                  new_lines.append(f'{sp}print(\"===================\")\n')
-              new_lines.append(line)
-              
-          with open('test_sdf.py', 'w') as f:
-              f.writelines(new_lines)
-          "
-
       - name: Run Integration Tests
         run: |
           # Resolve the Windows AppData directory path to UNIX format
