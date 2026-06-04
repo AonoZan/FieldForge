@@ -76,6 +76,15 @@ THROTTLE_INTERVAL = 0.15 # Minimum seconds between viewport updates during activ
 _progressive_timers = {} # Isolated storage for progressive refinement steps
 _hierarchy_tree_cache = {} # dict: {bounds_name: (signature, HierarchyNode_root)}
 
+def get_inverted_matrix(obj, inv_cache: dict) -> Matrix:
+    """Retrieves the inverted world matrix of an object, caching the result to avoid redundant inversions."""
+    obj_ptr = obj.as_pointer()
+    inv = inv_cache.get(obj_ptr)
+    if inv is None:
+        inv = obj.matrix_world.inverted()
+        inv_cache[obj_ptr] = inv
+    return inv
+
 class HierarchyNode:
     """A lightweight, pure-Python tree representation of an SDF object node."""
     def __init__(self, obj, parent_node=None):
@@ -200,20 +209,20 @@ def _cancel_debounce_timer(bounds_name: str):
         except Exception:
             pass
 
-def _gather_from_node_tree(node, transform_matrix_inv, active_array_params, active_group, context, results):
+def _gather_from_node_tree(node, transform_matrix_inv, active_array_params, active_group, context, results, inv_cache):
     """Traverses the pre-compiled pure-Python tree, computing only active world matrices."""
     if not node.obj or not node.obj.visible_get(view_layer=context.view_layer):
         return
 
     if node.is_source:
-        base_inv = node.obj.matrix_world.inverted()
+        base_inv = get_inverted_matrix(node.obj, inv_cache)
         effective_inv = base_inv @ transform_matrix_inv
         results.append((node.obj, effective_inv, active_array_params.copy(), active_group))
 
     elif node.is_canvas:
         for child_node in node.children:
             if child_node.is_source and child_node.obj.get("sdf_type") in constants._2D_SHAPE_TYPES:
-                base_inv = child_node.obj.matrix_world.inverted()
+                base_inv = get_inverted_matrix(child_node.obj, inv_cache)
                 effective_inv = base_inv @ transform_matrix_inv
                 results.append((child_node.obj, effective_inv, active_array_params.copy(), active_group))
 
@@ -228,7 +237,7 @@ def _gather_from_node_tree(node, transform_matrix_inv, active_array_params, acti
             array_mode = utils.get_sdf_param(node.obj, "sdf_main_array_mode", 'NONE')
             if array_mode != 'NONE':
                 child_group = node.obj
-                child_group_inv = node.obj.matrix_world.inverted()
+                child_group_inv = get_inverted_matrix(node.obj, inv_cache)
                 child_array_params['mode'] = array_mode
                 center_on_origin = utils.get_sdf_param(node.obj, "sdf_array_center_on_origin", True)
                 
@@ -291,27 +300,25 @@ def _gather_from_node_tree(node, transform_matrix_inv, active_array_params, acti
                         child_array_params['radial_child_x'] = child_local_pos.x
                         child_array_params['radial_child_y'] = child_local_pos.y
                         
-        _gather_from_node_tree(child_node, transform_matrix_inv, child_array_params, child_group, context, results)
+        _gather_from_node_tree(child_node, transform_matrix_inv, child_array_params, child_group, context, results, inv_cache)
 
     # Recurse linked node children if active
     if node.linked_target and node.processes_linked_children:
         W_target = node.linked_target.matrix_world
-        W_linker_inv = node.obj.matrix_world.inverted()
+        W_linker_inv = get_inverted_matrix(node.obj, inv_cache)
         reparent_inv = W_target @ W_linker_inv
         new_transform_inv = reparent_inv @ transform_matrix_inv
         
         for l_child_node in node.linked_children:
-            _gather_from_node_tree(l_child_node, new_transform_inv, active_array_params, active_group, context, results)
+            _gather_from_node_tree(l_child_node, new_transform_inv, active_array_params, active_group, context, results, inv_cache)
 
-def _gather_leaf_shapes_and_properties(obj, context):
-    """Gathers leaf shapes and properties using the high-performance compiled tree cache."""
+def _gather_leaf_shapes_and_properties(obj, context) -> tuple[list, dict]:
+    """Gathers leaf shapes and properties, returning the list and the unified inversion cache."""
     global _hierarchy_tree_cache
     bounds_name = obj.name
     
-    # 1. Get current structural signature
     current_sig = get_hierarchy_signature(obj)
     
-    # 2. Rebuild pure-Python tree ONLY on cache miss
     cached_item = _hierarchy_tree_cache.get(bounds_name)
     if cached_item and cached_item[0] == current_sig:
         root_node = cached_item[1]
@@ -319,8 +326,8 @@ def _gather_leaf_shapes_and_properties(obj, context):
         root_node = build_hierarchy_tree(obj)
         _hierarchy_tree_cache[bounds_name] = (current_sig, root_node)
     
-    # 3. Perform flat, high-performance evaluation of matrices/parameters
     results = []
+    inv_cache = {}
     default_params = {
         'mode': 'NONE',
         'nx': 1, 'ny': 1, 'nz': 1,
@@ -330,8 +337,8 @@ def _gather_leaf_shapes_and_properties(obj, context):
         'radial_cx': 0.0, 'radial_cy': 0.0,
         'radial_child_x': 0.0, 'radial_child_y': 0.0
     }
-    _gather_from_node_tree(root_node, Matrix.Identity(4), default_params, None, context, results)
-    return results
+    _gather_from_node_tree(root_node, Matrix.Identity(4), default_params, None, context, results, inv_cache)
+    return results, inv_cache
 
 
 def _ensure_sdf_material(result_obj: bpy.types.Object):
@@ -517,15 +524,15 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         if final_combined_shape is None:
             final_combined_shape = lf.emptiness()
 
-        # Gather color-related properties safely on the main thread (replaces raw _gather_leaf_shapes)
+        # Gather color-related properties safely on the main thread and receive inverse cache
         import libfive.ffi as lf_ffi
-        gathered_data = _gather_leaf_shapes_and_properties(bounds_obj, context)
+        gathered_data, inv_cache = _gather_leaf_shapes_and_properties(bounds_obj, context)
         num_sdfs = len(gathered_data)
 
         sdf_bytes_list = []
         sdf_sizes = []
         matrices_list = []
-        child_matrices_list = [] # local transition matrices from group space to child space
+        child_matrices_list = []
         colors_list = []
         
         # Parallel arrays for modifier parameters (Direction C)
@@ -552,7 +559,6 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         radial_children_y_list = []
 
         for src, effective_inv, array_params, group_obj in gathered_data:
-            # Resolve the effective linked object to read properties from (important for individual linked shapes)
             effective_src = utils.get_effective_sdf_object(src)
             if not effective_src:
                 effective_src = src
@@ -560,9 +566,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
             unit_shape = sdf_logic.reconstruct_shape(effective_src)
             serialized = None
             
-            # Resolve tree pointer robustly via our helper
             tree_ptr = _resolve_tree_pointer(unit_shape)
-
             if tree_ptr is not None:
                 serialized = lf_ffi.serialize_tree(tree_ptr)
             
@@ -576,9 +580,9 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                 sdf_bytes_list.append(serialized)
                 sdf_sizes.append(len(serialized))
 
-                # Compute group inverse and local transition matrix
+                # Compute group inverse and local transition matrix using the cache
                 if group_obj is not None:
-                    m_group_inv = group_obj.matrix_world.inverted()
+                    m_group_inv = get_inverted_matrix(group_obj, inv_cache)
                     m_group_to_child = effective_inv @ group_obj.matrix_world
                 else:
                     m_group_inv = effective_inv
