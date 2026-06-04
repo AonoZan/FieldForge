@@ -40,6 +40,25 @@ _draw_handle = None
 _draw_line_data_read = {}  # Stable data for event handlers to read (pointer-swapped)
 _draw_line_data_write = {} # Data for active draw callback to write to
 
+def _precompute_sphere_loops(seg=24, r=0.5) -> tuple:
+    """Pre-computes local wireframe loop vertices for a sphere."""
+    lx = Vector((1, 0, 0)); ly = Vector((0, 1, 0)); lz = Vector((0, 0, 1))
+    angles = [(i / seg) * 2 * math.pi for i in range(seg)]
+    return (
+        [Vector((lx * math.cos(a) + ly * math.sin(a)) * r) for a in angles],
+        [Vector((ly * math.cos(a) + lz * math.sin(a)) * r) for a in angles],
+        [Vector((lx * math.cos(a) + lz * math.sin(a)) * r) for a in angles]
+    )
+
+_sphere_local_loops = _precompute_sphere_loops(24, 0.5)
+_cylinder_local_top, _cylinder_local_bot = [Vector(v) for v in utils.create_unit_cylinder_cap_vertices(16)[0]], [Vector(v) for v in utils.create_unit_cylinder_cap_vertices(16)[1]]
+
+# Cone local base (XY flat circle at z=0.0) and local apex (at z=1.0)
+_cone_local_base = [Vector((v[0], v[1], 0.0)) for v in utils.create_unit_circle_vertices_xy(16)]
+_cone_local_apex = Vector((0.0, 0.0, 1.0))
+
+_circle_local_verts = [Vector(v) for v in utils.create_unit_circle_vertices_xy(24)]
+
 # --- Getters and Cleaners ---
 
 def get_stable_draw_data() -> dict:
@@ -199,34 +218,30 @@ def clear_draw_data():
 
 
 def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
-    """ Generates geometry data for drawing and selection purposes. """
+    """
+    Generates geometry data for a given object and shape type.
+    Returns a tuple of:
+    (line_segments_for_picking, all_world_verts_for_batch, indexed_world_verts, indices_for_batch)
+    """
     line_segments_for_picking_for_this_obj = []
-    # This list will store all vertices for drawing this object if it's selected/active
-    # For indexed shapes like cube, this won't be used directly for batch creation.
     all_world_verts_for_batch_if_selected = [] 
+    indexed_world_verts = None 
+    indices_for_batch = None
     
-    # Specific storage for indexed shapes (like cube)
-    indexed_world_verts = None # e.g., list of Vector for cube vertices
-    indices_for_batch = None   # e.g., constants.unit_cube_indices
     # --- Generate Geometry Data ---
     # Cube
     if sdf_type_prop == "cube":
-        indices_for_batch = constants.unit_cube_indices # Store for later
+        indices_for_batch = constants.unit_cube_indices
         local_verts=[Vector(v) for v in constants.unit_cube_verts]
-        indexed_world_verts =[(mat @ v.to_4d()).xyz.copy() for v in local_verts] # Store for later
+        indexed_world_verts =[(mat @ v.to_4d()).xyz.copy() for v in local_verts]
         if indexed_world_verts:
             for i,j in indices_for_batch:
                 if i<len(indexed_world_verts) and j<len(indexed_world_verts): 
                     line_segments_for_picking_for_this_obj.append((indexed_world_verts[i].copy(), indexed_world_verts[j].copy()))
     # Sphere
     elif sdf_type_prop == "sphere":
-        seg=24; r=0.5; lx=Vector((1,0,0)); ly=Vector((0,1,0)); lz=Vector((0,0,1))
-        loops=[[(lx*math.cos(a)+ly*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]],
-               [(ly*math.cos(a)+lz*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]],
-               [(lx*math.cos(a)+lz*math.sin(a))*r for a in [(i/seg)*2*math.pi for i in range(seg)]]]
-        for local_v_loop in loops:
-            if not local_v_loop: continue
-            world_l=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_loop] 
+        for local_v_loop in _sphere_local_loops:
+            world_l=[(mat @ v.to_4d()).xyz.copy() for v in local_v_loop] 
             if world_l:
                 for i in range(len(world_l)): 
                     v1=world_l[i]; v2=world_l[(i+1)%len(world_l)]
@@ -234,9 +249,8 @@ def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
                     all_world_verts_for_batch_if_selected.extend([v1,v2])
     # Cylinder
     elif sdf_type_prop == "cylinder":
-        seg=16; l_top, l_bot = utils.create_unit_cylinder_cap_vertices(seg)
-        w_top_cyl=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_top]; 
-        w_bot_cyl=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_bot]
+        w_top_cyl=[(mat @ v.to_4d()).xyz.copy() for v in _cylinder_local_top]
+        w_bot_cyl=[(mat @ v.to_4d()).xyz.copy() for v in _cylinder_local_bot]
         if w_top_cyl:
             for i in range(len(w_top_cyl)): 
                 v1=w_top_cyl[i]; v2=w_top_cyl[(i+1)%len(w_top_cyl)]
@@ -264,27 +278,23 @@ def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
                     if dt < t_min: t_min = dt; t_pl = w_top_cyl[i]
                     if db > b_max: b_max = db; b_pr = w_bot_cyl[i]
                     if db < b_min: b_min = db; b_pl = w_bot_cyl[i]
-                sides_d_cyl=[t_pr, b_pr, t_pl, b_pl] # Corrected order for two lines
+                sides_d_cyl=[t_pr, b_pr, t_pl, b_pl]
                 line_segments_for_picking_for_this_obj.append((t_pr.copy(), b_pr.copy()))
                 line_segments_for_picking_for_this_obj.append((t_pl.copy(), b_pl.copy()))
                 all_world_verts_for_batch_if_selected.extend(sides_d_cyl)
             except Exception as e_calc: print(f"FF Draw Calc Error (Cyl Sides): {obj.name} - {e_calc}")
     # Cone
     elif sdf_type_prop == "cone":
-        seg=16; h_draw_cone=1.0; apex_z_local_cone=h_draw_cone; base_z_local_cone=0.0; 
-        l_bot_raw_cone=utils.create_unit_circle_vertices_xy(seg)
-        l_bot_transformed_z_cone = [(v[0], v[1], base_z_local_cone) for v in l_bot_raw_cone]
-        w_bot_cone=[(mat @ Vector(v).to_4d()).xyz.copy() for v in l_bot_transformed_z_cone]
+        w_bot_cone=[(mat @ v.to_4d()).xyz.copy() for v in _cone_local_base]
         if w_bot_cone:
             for i in range(len(w_bot_cone)): 
                 v1=w_bot_cone[i]; v2=w_bot_cone[(i+1)%len(w_bot_cone)]
                 line_segments_for_picking_for_this_obj.append((v1.copy(),v2.copy()))
                 all_world_verts_for_batch_if_selected.extend([v1,v2])
-        w_apex_cone = (mat @ Vector((0,0,apex_z_local_cone)).to_4d()).xyz.copy()
+        w_apex_cone = (mat @ _cone_local_apex.to_4d()).xyz.copy()
         if w_bot_cone: 
             try:
                 obj_loc_cone = mat.translation
-                center_base_cone=(mat @ Vector((0,0,base_z_local_cone)).to_4d()).xyz
                 view_origin_cone = camera_location if camera_location else Vector((0,0,10))
                 view_dir_cone=(obj_loc_cone - view_origin_cone)
                 view_dir_cone.z=0; 
@@ -331,9 +341,9 @@ def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
 
         lx = Vector((1, 0, 0)); ly = Vector((0, 1, 0)); lz = Vector((0, 0, 1))
         loops = [
-            utils.create_unit_rounded_rectangle_plane(lx, ly, internal_draw_radius, cs), # XY
-            utils.create_unit_rounded_rectangle_plane(lx, lz, internal_draw_radius, cs), # XZ
-            utils.create_unit_rounded_rectangle_plane(ly, lz, internal_draw_radius, cs), # YZ
+            utils.create_unit_rounded_rectangle_plane(lx, ly, internal_draw_radius, cs),
+            utils.create_unit_rounded_rectangle_plane(lx, lz, internal_draw_radius, cs),
+            utils.create_unit_rounded_rectangle_plane(ly, lz, internal_draw_radius, cs),
         ]
         for local_v_loop in loops:
             if not local_v_loop: continue
@@ -346,8 +356,7 @@ def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
                     all_world_verts_for_batch_if_selected.extend([v1, v2])
     # Circle
     elif sdf_type_prop == "circle":
-        seg_circle=24; local_v_circle=utils.create_unit_circle_vertices_xy(seg_circle)
-        world_o_circle=[(mat @ Vector(v).to_4d()).xyz.copy() for v in local_v_circle]
+        world_o_circle=[(mat @ v.to_4d()).xyz.copy() for v in _circle_local_verts]
         if world_o_circle:
             for i in range(len(world_o_circle)): 
                 v1=world_o_circle[i]; v2=world_o_circle[(i+1)%len(world_o_circle)]
