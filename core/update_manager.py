@@ -890,20 +890,24 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
                 new_mesh_bdata.loops.add(num_tris * 3)
                 new_mesh_bdata.polygons.add(num_tris)
 
-                # Direct write of vertices
-                flat_verts = [val for vert in mesh_data[0] for val in vert]
+                # Direct write of vertices using fast C-arrays
+                flat_verts = array.array('f')
+                for vert in mesh_data[0]:
+                    flat_verts.extend(vert)
                 new_mesh_bdata.vertices.foreach_set("co", flat_verts)
 
-                # Direct write of loop indices
-                flat_loops = [idx for tri in mesh_data[1] for idx in tri]
+                # Direct write of loop indices using fast C-arrays
+                flat_loops = array.array('i')
+                for tri in mesh_data[1]:
+                    flat_loops.extend(tri)
                 new_mesh_bdata.loops.foreach_set("vertex_index", flat_loops)
 
-                # Direct write of polygons (each is a triangle)
-                new_mesh_bdata.polygons.foreach_set("loop_start", range(0, num_tris * 3, 3))
-                new_mesh_bdata.polygons.foreach_set("loop_total", (3,) * num_tris)
-
-                # Enable smooth shading via array memory copy (replaces slow Python loop)
-                new_mesh_bdata.polygons.foreach_set("use_smooth", (True,) * num_tris)
+                # Direct write of polygons (triangles) using pre-allocated C-buffers
+                loop_starts = array.array('i', range(0, num_tris * 3, 3))
+                loop_totals = array.array('i', [3]) * num_tris
+                
+                new_mesh_bdata.polygons.foreach_set("loop_start", loop_starts)
+                new_mesh_bdata.polygons.foreach_set("loop_total", loop_totals)
 
                 # Map calculated vertex colors directly to Mesh Point Attributes
                 if colors_data and len(colors_data) == num_verts * 4:
@@ -915,7 +919,9 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
                             type='FLOAT_COLOR',
                             domain='POINT'
                         )
-                    color_attr.data.foreach_set("color", colors_data)
+                    # Write color data using a pre-allocated float buffer
+                    c_colors_data = array.array('f', colors_data)
+                    color_attr.data.foreach_set("color", c_colors_data)
 
                 mesh_update_successful = True
             except Exception as e_fast:
@@ -923,8 +929,6 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
                 # Safe fallback to standard from_pydata
                 new_mesh_bdata.clear_geometry()
                 new_mesh_bdata.from_pydata(mesh_data[0], [], mesh_data[1])
-                for poly in new_mesh_bdata.polygons:
-                    poly.use_smooth = True
                 mesh_update_successful = True
         
         new_mesh_bdata.update()
@@ -1092,7 +1096,7 @@ def initial_update_check_all():
         print(f"FieldForge: Triggered initial checks for {count} bounds systems.")
         try:
             from .. import drawing
-            bpy.app.timers.register(drawing.tag_redraw_all_view3d, first_interval=0.2 + count * 0.05)
+            bpy.app.timers.register(drawing.tag_redraw_all_view3d, first_interval=0.01)
         except Exception: 
             pass
 
