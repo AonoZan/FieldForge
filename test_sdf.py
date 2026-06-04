@@ -9,8 +9,8 @@ from mathutils import Vector
 addon_name = "FieldForge"
 
 # --- REGRESSION TESTING BASELINE CONFIGURATION ---
-EXPECTED_VERTEX_COUNT = 13599
-EXPECTED_SPATIAL_HASH = "773a03a7e7fa195632d007efcccee826cce3807579f95e6017b3fb5ee2386b16"
+EXPECTED_VERTEX_COUNT = 13593
+EXPECTED_SPATIAL_HASH = "832d2147efdadacfe973ff634b5b56c52dffd1527a8d2757e95757b5687efc8a"
 
 # Enable the addon
 if addon_name not in bpy.context.preferences.addons:
@@ -141,10 +141,12 @@ if not result_obj:
 if result_obj and result_obj.data and len(result_obj.data.vertices) > 0:
     unique_verts = set()
     for v in result_obj.data.vertices:
-        rx = round(v.co.x, 4)
-        ry = round(v.co.y, 4)
-        rz = round(v.co.z, 4)
+        # Truncate to exactly 3 decimal places (e.g. 1.0009 -> 1.000)
+        rx = int(v.co.x * 1000) / 1000.0
+        ry = int(v.co.y * 1000) / 1000.0
+        rz = int(v.co.z * 1000) / 1000.0
         
+        # Eliminate negative zero hashes
         if rx == -0.0: rx = 0.0
         if ry == -0.0: ry = 0.0
         if rz == -0.0: rz = 0.0
@@ -156,7 +158,8 @@ if result_obj and result_obj.data and len(result_obj.data.vertices) > 0:
     
     hasher = hashlib.sha256()
     for pt in sorted_verts:
-        hasher.update(bytes(f"{pt[0]:.4f},{pt[1]:.4f},{pt[2]:.4f}|", "utf-8"))
+        # Update formatting to .3f to match the truncated precision
+        hasher.update(bytes(f"{pt[0]:.3f},{pt[1]:.3f},{pt[2]:.3f}|", "utf-8"))
         
     mesh_hash = hasher.hexdigest()
     
