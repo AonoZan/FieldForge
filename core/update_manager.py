@@ -74,6 +74,68 @@ THROTTLE_INTERVAL = 0.15 # Minimum seconds between viewport updates during activ
 
 # --- Module State ---
 _progressive_timers = {} # Isolated storage for progressive refinement steps
+_hierarchy_tree_cache = {} # dict: {bounds_name: (signature, HierarchyNode_root)}
+
+class HierarchyNode:
+    """A lightweight, pure-Python tree representation of an SDF object node."""
+    def __init__(self, obj, parent_node=None):
+        self.obj = obj
+        self.name = obj.name
+        self.parent_node = parent_node
+        self.is_source = utils.is_sdf_source(obj) and not utils.is_sdf_canvas(obj)
+        self.is_canvas = utils.is_sdf_canvas(obj)
+        self.is_group = utils.is_sdf_group(obj)
+        
+        # Cache resolved link targets and processing options once during compile
+        self.linked_target = None
+        self.processes_linked_children = False
+        if utils.is_sdf_linked(obj):
+            self.linked_target = utils.get_effective_sdf_object(obj)
+            self.processes_linked_children = obj.get(constants.SDF_PROCESS_LINKED_CHILDREN_PROP, False)
+        
+        self.children = []
+        self.linked_children = [] # Resolved structural links
+
+def build_hierarchy_tree(obj, parent_node=None) -> HierarchyNode:
+    """Recursively compiles a stable pure-Python HierarchyNode tree."""
+    node = HierarchyNode(obj, parent_node)
+    for child in obj.children:
+        if child:
+            child_node = build_hierarchy_tree(child, node)
+            node.children.append(child_node)
+    
+    # Pre-resolve linked child nodes
+    if node.linked_target and node.processes_linked_children:
+        for l_child in node.linked_target.children:
+            if l_child:
+                l_child_node = build_hierarchy_tree(l_child, node)
+                node.linked_children.append(l_child_node)
+    return node
+
+def get_hierarchy_signature(bounds_obj) -> tuple:
+    """Generates a fast, lightweight structural signature of the bounds hierarchy."""
+    sig = []
+    queue = [bounds_obj]
+    visited = {bounds_obj.name}
+    while queue:
+        curr = queue.pop(0)
+        for child in curr.children:
+            if child and child.name not in visited:
+                visited.add(child.name)
+                sig.append((child.name, curr.name, child.get("sdf_type", "")))
+                queue.append(child)
+                
+        # Include processes_linked_children state in structural signature
+        obj_processes_linked_children = curr.get(constants.SDF_PROCESS_LINKED_CHILDREN_PROP, False)
+        if utils.is_sdf_linked(curr) and obj_processes_linked_children:
+            linked_target = utils.get_effective_sdf_object(curr)
+            if linked_target and linked_target != curr:
+                for l_child in linked_target.children:
+                    if l_child and l_child.name not in visited:
+                        visited.add(l_child.name)
+                        sig.append((l_child.name, curr.name, l_child.get("sdf_type", "")))
+                        queue.append(l_child)
+    return tuple(sorted(sig))
 
 # --- Isolated Progressive Timers ---
 def _register_progressive_timer(bounds_name: str, delay: float, callback):
@@ -138,133 +200,127 @@ def _cancel_debounce_timer(bounds_name: str):
         except Exception:
             pass
 
+def _gather_from_node_tree(node, transform_matrix_inv, active_array_params, active_group, context, results):
+    """Traverses the pre-compiled pure-Python tree, computing only active world matrices."""
+    if not node.obj or not node.obj.visible_get(view_layer=context.view_layer):
+        return
+
+    if node.is_source:
+        base_inv = node.obj.matrix_world.inverted()
+        effective_inv = base_inv @ transform_matrix_inv
+        results.append((node.obj, effective_inv, active_array_params.copy(), active_group))
+
+    elif node.is_canvas:
+        for child_node in node.children:
+            if child_node.is_source and child_node.obj.get("sdf_type") in constants._2D_SHAPE_TYPES:
+                base_inv = child_node.obj.matrix_world.inverted()
+                effective_inv = base_inv @ transform_matrix_inv
+                results.append((child_node.obj, effective_inv, active_array_params.copy(), active_group))
+
+    # Recurse structural children of the node
+    for child_node in node.children:
+        if node.is_canvas and child_node.is_source and child_node.obj.get("sdf_type") in constants._2D_SHAPE_TYPES:
+            continue
+        
+        child_array_params = active_array_params.copy()
+        child_group = active_group
+        if node.is_group:
+            array_mode = utils.get_sdf_param(node.obj, "sdf_main_array_mode", 'NONE')
+            if array_mode != 'NONE':
+                child_group = node.obj
+                child_group_inv = node.obj.matrix_world.inverted()
+                child_array_params['mode'] = array_mode
+                center_on_origin = utils.get_sdf_param(node.obj, "sdf_array_center_on_origin", True)
+                
+                if array_mode == 'LINEAR':
+                    ax = utils.get_sdf_param(node.obj, "sdf_array_active_x", False)
+                    ay = utils.get_sdf_param(node.obj, "sdf_array_active_y", False) and ax
+                    az = utils.get_sdf_param(node.obj, "sdf_array_active_z", False) and ay
+                    
+                    nx = int(utils.get_sdf_param(node.obj, "sdf_array_count_x", 2)) if ax else 1
+                    ny = int(utils.get_sdf_param(node.obj, "sdf_array_count_y", 2)) if ay else 1
+                    nz = int(utils.get_sdf_param(node.obj, "sdf_array_count_z", 2)) if az else 1
+                    
+                    child_array_params['nx'] = nx
+                    child_array_params['ny'] = ny
+                    child_array_params['nz'] = nz
+                    
+                    child_local_pos = (child_group_inv @ child_node.obj.matrix_world).translation
+                    
+                    dx_val = (child_local_pos.x * 2.0 / (nx - 1)) if (ax and nx > 1) else 0.0
+                    dy_val = (child_local_pos.y * 2.0 / (ny - 1)) if (ay and ny > 1) else 0.0
+                    dz_val = (child_local_pos.z * 2.0 / (nz - 1)) if (az and nz > 1) else 0.0
+                    
+                    default_small_delta = 1.0
+                    if ax and nx > 1 and abs(dx_val) < 1e-5:
+                        dx_val = default_small_delta * (1 if child_local_pos.x >= 0 else -1) if abs(child_local_pos.x) < 1e-5 else dx_val
+                    if ay and ny > 1 and abs(dy_val) < 1e-5:
+                        dy_val = default_small_delta * (1 if child_local_pos.y >= 0 else -1) if abs(child_local_pos.y) < 1e-5 else dy_val
+                    if az and nz > 1 and abs(dz_val) < 1e-5:
+                        dz_val = default_small_delta * (1 if child_local_pos.z >= 0 else -1) if abs(child_local_pos.z) < 1e-5 else dz_val
+                        
+                    child_array_params['dx'] = dx_val
+                    child_array_params['dy'] = dy_val
+                    child_array_params['dz'] = dz_val
+                    child_array_params['sh_x'] = child_local_pos.x
+                    child_array_params['sh_y'] = child_local_pos.y
+                    child_array_params['sh_z'] = child_local_pos.z
+                    
+                elif array_mode == 'RADIAL':
+                    radial_count = int(utils.get_sdf_param(node.obj, "sdf_radial_count", 1))
+                    child_array_params['radial_count'] = radial_count
+                    
+                    try:
+                        center_prop = utils.get_sdf_param(node.obj, "sdf_radial_center", (0.0, 0.0))
+                        rcx = float(center_prop[0])
+                        rcy = float(center_prop[1])
+                    except Exception:
+                        rcx = 0.0
+                        rcy = 0.0
+                    
+                    if center_on_origin:
+                        child_array_params['radial_cx'] = 0.0
+                        child_array_params['radial_cy'] = 0.0
+                        child_local_pos = (child_group_inv @ child_node.obj.matrix_world).translation
+                        child_array_params['radial_child_x'] = child_local_pos.x - rcx
+                        child_array_params['radial_child_y'] = child_local_pos.y - rcy
+                    else:
+                        child_array_params['radial_cx'] = rcx
+                        child_array_params['radial_cy'] = rcy
+                        child_local_pos = (child_group_inv @ child_node.obj.matrix_world).translation
+                        child_array_params['radial_child_x'] = child_local_pos.x
+                        child_array_params['radial_child_y'] = child_local_pos.y
+                        
+        _gather_from_node_tree(child_node, transform_matrix_inv, child_array_params, child_group, context, results)
+
+    # Recurse linked node children if active
+    if node.linked_target and node.processes_linked_children:
+        W_target = node.linked_target.matrix_world
+        W_linker_inv = node.obj.matrix_world.inverted()
+        reparent_inv = W_target @ W_linker_inv
+        new_transform_inv = reparent_inv @ transform_matrix_inv
+        
+        for l_child_node in node.linked_children:
+            _gather_from_node_tree(l_child_node, new_transform_inv, active_array_params, active_group, context, results)
 
 def _gather_leaf_shapes_and_properties(obj, context):
-    """
-    Recursively gathers leaf sources, their effective inverse matrices,
-    colors, and blend factors, correctly resolving linked group/object instances
-    and inheriting parent array modifier parameters.
-    """
-    results = [] # List of tuples: (src_obj, effective_matrix_inv, array_params, group_obj)
-
-    def recurse(current_obj, current_logical_parent, transform_matrix_inv, active_array_params, active_group):
-        if not current_obj or not current_obj.visible_get(view_layer=context.view_layer):
-            return
-
-        is_source = utils.is_sdf_source(current_obj) and not utils.is_sdf_canvas(current_obj)
-        is_canvas = utils.is_sdf_canvas(current_obj)
-
-        if is_source:
-            # The base inverse world matrix of the source
-            base_inv = current_obj.matrix_world.inverted()
-            # If we are under a linked instance, apply the reparenting transform
-            effective_inv = base_inv @ transform_matrix_inv
-            results.append((current_obj, effective_inv, active_array_params.copy(), active_group))
-
-        elif is_canvas:
-            for child in current_obj.children:
-                if utils.is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES:
-                    base_inv = child.matrix_world.inverted()
-                    effective_inv = base_inv @ transform_matrix_inv
-                    results.append((child, effective_inv, active_array_params.copy(), active_group))
-
-        # Recurse children of the current object
-        for child in current_obj.children:
-            if is_canvas and utils.is_sdf_source(child) and child.get("sdf_type") in constants._2D_SHAPE_TYPES:
-                continue # Skip direct 2D shapes as they are already gathered
-            
-            # Inherit and override array parameters if parent is an active arraying group
-            child_array_params = active_array_params.copy()
-            child_group = active_group
-            if utils.is_sdf_group(current_obj):
-                array_mode = utils.get_sdf_param(current_obj, "sdf_main_array_mode", 'NONE')
-                if array_mode != 'NONE':
-                    child_group = current_obj
-                    child_array_params['mode'] = array_mode
-                    center_on_origin = utils.get_sdf_param(current_obj, "sdf_array_center_on_origin", True)
-                    
-                    if array_mode == 'LINEAR':
-                        ax = utils.get_sdf_param(current_obj, "sdf_array_active_x", False)
-                        ay = utils.get_sdf_param(current_obj, "sdf_array_active_y", False) and ax
-                        az = utils.get_sdf_param(current_obj, "sdf_array_active_z", False) and ay
-                        
-                        nx = int(utils.get_sdf_param(current_obj, "sdf_array_count_x", 2)) if ax else 1
-                        ny = int(utils.get_sdf_param(current_obj, "sdf_array_count_y", 2)) if ay else 1
-                        nz = int(utils.get_sdf_param(current_obj, "sdf_array_count_z", 2)) if az else 1
-                        
-                        child_array_params['nx'] = nx
-                        child_array_params['ny'] = ny
-                        child_array_params['nz'] = nz
-                        
-                        # Calculate spacings matching the logic of _apply_array_to_shape in sdf_logic.py
-                        child_local_pos = (current_obj.matrix_world.inverted() @ child.matrix_world).translation
-                        
-                        dx_val = (child_local_pos.x * 2.0 / (nx - 1)) if (ax and nx > 1) else 0.0
-                        dy_val = (child_local_pos.y * 2.0 / (ny - 1)) if (ay and ny > 1) else 0.0
-                        dz_val = (child_local_pos.z * 2.0 / (nz - 1)) if (az and nz > 1) else 0.0
-                        
-                        default_small_delta = 1.0
-                        if ax and nx > 1 and abs(dx_val) < 1e-5:
-                            dx_val = default_small_delta * (1 if child_local_pos.x >= 0 else -1) if abs(child_local_pos.x) < 1e-5 else dx_val
-                        if ay and ny > 1 and abs(dy_val) < 1e-5:
-                            dy_val = default_small_delta * (1 if child_local_pos.y >= 0 else -1) if abs(child_local_pos.y) < 1e-5 else dy_val
-                        if az and nz > 1 and abs(dz_val) < 1e-5:
-                            dz_val = default_small_delta * (1 if child_local_pos.z >= 0 else -1) if abs(child_local_pos.z) < 1e-5 else dz_val
-                            
-                        child_array_params['dx'] = dx_val
-                        child_array_params['dy'] = dy_val
-                        child_array_params['dz'] = dz_val
-                        
-                        # Pass the raw child local positions as the shifting offsets
-                        child_array_params['sh_x'] = child_local_pos.x
-                        child_array_params['sh_y'] = child_local_pos.y
-                        child_array_params['sh_z'] = child_local_pos.z
-                        
-                    elif array_mode == 'RADIAL':
-                        radial_count = int(utils.get_sdf_param(current_obj, "sdf_radial_count", 1))
-                        child_array_params['radial_count'] = radial_count
-                        
-                        try:
-                            center_prop = utils.get_sdf_param(current_obj, "sdf_radial_center", (0.0, 0.0))
-                            rcx = float(center_prop[0])
-                            rcy = float(center_prop[1])
-                        except Exception:
-                            rcx = 0.0
-                            rcy = 0.0
-                        
-                        # If center_on_origin is True, geometry shifts making the rotation center (0,0) on the mesh
-                        if center_on_origin:
-                            child_array_params['radial_cx'] = 0.0
-                            child_array_params['radial_cy'] = 0.0
-                            child_local_pos = (current_obj.matrix_world.inverted() @ child.matrix_world).translation
-                            child_array_params['radial_child_x'] = child_local_pos.x - rcx
-                            child_array_params['radial_child_y'] = child_local_pos.y - rcy
-                        else:
-                            child_array_params['radial_cx'] = rcx
-                            child_array_params['radial_cy'] = rcy
-                            child_local_pos = (current_obj.matrix_world.inverted() @ child.matrix_world).translation
-                            child_array_params['radial_child_x'] = child_local_pos.x
-                            child_array_params['radial_child_y'] = child_local_pos.y
-                            
-            recurse(child, current_logical_parent, transform_matrix_inv, child_array_params, child_group)
-
-        # Handle linked instances recursively if active
-        obj_processes_linked_children = current_obj.get(constants.SDF_PROCESS_LINKED_CHILDREN_PROP, False)
-        if utils.is_sdf_linked(current_obj) and obj_processes_linked_children:
-            linked_target = utils.get_effective_sdf_object(current_obj)
-            if linked_target and linked_target != current_obj:
-                W_target = linked_target.matrix_world
-                W_linker_inv = current_obj.matrix_world.inverted()
-                reparent_inv = W_target @ W_linker_inv
-                
-                # Compose with any outer reparenting transforms already active
-                new_transform_inv = reparent_inv @ transform_matrix_inv
-                
-                # Recurse into the linked target's children as linked instances
-                for linked_child in linked_target.children:
-                    recurse(linked_child, current_obj, new_transform_inv, active_array_params, active_group)
-
-    # Start recursion from the root bounds system with empty default array parameters
+    """Gathers leaf shapes and properties using the high-performance compiled tree cache."""
+    global _hierarchy_tree_cache
+    bounds_name = obj.name
+    
+    # 1. Get current structural signature
+    current_sig = get_hierarchy_signature(obj)
+    
+    # 2. Rebuild pure-Python tree ONLY on cache miss
+    cached_item = _hierarchy_tree_cache.get(bounds_name)
+    if cached_item and cached_item[0] == current_sig:
+        root_node = cached_item[1]
+    else:
+        root_node = build_hierarchy_tree(obj)
+        _hierarchy_tree_cache[bounds_name] = (current_sig, root_node)
+    
+    # 3. Perform flat, high-performance evaluation of matrices/parameters
+    results = []
     default_params = {
         'mode': 'NONE',
         'nx': 1, 'ny': 1, 'nz': 1,
@@ -274,7 +330,7 @@ def _gather_leaf_shapes_and_properties(obj, context):
         'radial_cx': 0.0, 'radial_cy': 0.0,
         'radial_child_x': 0.0, 'radial_child_y': 0.0
     }
-    recurse(obj, obj, Matrix.Identity(4), default_params, None)
+    _gather_from_node_tree(root_node, Matrix.Identity(4), default_params, None, context, results)
     return results
 
 
@@ -1042,7 +1098,7 @@ def initial_update_check_all():
 
 def clear_timers_and_state():
     """Cancels all active timers and clears global state dictionaries."""
-    global _updates_pending, _sdf_update_caches, _serialized_tree_caches, _current_divs, _target_divs, _last_update_times, _debounce_timers, _active_meshing_threads, _queued_updates, _update_progress, _update_type, _progressive_timers
+    global _updates_pending, _sdf_update_caches, _serialized_tree_caches, _current_divs, _target_divs, _last_update_times, _debounce_timers, _active_meshing_threads, _queued_updates, _update_progress, _update_type, _progressive_timers, _hierarchy_tree_cache
     
     # Cancel all active progressive and debounce timers safely
     for bounds_name in list(_debounce_timers.keys()):
@@ -1061,5 +1117,6 @@ def clear_timers_and_state():
     _queued_updates.clear()
     _update_progress.clear()
     _update_type.clear()
+    _hierarchy_tree_cache.clear()
 
     clear_link_caches()
