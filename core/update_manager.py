@@ -23,6 +23,7 @@ import time
 import math
 import threading
 import ctypes
+import array
 import os
 import sys
 from mathutils import Matrix, Vector
@@ -646,6 +647,39 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
 
         all_sdf_bytes = b"".join(sdf_bytes_list)
 
+        # Pre-allocate all static ctypes parameter arrays on the main thread
+        c_params = {}
+        if num_sdfs > 0:
+            c_params['c_matrices'] = (ctypes.c_float * (num_sdfs * 16))(*matrices_list)
+            c_params['c_child_matrices'] = (ctypes.c_float * (num_sdfs * 16))(*child_matrices_list)
+            c_params['c_sdf_data'] = (ctypes.c_uint8 * len(all_sdf_bytes)).from_buffer_copy(all_sdf_bytes)
+            c_params['c_sizes'] = (ctypes.c_int * num_sdfs)(*sdf_sizes)
+            c_params['c_colors_in'] = (ctypes.c_float * (num_sdfs * 4))(*colors_list)
+            
+            c_params['c_blend_factors'] = (ctypes.c_float * num_sdfs)(*blend_factors_list)
+            c_params['c_clearance_offsets'] = (ctypes.c_float * num_sdfs)(*clearance_offsets_list)
+            c_params['c_use_shell'] = (ctypes.c_int * num_sdfs)(*use_shell_list)
+            c_params['c_shell_offsets'] = (ctypes.c_float * num_sdfs)(*shell_offsets_list)
+
+            c_params['c_array_modes'] = (ctypes.c_int * num_sdfs)(*array_modes_list)
+            c_params['c_array_counts_x'] = (ctypes.c_int * num_sdfs)(*array_counts_x_list)
+            c_params['c_array_counts_y'] = (ctypes.c_int * num_sdfs)(*array_counts_y_list)
+            c_params['c_array_counts_z'] = (ctypes.c_int * num_sdfs)(*array_counts_z_list)
+            
+            c_params['c_array_spacings_x'] = (ctypes.c_float * num_sdfs)(*array_spacings_x_list)
+            c_params['c_array_spacings_y'] = (ctypes.c_float * num_sdfs)(*array_spacings_y_list)
+            c_params['c_array_spacings_z'] = (ctypes.c_float * num_sdfs)(*array_spacings_z_list)
+            
+            c_params['c_array_shifts_x'] = (ctypes.c_float * num_sdfs)(*array_shifts_x_list)
+            c_params['c_array_shifts_y'] = (ctypes.c_float * num_sdfs)(*array_shifts_y_list)
+            c_params['c_array_shifts_z'] = (ctypes.c_float * num_sdfs)(*array_shifts_z_list)
+            
+            c_params['c_radial_counts'] = (ctypes.c_int * num_sdfs)(*radial_counts_list)
+            c_params['c_radial_centers_x'] = (ctypes.c_float * num_sdfs)(*radial_centers_x_list)
+            c_params['c_radial_centers_y'] = (ctypes.c_float * num_sdfs)(*radial_centers_y_list)
+            c_params['c_radial_children_x'] = (ctypes.c_float * num_sdfs)(*radial_children_x_list)
+            c_params['c_radial_children_y'] = (ctypes.c_float * num_sdfs)(*radial_children_y_list)
+
         # Calculate bounding box bounds
         bounds_matrix = trigger_state.get('bounds_matrix')
         local_corners = [Vector(c) for c in ((-1,-1,-1), (1,-1,-1), (-1,1,-1), (1,1,-1), (-1,-1,1), (1,-1,1), (-1,1,1), (1,1,1))]
@@ -695,74 +729,46 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                 c_utils_lib = getattr(lf_ffi, 'custom_c_utils', None)
                 if c_utils_lib is not None and num_sdfs > 0 and mesh_data and mesh_data[0]:
                     try:
-                        import ctypes
-                        flat_verts = [coord for vert in mesh_data[0] for coord in vert]
                         num_verts = len(mesh_data[0])
 
-                        # --- Dynamic Properties Array Conversion (Direction C) ---
-                        c_verts = (ctypes.c_float * (num_verts * 3))(*flat_verts)
-                        c_matrices = (ctypes.c_float * (num_sdfs * 16))(*matrices_list)
-                        c_child_matrices = (ctypes.c_float * (num_sdfs * 16))(*child_matrices_list)
-                        c_sdf_data = (ctypes.c_uint8 * len(all_sdf_bytes)).from_buffer_copy(all_sdf_bytes)
-                        c_sizes = (ctypes.c_int * num_sdfs)(*sdf_sizes)
-                        c_colors_in = (ctypes.c_float * (num_sdfs * 4))(*colors_list)
+                        # High-performance zero-copy ctypes float array using Python's C-implemented array module
+                        flat_verts_array = array.array('f')
+                        for vert in mesh_data[0]:
+                            flat_verts_array.extend(vert) # Extremely fast native C-level extend from tuple
                         
-                        # Convert parameters to flat ctypes arrays
-                        c_blend_factors = (ctypes.c_float * num_sdfs)(*blend_factors_list)
-                        c_clearance_offsets = (ctypes.c_float * num_sdfs)(*clearance_offsets_list)
-                        c_use_shell = (ctypes.c_int * num_sdfs)(*use_shell_list)
-                        c_shell_offsets = (ctypes.c_float * num_sdfs)(*shell_offsets_list)
-
-                        # Convert Array parameters to flat ctypes arrays
-                        c_array_modes = (ctypes.c_int * num_sdfs)(*array_modes_list)
-                        c_array_counts_x = (ctypes.c_int * num_sdfs)(*array_counts_x_list)
-                        c_array_counts_y = (ctypes.c_int * num_sdfs)(*array_counts_y_list)
-                        c_array_counts_z = (ctypes.c_int * num_sdfs)(*array_counts_z_list)
-                        c_array_spacings_x = (ctypes.c_float * num_sdfs)(*array_spacings_x_list)
-                        c_array_spacings_y = (ctypes.c_float * num_sdfs)(*array_spacings_y_list)
-                        c_array_spacings_z = (ctypes.c_float * num_sdfs)(*array_spacings_z_list)
-                        c_array_shifts_x = (ctypes.c_float * num_sdfs)(*array_shifts_x_list)
-                        c_array_shifts_y = (ctypes.c_float * num_sdfs)(*array_shifts_y_list)
-                        c_array_shifts_z = (ctypes.c_float * num_sdfs)(*array_shifts_z_list)
-                        c_radial_counts = (ctypes.c_int * num_sdfs)(*radial_counts_list)
-                        c_radial_centers_x = (ctypes.c_float * num_sdfs)(*radial_centers_x_list)
-                        c_radial_centers_y = (ctypes.c_float * num_sdfs)(*radial_centers_y_list)
-                        c_radial_children_x = (ctypes.c_float * num_sdfs)(*radial_children_x_list)
-                        c_radial_children_y = (ctypes.c_float * num_sdfs)(*radial_children_y_list)
-
-                        # Allocated output buffer
+                        c_verts = (ctypes.c_float * (num_verts * 3)).from_buffer(flat_verts_array)
                         c_colors_out = (ctypes.c_float * (num_verts * 4))()
 
-                        # Call the C++ library
+                        # Call the C++ library using pre-allocated parameters
                         c_utils_lib.calculate_colors(
                             c_verts,
                             num_verts,
-                            c_matrices,
-                            c_child_matrices,
-                            c_sdf_data,
-                            c_sizes,
-                            c_colors_in,
+                            c_params['c_matrices'],
+                            c_params['c_child_matrices'],
+                            c_params['c_sdf_data'],
+                            c_params['c_sizes'],
+                            c_params['c_colors_in'],
                             
-                            c_blend_factors,
-                            c_clearance_offsets,
-                            c_use_shell,
-                            c_shell_offsets,
+                            c_params['c_blend_factors'],
+                            c_params['c_clearance_offsets'],
+                            c_params['c_use_shell'],
+                            c_params['c_shell_offsets'],
 
-                            c_array_modes,
-                            c_array_counts_x,
-                            c_array_counts_y,
-                            c_array_counts_z,
-                            c_array_spacings_x,
-                            c_array_spacings_y,
-                            c_array_spacings_z,
-                            c_array_shifts_x,
-                            c_array_shifts_y,
-                            c_array_shifts_z,
-                            c_radial_counts,
-                            c_radial_centers_x,
-                            c_radial_centers_y,
-                            c_radial_children_x,
-                            c_radial_children_y,
+                            c_params['c_array_modes'],
+                            c_params['c_array_counts_x'],
+                            c_params['c_array_counts_y'],
+                            c_params['c_array_counts_z'],
+                            c_params['c_array_spacings_x'],
+                            c_params['c_array_spacings_y'],
+                            c_params['c_array_spacings_z'],
+                            c_params['c_array_shifts_x'],
+                            c_params['c_array_shifts_y'],
+                            c_params['c_array_shifts_z'],
+                            c_params['c_radial_counts'],
+                            c_params['c_radial_centers_x'],
+                            c_params['c_radial_centers_y'],
+                            c_params['c_radial_children_x'],
+                            c_params['c_radial_children_y'],
                             
                             num_sdfs,
                             c_colors_out
