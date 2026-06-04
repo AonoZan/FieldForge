@@ -737,11 +737,6 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                             def delay_clear_pending():
                                 _updates_pending[bounds_name] = False
                                 _current_divs[bounds_name] = 0
-                                try:
-                                    from .. import drawing
-                                    drawing.tag_redraw_all_view3d()
-                                except Exception:
-                                    pass
                                 return None
                             bpy.app.timers.register(delay_clear_pending, first_interval=0.5)
 

@@ -30,6 +30,7 @@ try:
     from .. import constants
     from .. import utils # For general helpers
     from ..core import state as ff_state # Alias state module
+    from .. import drawing as ff_drawing
     from ..core import update_manager as ff_update # Alias update manager
     from ..drawing import tag_redraw_all_view3d, _draw_line_data_read # Import redraw utility and READ buffer for picking
 except ImportError:
@@ -1400,9 +1401,8 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
 
     def find_object_under_cursor(self, context, region, region_data, mouse_region_x, mouse_region_y, threshold=10.0):
         """ Finds object using data stored on WindowManager. """
-        wm = getattr(context, 'window_manager', None)
         # Get data from Window Manager property
-        draw_data = wm.get("fieldforge_draw_data", {}) if wm else {}
+        draw_data = ff_drawing.get_stable_draw_data()
 
         mx, my = mouse_region_x, mouse_region_y
         if not region or not region_data: return None

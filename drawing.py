@@ -30,10 +30,29 @@ from . import utils
 
 _draw_handle = None
 # Double Buffering for picking data to avoid race conditions with event handlers
-_draw_line_data_read = {}  # Data for event handlers to read (stable from previous frame)
-_draw_line_data_write = {} # Data for draw callback to write to (current frame)
 _geometry_cache = {}       # Cached geometry data per object
 _animation_timer_registered = False # Tracks if continuous animation redraw is active
+
+# --- Module State ---
+
+_draw_handle = None
+# Double Buffering for picking data
+_draw_line_data_read = {}  # Stable data for event handlers to read (pointer-swapped)
+_draw_line_data_write = {} # Data for active draw callback to write to
+
+# --- Getters and Cleaners ---
+
+def get_stable_draw_data() -> dict:
+    """Returns the stable, compiled line segments of the last drawn frame (0-copy)."""
+    global _draw_line_data_read
+    return _draw_line_data_read
+
+def clear_draw_data():
+    """Clears all internal draw buffers and geometry cache."""
+    global _draw_line_data_write, _draw_line_data_read, _geometry_cache
+    _draw_line_data_write.clear()
+    _draw_line_data_read.clear()
+    _geometry_cache.clear()
 
 # --- Drawing Helpers ---
 
@@ -476,7 +495,7 @@ def generate_geometry_data(obj, sdf_type_prop, mat, camera_location) -> tuple:
 
 def ff_draw_callback():
     """Draw callback function - Iterates through scene objects using bpy.context"""
-    global _draw_line_data_write, _geometry_cache, _animation_timer_registered
+    global _draw_line_data_write, _draw_line_data_read, _geometry_cache, _animation_timer_registered
     context = bpy.context
     wm = getattr(context, 'window_manager', None)
     scene = getattr(context, 'scene', None)
@@ -661,16 +680,14 @@ def ff_draw_callback():
         except ReferenceError: continue
         except Exception as e_outer: print(f"FF Draw Error (Outer Loop): {obj.name if obj else '?'} - {type(e_outer).__name__}: {e_outer}")
 
-    if wm: # Check if window manager is valid
-        try:
-            # Store a shallow copy for the operator to read
-            wm["fieldforge_draw_data"] = _draw_line_data_write.copy()
-        except Exception as e_prop:
-             print(f"FF Draw ERROR: Failed to set WM property: {e_prop}")
-        finally: # Restore state
-            for name in list(_geometry_cache.keys()):
-                if name not in seen_objects:
-                    del _geometry_cache[name]
-            if old_line_width is not None: gpu.state.line_width_set(old_line_width)
-            if old_blend is not None: gpu.state.blend_set(old_blend)
-            if old_depth_test is not None: gpu.state.depth_test_set(old_depth_test)
+    # --- Zero-Copy Pointer Swap ---
+    _draw_line_data_read = _draw_line_data_write
+    _draw_line_data_write = {} # Re-allocate fresh write buffer for the next frame
+
+    # Restore GPU State safely
+    try:
+        if old_line_width is not None: gpu.state.line_width_set(old_line_width)
+        if old_blend is not None: gpu.state.blend_set(old_blend)
+        if old_depth_test is not None: gpu.state.depth_test_set(old_depth_test)
+    except Exception:
+        pass
