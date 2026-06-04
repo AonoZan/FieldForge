@@ -642,38 +642,58 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
 
         all_sdf_bytes = b"".join(sdf_bytes_list)
 
-        # Pre-allocate all static ctypes parameter arrays on the main thread
-        c_params = {}
-        if num_sdfs > 0:
-            c_params['c_matrices'] = (ctypes.c_float * (num_sdfs * 16))(*matrices_list)
-            c_params['c_child_matrices'] = (ctypes.c_float * (num_sdfs * 16))(*child_matrices_list)
-            c_params['c_sdf_data'] = (ctypes.c_uint8 * len(all_sdf_bytes)).from_buffer_copy(all_sdf_bytes)
-            c_params['c_sizes'] = (ctypes.c_int * num_sdfs)(*sdf_sizes)
-            c_params['c_colors_in'] = (ctypes.c_float * (num_sdfs * 4))(*colors_list)
-            
-            c_params['c_blend_factors'] = (ctypes.c_float * num_sdfs)(*blend_factors_list)
-            c_params['c_clearance_offsets'] = (ctypes.c_float * num_sdfs)(*clearance_offsets_list)
-            c_params['c_use_shell'] = (ctypes.c_int * num_sdfs)(*use_shell_list)
-            c_params['c_shell_offsets'] = (ctypes.c_float * num_sdfs)(*shell_offsets_list)
+        # 1. Main Thread: Pack contiguous ShapeConfig configuration array
+        import libfive.ffi as lf_ffi
+        shapes_buffer = (lf_ffi.ShapeConfig * num_sdfs)()
+        c_sdf_data_sizes = (ctypes.c_int * num_sdfs)(*sdf_sizes)
 
-            c_params['c_array_modes'] = (ctypes.c_int * num_sdfs)(*array_modes_list)
-            c_params['c_array_counts_x'] = (ctypes.c_int * num_sdfs)(*array_counts_x_list)
-            c_params['c_array_counts_y'] = (ctypes.c_int * num_sdfs)(*array_counts_y_list)
-            c_params['c_array_counts_z'] = (ctypes.c_int * num_sdfs)(*array_counts_z_list)
+        for idx, (src, effective_inv, array_params, group_obj) in enumerate(gathered_data):
+            effective_src = utils.get_effective_sdf_object(src) or src
+            s = shapes_buffer[idx]
+
+            # Write group inverse matrix (Column-Major)
+            m_group_inv = get_inverted_matrix(group_obj, inv_cache) if group_obj else effective_inv
+            for c in range(4):
+                for r in range(4):
+                    s.matrix_group[c*4 + r] = m_group_inv[r][c]
+
+            # Write child transition matrix (Column-Major)
+            m_group_to_child = effective_inv @ group_obj.matrix_world if group_obj else Matrix.Identity(4)
+            for c in range(4):
+                for r in range(4):
+                    s.matrix_child[c*4 + r] = m_group_to_child[r][c]
+
+            # Write color
+            raw_color = getattr(effective_src, "sdf_color", (0.8, 0.8, 0.8, 1.0))
+            s.color[0], s.color[1], s.color[2], s.color[3] = raw_color
+
+            s.blend_factor = utils.get_sdf_param(effective_src, "sdf_blend_factor", 0.0)
+            s.clearance_offset = utils.get_sdf_param(effective_src, "sdf_clearance_offset", 0.0) if utils.get_sdf_param(effective_src, "sdf_use_clearance", False) else 0.0
             
-            c_params['c_array_spacings_x'] = (ctypes.c_float * num_sdfs)(*array_spacings_x_list)
-            c_params['c_array_spacings_y'] = (ctypes.c_float * num_sdfs)(*array_spacings_y_list)
-            c_params['c_array_spacings_z'] = (ctypes.c_float * num_sdfs)(*array_spacings_z_list)
+            s.use_shell = 1 if utils.get_sdf_param(effective_src, "sdf_use_shell", False) else 0
+            s.shell_offset = utils.get_sdf_param(effective_src, "sdf_shell_offset", 0.0)
+
+            # Write Array properties
+            mode_map = {'NONE': 0, 'LINEAR': 1, 'RADIAL': 2}
+            s.array_mode = mode_map.get(array_params.get('mode', 'NONE'), 0)
             
-            c_params['c_array_shifts_x'] = (ctypes.c_float * num_sdfs)(*array_shifts_x_list)
-            c_params['c_array_shifts_y'] = (ctypes.c_float * num_sdfs)(*array_shifts_y_list)
-            c_params['c_array_shifts_z'] = (ctypes.c_float * num_sdfs)(*array_shifts_z_list)
+            s.array_count_x = array_params.get('nx', 1)
+            s.array_count_y = array_params.get('ny', 1)
+            s.array_count_z = array_params.get('nz', 1)
             
-            c_params['c_radial_counts'] = (ctypes.c_int * num_sdfs)(*radial_counts_list)
-            c_params['c_radial_centers_x'] = (ctypes.c_float * num_sdfs)(*radial_centers_x_list)
-            c_params['c_radial_centers_y'] = (ctypes.c_float * num_sdfs)(*radial_centers_y_list)
-            c_params['c_radial_children_x'] = (ctypes.c_float * num_sdfs)(*radial_children_x_list)
-            c_params['c_radial_children_y'] = (ctypes.c_float * num_sdfs)(*radial_children_y_list)
+            s.array_spacing_x = array_params.get('dx', 0.0)
+            s.array_spacing_y = array_params.get('dy', 0.0)
+            s.array_spacing_z = array_params.get('dz', 0.0)
+            
+            s.array_shifts_x = array_params.get('sh_x', 0.0)
+            s.array_shifts_y = array_params.get('sh_y', 0.0)
+            s.array_shifts_z = array_params.get('sh_z', 0.0)
+            
+            s.radial_count = array_params.get('radial_count', 1)
+            s.radial_cx = array_params.get('radial_cx', 0.0)
+            s.radial_cy = array_params.get('radial_cy', 0.0)
+            s.radial_child_x = array_params.get('radial_child_x', 0.0)
+            s.radial_child_y = array_params.get('radial_child_y', 0.0)
 
         # Calculate bounding box bounds
         bounds_matrix = trigger_state.get('bounds_matrix')
@@ -719,7 +739,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                 )
                 meshing_time = time.perf_counter() - t_mesh_start
 
-                # Calculate vertex color mappings asynchronously inside the C++ utility library
+                # Calculate vertex color mappings asynchronously inside C++
                 calculated_colors = None
                 c_utils_lib = getattr(lf_ffi, 'custom_c_utils', None)
                 if c_utils_lib is not None and num_sdfs > 0 and mesh_data and mesh_data[0]:
@@ -729,45 +749,21 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                         # High-performance zero-copy ctypes float array using Python's C-implemented array module
                         flat_verts_array = array.array('f')
                         for vert in mesh_data[0]:
-                            flat_verts_array.extend(vert) # Extremely fast native C-level extend from tuple
+                            flat_verts_array.extend(vert)
                         
                         c_verts = (ctypes.c_float * (num_verts * 3)).from_buffer(flat_verts_array)
                         c_colors_out = (ctypes.c_float * (num_verts * 4))()
 
-                        # Call the C++ library using pre-allocated parameters
-                        c_utils_lib.calculate_colors(
-                            c_verts,
-                            num_verts,
-                            c_params['c_matrices'],
-                            c_params['c_child_matrices'],
-                            c_params['c_sdf_data'],
-                            c_params['c_sizes'],
-                            c_params['c_colors_in'],
-                            
-                            c_params['c_blend_factors'],
-                            c_params['c_clearance_offsets'],
-                            c_params['c_use_shell'],
-                            c_params['c_shell_offsets'],
+                        # 1. Create context (Deserializes trees in the background)
+                        c_sdf_data = (ctypes.c_uint8 * len(all_sdf_bytes)).from_buffer_copy(all_sdf_bytes)
+                        ctx = c_utils_lib.create_context(c_sdf_data, c_sdf_data_sizes, shapes_buffer, num_sdfs)
+                        
+                        # 2. Evaluate colors (OpenMP-parallelized across all CPU cores)
+                        c_utils_lib.calculate_colors_context(ctx, c_verts, num_verts, c_colors_out)
+                        
+                        # 3. Destroy context
+                        c_utils_lib.destroy_context(ctx)
 
-                            c_params['c_array_modes'],
-                            c_params['c_array_counts_x'],
-                            c_params['c_array_counts_y'],
-                            c_params['c_array_counts_z'],
-                            c_params['c_array_spacings_x'],
-                            c_params['c_array_spacings_y'],
-                            c_params['c_array_spacings_z'],
-                            c_params['c_array_shifts_x'],
-                            c_params['c_array_shifts_y'],
-                            c_params['c_array_shifts_z'],
-                            c_params['c_radial_counts'],
-                            c_params['c_radial_centers_x'],
-                            c_params['c_radial_centers_y'],
-                            c_params['c_radial_children_x'],
-                            c_params['c_radial_children_y'],
-                            
-                            num_sdfs,
-                            c_colors_out
-                        )
                         calculated_colors = list(c_colors_out)
                     except Exception as e_col:
                         print(f"FieldForge ERROR: Color evaluation failed: {e_col}")
