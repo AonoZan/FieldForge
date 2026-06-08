@@ -512,34 +512,35 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
 
         sdf_bytes_list = []
         sdf_sizes = []
-        matrices_list = []
-        child_matrices_list = []
-        colors_list = []
+        c_matrices = (ctypes.c_float * (num_sdfs * 16))() if num_sdfs > 0 else None
+        c_child_matrices = (ctypes.c_float * (num_sdfs * 16))() if num_sdfs > 0 else None
+        c_colors_in = (ctypes.c_float * (num_sdfs * 4))() if num_sdfs > 0 else None
         
-        # Parallel arrays for modifier parameters (Direction C)
-        blend_factors_list = []
-        clearance_offsets_list = []
-        use_shell_list = []
-        shell_offsets_list = []
+        c_blend_factors = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_clearance_offsets = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_use_shell = (ctypes.c_int * num_sdfs)() if num_sdfs > 0 else None
+        c_shell_offsets = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
 
-        # Arrays for Group arrays (Direction C + Arrays)
-        array_modes_list = []
-        array_counts_x_list = []
-        array_counts_y_list = []
-        array_counts_z_list = []
-        array_spacings_x_list = []
-        array_spacings_y_list = []
-        array_spacings_z_list = []
-        array_shifts_x_list = []
-        array_shifts_y_list = []
-        array_shifts_z_list = []
-        radial_counts_list = []
-        radial_centers_x_list = []
-        radial_centers_y_list = []
-        radial_children_x_list = []
-        radial_children_y_list = []
+        c_array_modes = (ctypes.c_int * num_sdfs)() if num_sdfs > 0 else None
+        c_array_counts_x = (ctypes.c_int * num_sdfs)() if num_sdfs > 0 else None
+        c_array_counts_y = (ctypes.c_int * num_sdfs)() if num_sdfs > 0 else None
+        c_array_counts_z = (ctypes.c_int * num_sdfs)() if num_sdfs > 0 else None
+        c_array_spacings_x = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_array_spacings_y = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_array_spacings_z = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_array_shifts_x = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_array_shifts_y = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_array_shifts_z = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_radial_counts = (ctypes.c_int * num_sdfs)() if num_sdfs > 0 else None
+        c_radial_centers_x = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_radial_centers_y = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_radial_children_x = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
+        c_radial_children_y = (ctypes.c_float * num_sdfs)() if num_sdfs > 0 else None
 
-        for src, effective_inv, array_params, group_obj in gathered_data:
+        # Track index for matrix array (16 elements per shape in Column-Major format)
+        matrix_idx = 0
+
+        for idx, (src, effective_inv, array_params, group_obj) in enumerate(gathered_data):
             effective_src = utils.get_effective_sdf_object(src)
             if not effective_src:
                 effective_src = src
@@ -572,64 +573,65 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                 # Write effective group inverse matrix in Column-Major order
                 for col in range(4):
                     for row in range(4):
-                        matrices_list.append(m_group_inv[row][col])
+                        c_matrices[matrix_idx] = m_group_inv[row][col]
+                        matrix_idx += 1
 
                 # Write effective group-to-child transition matrix in Column-Major order
+                child_matrix_idx = idx * 16
                 for col in range(4):
                     for row in range(4):
-                        child_matrices_list.append(m_group_to_child[row][col])
+                        c_child_matrices[child_matrix_idx] = m_group_to_child[row][col]
+                        child_matrix_idx += 1
 
-                # Extract shape color safely from the effective linked object
                 raw_color = getattr(effective_src, "sdf_color", (0.8, 0.8, 0.8, 1.0))
-                colors_list.extend(raw_color)
+                c_colors_in[idx * 4 + 0] = raw_color[0]
+                c_colors_in[idx * 4 + 1] = raw_color[1]
+                c_colors_in[idx * 4 + 2] = raw_color[2]
+                c_colors_in[idx * 4 + 3] = raw_color[3]
 
-                # Collect Blend Factor safely from the effective linked object
-                blend_val = utils.get_sdf_param(effective_src, "sdf_blend_factor", 0.0)
-                blend_factors_list.append(blend_val)
+                c_blend_factors[idx] = utils.get_sdf_param(effective_src, "sdf_blend_factor", 0.0)
 
-                # Collect Clearance Offset (only if use_clearance is checked) safely from effective object
                 if utils.get_sdf_param(effective_src, "sdf_use_clearance", False):
-                    clearance_offsets_list.append(utils.get_sdf_param(effective_src, "sdf_clearance_offset", 0.0))
+                    c_clearance_offsets[idx] = utils.get_sdf_param(effective_src, "sdf_clearance_offset", 0.0)
                 else:
-                    clearance_offsets_list.append(0.0)
+                    c_clearance_offsets[idx] = 0.0
 
-                # Collect Shell Modifier Parameters safely from effective object
                 if utils.get_sdf_param(effective_src, "sdf_use_shell", False):
-                    use_shell_list.append(1)
-                    shell_offsets_list.append(utils.get_sdf_param(effective_src, "sdf_shell_offset", 0.0))
+                    c_use_shell[idx] = 1
+                    c_shell_offsets[idx] = utils.get_sdf_param(effective_src, "sdf_shell_offset", 0.0)
                 else:
-                    use_shell_list.append(0)
-                    shell_offsets_list.append(0.0)
+                    c_use_shell[idx] = 0
+                    c_shell_offsets[idx] = 0.0
 
-                # Pack Group Array parameters
+                # Pack Group Array parameters directly to ctypes arrays
                 mode_str = array_params.get('mode', 'NONE')
                 mode_map = {'NONE': 0, 'LINEAR': 1, 'RADIAL': 2}
-                array_modes_list.append(mode_map.get(mode_str, 0))
+                c_array_modes[idx] = mode_map.get(mode_str, 0)
                 
-                array_counts_x_list.append(array_params.get('nx', 1))
-                array_counts_y_list.append(array_params.get('ny', 1))
-                array_counts_z_list.append(array_params.get('nz', 1))
+                c_array_counts_x[idx] = array_params.get('nx', 1)
+                c_array_counts_y[idx] = array_params.get('ny', 1)
+                c_array_counts_z[idx] = array_params.get('nz', 1)
                 
-                array_spacings_x_list.append(array_params.get('dx', 0.0))
-                array_spacings_y_list.append(array_params.get('dy', 0.0))
-                array_spacings_z_list.append(array_params.get('dz', 0.0))
+                c_array_spacings_x[idx] = array_params.get('dx', 0.0)
+                c_array_spacings_y[idx] = array_params.get('dy', 0.0)
+                c_array_spacings_z[idx] = array_params.get('dz', 0.0)
 
-                array_shifts_x_list.append(array_params.get('sh_x', 0.0))
-                array_shifts_y_list.append(array_params.get('sh_y', 0.0))
-                array_shifts_z_list.append(array_params.get('sh_z', 0.0))
+                c_array_shifts_x[idx] = array_params.get('sh_x', 0.0)
+                c_array_shifts_y[idx] = array_params.get('sh_y', 0.0)
+                c_array_shifts_z[idx] = array_params.get('sh_z', 0.0)
                 
-                radial_counts_list.append(array_params.get('radial_count', 1))
-                radial_centers_x_list.append(array_params.get('radial_cx', 0.0))
-                radial_centers_y_list.append(array_params.get('radial_cy', 0.0))
+                c_radial_counts[idx] = array_params.get('radial_count', 1)
+                c_radial_centers_x[idx] = array_params.get('radial_cx', 0.0)
+                c_radial_centers_y[idx] = array_params.get('radial_cy', 0.0)
                 
-                radial_children_x_list.append(array_params.get('radial_child_x', 0.0))
-                radial_children_y_list.append(array_params.get('radial_child_y', 0.0))
+                c_radial_children_x[idx] = array_params.get('radial_child_x', 0.0)
+                c_radial_children_y[idx] = array_params.get('radial_child_y', 0.0)
 
         all_sdf_bytes = b"".join(sdf_bytes_list)
 
         # 1. Main Thread: Pack contiguous ShapeConfig configuration array
-        shapes_buffer = (lf_ffi.ShapeConfig * num_sdfs)()
-        c_sdf_data_sizes = (ctypes.c_int * num_sdfs)(*sdf_sizes)
+        shapes_buffer = (lf_ffi.ShapeConfig * num_sdfs)() if num_sdfs > 0 else None
+        c_sdf_data_sizes = (ctypes.c_int * num_sdfs)(*sdf_sizes) if num_sdfs > 0 else None
 
         for idx, (src, effective_inv, array_params, group_obj) in enumerate(gathered_data):
             effective_src = utils.get_effective_sdf_object(src) or src
@@ -753,7 +755,7 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                         # 3. Destroy context
                         c_utils_lib.destroy_context(ctx)
 
-                        calculated_colors = list(c_colors_out)
+                        calculated_colors = c_colors_out
                     except Exception as e_col:
                         print(f"FieldForge ERROR: Color evaluation failed: {e_col}")
 
@@ -904,9 +906,14 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
                             type='FLOAT_COLOR',
                             domain='POINT'
                         )
-                    # Write color data using a pre-allocated float buffer
-                    c_colors_data = array.array('f', colors_data)
-                    color_attr.data.foreach_set("color", c_colors_data)
+                    if isinstance(colors_data, array.array):
+                        color_attr.data.foreach_set("color", colors_data)
+                    elif isinstance(colors_data, ctypes.Array):
+                        c_colors_data = array.array('f', colors_data)
+                        color_attr.data.foreach_set("color", c_colors_data)
+                    else:
+                        # Fallback for other iterables (should not happen in optimized code)
+                        color_attr.data.foreach_set("color", colors_data)
 
                 mesh_update_successful = True
             except Exception as e_fast:
