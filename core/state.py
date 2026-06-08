@@ -17,9 +17,7 @@ and comparing it to previously cached states for change detection.
 
 import bpy
 from mathutils import Vector, Matrix
-
-from .. import constants
-from .. import utils
+from .. import constants, utils
 
 _link_dependents_cache = {}
 _reverse_link_cache = {}

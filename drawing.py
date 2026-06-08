@@ -23,8 +23,7 @@ import math
 import time
 from mathutils import Vector
 
-from . import constants
-from . import utils
+from . import constants, utils
 
 # --- Module State ---
 

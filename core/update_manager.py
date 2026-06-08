@@ -29,11 +29,9 @@ import sys
 from mathutils import Matrix, Vector
 
 # Use relative imports assuming this file is in FieldForge/core/
-from .. import constants
-from .. import utils # For find_parent_bounds, get_all_bounds_objects, get_bounds_setting, find_result_object
-from . import state # For get_current_sdf_state, has_state_changed
-from . import sdf_logic # For process_sdf_hierarchy
-from .. import lf, ffi as lf_ffi, libfive_available as _lf_imported_ok
+from .. import constants, utils
+from . import state, sdf_logic
+from .. import lf, ffi as lf_ffi
 
 
 # --- Global State Dictionaries (Managed by this module) ---
@@ -484,9 +482,6 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
     Runs the threaded SDF generation and mesh update process.
     Meshing is offloaded to a background thread to prevent UI freezing.
     """
-    if not _lf_imported_ok:
-        return
-
     global _updates_pending, _sdf_update_caches, _active_meshing_threads, _queued_updates, _update_progress, _update_type
 
     # If a meshing thread is already active, queue trigger state and the viewport update flag
@@ -999,9 +994,6 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
 @bpy.app.handlers.persistent
 def ff_depsgraph_handler(scene, depsgraph):
     """ Blender dependency graph handler, called after updates. """
-    if not _lf_imported_ok: 
-        return
-
     context = bpy.context
     if not context or not context.window_manager or not context.window_manager.windows: 
         return
@@ -1066,8 +1058,6 @@ def initial_update_check_all():
     """ Schedules an initial state check for all existing Bounds objects. """
     context = bpy.context
     if not context or not context.scene: 
-        return None
-    if not _lf_imported_ok: 
         return None
 
     count = 0

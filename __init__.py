@@ -26,125 +26,87 @@ bl_info = {
 import bpy
 import os
 import sys
-import traceback
 
-# --- Libfive Loading and Setup ---
 addon_dir = os.path.dirname(os.path.realpath(__file__))
-# Assuming libfive python wrapper is directly in addon_dir or a subdir detectable from there
-libfive_python_dir = addon_dir
-if libfive_python_dir not in sys.path:
-    sys.path.append(libfive_python_dir)
 
-# Path to the actual compiled libraries (assuming a specific structure)
-# Adjust this path if your bundled library structure is different
+if addon_dir not in sys.path:
+    sys.path.append(addon_dir)
+
 libfive_base_dir = os.path.join(addon_dir, 'libfive', 'src')
-
-# Set environment variable *before* ffi import (if needed by your ffi.py)
-# This tells ffi.py where to look for the compiled libs (.so, .dll, .dylib)
-if os.path.isdir(libfive_base_dir):
-    os.environ['LIBFIVE_FRAMEWORK_DIR'] = libfive_base_dir
-else:
-    print(f"FieldForge: Warning - Libfive library directory not found at: {libfive_base_dir}")
+libfive_folder_missing = not os.path.isdir(libfive_base_dir)
+os.environ['LIBFIVE_FRAMEWORK_DIR'] = libfive_base_dir
 
 libfive_available = False
-lf = None
-ffi = None
-libfive_shape_module = None
 
-try:
-    # Import libfive components (assuming they are importable after path setup)
-    import libfive.ffi as ffi
-    import libfive.shape as libfive_shape_module
-    import libfive.stdlib as lf
+if not libfive_folder_missing:
+    if addon_dir not in sys.path:
+        sys.path.append(addon_dir)
 
-    # Basic check for successful loading
-    if hasattr(lf, 'sphere') and hasattr(ffi.lib, 'libfive_tree_const'):
-        libfive_available = True
-    else:
-         print("FieldForge: Libfive imported but core function check failed.")
-         raise ImportError("Core function check failed")
+    os.environ['LIBFIVE_FRAMEWORK_DIR'] = libfive_base_dir
 
-except ImportError as e:
-    # Provide guidance based on expected structure
-    core_lib_path = os.path.join(libfive_base_dir, "src", f"libfive.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
-    stdlib_lib_path = os.path.join(libfive_base_dir, "stdlib", f"libfive-stdlib.{'dll' if sys.platform == 'win32' else 'dylib' if sys.platform == 'darwin' else 'so'}")
-    current_env_var = os.environ.get('LIBFIVE_FRAMEWORK_DIR', '<Not Set>')
-    print("FieldForge: Addon requires libfive. Dynamic functionality disabled.")
-except Exception as e:
-    traceback.print_exc()
-    print("FieldForge: Dynamic functionality disabled.")
+    try:
+        import libfive
+        import libfive.ffi as ffi
+        import libfive.stdlib as lf
+        import libfive.shape as libfive_shape_module
 
-# Define dummy objects if NOT libfive_available
-if not libfive_available:
-    class LFDummy:
-        def __getattr__(self, name):
-            if name == "emptiness":
-                return lambda: None
-            if name == "Shape":
-                return object
-            raise RuntimeError(f"libfive not available (tried to access lf.{name})")
-    lf = LFDummy()
-    
-    class ShapeDummy:
-        @staticmethod
-        def X(): raise RuntimeError("libfive not available (Shape.X)")
-        @staticmethod
-        def Y(): raise RuntimeError("libfive not available (Shape.Y)")
-        @staticmethod
-        def Z(): raise RuntimeError("libfive not available (Shape.Z)")
-    libfive_shape_module = type('module', (), {'Shape': ShapeDummy})()
+        core_so = ffi.lib
+        stdlib_so = ffi.stdlib
+        
+        if hasattr(lf, 'sphere'):
+            libfive_available = True
+        else:
+            raise ImportError("Core function check failed.")
 
-# --- Module Imports (Relative) ---
-# Use a structure that allows reloading during development if needed
-if "bpy" in locals():
-    import importlib
-    # Order can matter if modules depend on each other
-    from . import constants
-    from . import utils
-    from .core import handlers
-    from .core import sdf_logic
-    from .core import state
-    from .core import update_manager
-    from . import drawing
-    from .ui import operators
-    from .ui import panels
-    from .ui import menus
+        # --- Module Imports (Relative) ---
+        # Use a structure that allows reloading during development if needed
+        if "bpy" in locals():
+            # Find all cached submodules starting with this addon's package name
+            prefix = __name__ + "."
+            for module_name in list(sys.modules.keys()):
+                if module_name.startswith(prefix):
+                    del sys.modules[module_name]
+            
+        from . import utils
+        from .core import handlers
+        from .core import state
+        from .core import update_manager
+        from . import drawing
+        from .ui import operators
+        from .ui import panels
+        from .ui import menus
 
-    importlib.reload(constants)
-    importlib.reload(utils)
-    importlib.reload(sdf_logic)
-    importlib.reload(state)
-    importlib.reload(update_manager)
-    importlib.reload(drawing)
-    importlib.reload(operators)
-    importlib.reload(panels)
-    importlib.reload(menus)
-else:
-    # Standard imports for first load
-    from . import constants
-    from . import utils
-    from .core import handlers
-    from .core import sdf_logic
-    from .core import state
-    from .core import update_manager
-    from . import drawing
-    from .ui import operators
-    from .ui import panels
-    from .ui import menus
+        # --- Collect Classes ---
+        # Assumes each module defines a tuple/list named 'classes_to_register'
+        classes_to_register = (
+            *operators.classes_to_register,
+            *panels.classes_to_register,
+            *menus.classes_to_register,
+        )
 
-# --- Collect Classes ---
-# Assumes each module defines a tuple/list named 'classes_to_register'
-classes_to_register = (
-    *operators.classes_to_register,
-    *panels.classes_to_register,
-    *menus.classes_to_register,
-)
+    except Exception as e:
+        libfive_error = str(e)
+        libfive_available = False
+
+def assert_libfive_available():
+    if libfive_folder_missing:
+        raise RuntimeError(
+            f"\n\n[FieldForge Error] Addon failed to load because the compiled libfive binaries are missing.\n"
+            f"If you cloned this from the repository, please make sure you have initialized the submodules "
+            f"and built/copied the compiled libraries to the correct path.\n"
+            f"Expected folder: {libfive_base_dir}\n"
+        )
+
+    # Case B: The folder exists, but the library failed to load (e.g. wrong OS architecture, missing dependencies)
+    if not libfive_available:
+        raise RuntimeError(
+            f"\n\n[FieldForge Error] Addon failed to load because libfive is missing or corrupt.\n"
+            f"Details: {libfive_error}\n"
+        )
 
 # --- Registration ---
 def register():
-    if not libfive_available:
-        print("FieldForge: Libfive not available, registration incomplete.")
-        return
+    assert_libfive_available()
 
     # Register Classes
     for cls in classes_to_register:
@@ -212,6 +174,7 @@ def register():
 
 # --- Unregistration ---
 def unregister():
+    assert_libfive_available()
 
     # Unregister Classes (in reverse order)
     for cls in reversed(classes_to_register):

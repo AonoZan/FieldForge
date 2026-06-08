@@ -19,9 +19,7 @@ import bpy
 from bpy.types import Menu
 
 # Use relative imports assuming this file is in FieldForge/ui/
-from .. import constants
-from .. import utils # For find_parent_bounds, is_sdf_source
-from .. import libfive_available
+from .. import constants, utils
 # Import operator IDs needed for menu items
 from .operators import (
     OBJECT_OT_add_sdf_bounds,
@@ -51,12 +49,6 @@ class VIEW3D_MT_add_sdf(Menu):
 
     def draw(self, context):
         layout = self.layout
-
-        # Check if libfive is available
-        if not libfive_available:
-            layout.label(text="libfive library not found!", icon='ERROR')
-            layout.label(text="Please check console for details.")
-            return
 
         # --- Add Bounds Controller ---
         # This is always available (doesn't depend on selection)

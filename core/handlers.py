@@ -13,8 +13,7 @@
 import bpy
 import bmesh
 from bpy.app.handlers import persistent
-from .. import utils
-from .. import constants
+from .. import utils, constants
 from ..ui import operators
 
 # Global dictionary to store mesh data before saving

@@ -18,7 +18,7 @@ import bpy
 import math
 from mathutils import Vector, Matrix
 
-from . import constants
+import constants
 
 # --- Blender Object/Hierarchy Helpers ---
 

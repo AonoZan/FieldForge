@@ -23,9 +23,7 @@ import bpy
 
 from mathutils import Vector, Matrix
 
-from .. import lf, libfive_shape_module, libfive_available as _lf_imported_ok
-from .. import constants
-from .. import utils
+from .. import lf, libfive_shape_module, constants, utils
 
 
 def reconstruct_shape(obj: bpy.types.Object) -> lf.Shape | None:
@@ -36,8 +34,7 @@ def reconstruct_shape(obj: bpy.types.Object) -> lf.Shape | None:
 
     Returns a libfive Shape or lf.emptiness() on error/unknown type.
     """
-    if not _lf_imported_ok or not obj:
-        return lf.emptiness() if _lf_imported_ok else None
+    if not obj:return None
 
     sdf_type = utils.get_sdf_param(obj, "sdf_type", "")
     shape = None
@@ -146,7 +143,6 @@ def apply_blender_transform_to_sdf(shape: lf.Shape, obj_matrix_world_inv: Matrix
     Applies Blender object's inverted world transform to a libfive shape using remap.
     Returns lf.emptiness() on error.
     """
-    if not _lf_imported_ok: return None
     if shape is None or shape is lf.emptiness():
         return lf.emptiness()
     if obj_matrix_world_inv is None:
@@ -163,7 +159,6 @@ def apply_blender_transform_to_sdf(shape: lf.Shape, obj_matrix_world_inv: Matrix
     except Exception: return lf.emptiness()
 
 def combine_shapes(shape_a: lf.Shape, shape_b: lf.Shape, blend_factor: float) -> lf.Shape | None:
-    if not _lf_imported_ok: return None
     is_a_empty = shape_a is None or shape_a is lf.emptiness()
     is_b_empty = shape_b is None or shape_b is lf.emptiness()
 
@@ -200,17 +195,17 @@ def blended_symmetric_x(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | N
     """
     Makes a shape reflection and then blends it with original based on blend factor.
     """
-    if not _lf_imported_ok or shape_in is None or shape_in is lf.emptiness(): return shape_in
+    if shape_in is None or shape_in is lf.emptiness(): return shape_in
     try: return lf.blend_expt_unit(shape_in, lf.reflect_x(shape_in), blend_factor)
     except Exception: return shape_in
 
 def blended_symmetric_y(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | None:
-    if not _lf_imported_ok or shape_in is None or shape_in is lf.emptiness(): return shape_in
+    if shape_in is None or shape_in is lf.emptiness(): return shape_in
     try: return lf.blend_expt_unit(shape_in, lf.reflect_y(shape_in), blend_factor)
     except Exception: return shape_in
 
 def blended_symmetric_z(shape_in: lf.Shape, blend_factor: float) -> lf.Shape | None:
-    if not _lf_imported_ok or shape_in is None or shape_in is lf.emptiness(): return shape_in
+    if shape_in is None or shape_in is lf.emptiness(): return shape_in
     try: return lf.blend_expt_unit(shape_in, lf.reflect_z(shape_in), blend_factor)
     except Exception: return shape_in
 
@@ -221,7 +216,7 @@ def _apply_array_to_shape(
     child_obj_for_logging: bpy.types.Object,
     delta_override: tuple | None = None
     ) -> lf.Shape | None:
-    if not _lf_imported_ok or shape_to_array_world is None or shape_to_array_world is lf.emptiness():
+    if shape_to_array_world is None or shape_to_array_world is lf.emptiness():
         return shape_to_array_world
 
     array_mode = utils.get_sdf_param(array_controller_obj, "sdf_main_array_mode", 'NONE')
@@ -287,7 +282,6 @@ def _process_children_recursive(
     context: bpy.types.Context,
     is_processing_as_linked_child_instance: bool 
     ) -> lf.Shape | None:
-    if not _lf_imported_ok: return lf.emptiness() if _lf_imported_ok else None
 
     children_to_process_list = []
     is_children_owner_canvas = utils.is_sdf_canvas(children_owner_obj)
@@ -313,7 +307,7 @@ def _process_children_recursive(
         if can_owner_be_loft_base and can_child_be_loft_target:
             base_profile_unit = reconstruct_shape(children_owner_obj)
             target_profile_unit = reconstruct_shape(child_in_list)
-            lofted_world = lf.emptiness() if _lf_imported_ok else None
+            lofted_world = lf.emptiness()
             if not (base_profile_unit is None or base_profile_unit is lf.emptiness() or target_profile_unit is None or target_profile_unit is lf.emptiness()):
                 try:
                     mat_child_rel_to_owner = children_owner_obj.matrix_world.inverted() @ child_in_list.matrix_world
@@ -422,7 +416,7 @@ def _process_children_recursive(
                 blend = min(max(0.0, child_blend_factor), 1.0) if child_blend_factor > constants.CACHE_PRECISION else 0.0
                 if blend > 0.0 : shape_accumulator = custom_blended_intersection(shape_accumulator, final_child_contribution_world, blend, lf)
                 else: shape_accumulator = lf.intersection(shape_accumulator, final_child_contribution_world)
-            except Exception: shape_accumulator = lf.emptiness() if _lf_imported_ok else None
+            except Exception: shape_accumulator = lf.emptiness()
         elif child_csg_op_type == "DIFFERENCE":
             try:
                 blend = min(max(0.0, child_blend_factor), 1.0) if child_blend_factor > constants.CACHE_PRECISION else 0.0
@@ -437,14 +431,14 @@ def _process_children_recursive(
 def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Shape | None:
     context = bpy.context
     if not obj.visible_get(view_layer=context.view_layer):
-        return lf.emptiness() if _lf_imported_ok else None
+        return lf.emptiness()
 
     obj_name = obj.name
     obj_is_sdf_source = utils.is_sdf_source(obj)
     obj_is_group = utils.is_sdf_group(obj)
     obj_is_canvas = utils.is_sdf_canvas(obj)
     
-    obj_initial_shape_contribution_world = lf.emptiness() if _lf_imported_ok else None
+    obj_initial_shape_contribution_world = lf.emptiness()
 
     if obj_is_sdf_source and not obj_is_canvas:
         unit_shape = reconstruct_shape(obj) 
@@ -469,7 +463,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
                 obj_initial_shape_contribution_world = apply_blender_transform_to_sdf(unit_shape, obj.matrix_world.inverted())
 
     elif obj_is_canvas:
-        canvas_2d_base_local = lf.emptiness() if _lf_imported_ok else None
+        canvas_2d_base_local = lf.emptiness()
 
         direct_2d_children_list = []
         for c_child_obj in obj.children:
@@ -647,5 +641,5 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
 
             current_processing_shape = shape_after_mods
 
-    if current_processing_shape is None and _lf_imported_ok: return lf.emptiness()
+    if current_processing_shape is None: return lf.emptiness()
     return current_processing_shape
