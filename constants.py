@@ -72,6 +72,7 @@ DEFAULT_SETTINGS = {
 
     # --- Automatic Update Behavior ---
     "sdf_auto_update": True,        # Enable/disable automatic viewport updates on changes
+    "sdf_calculate_colors": False,   # Enable/disable automatic mesh color calculations
     "sdf_realtime_update_delay": 0.3, # Inactivity time (seconds) before attempting auto viewport update
     "sdf_minimum_update_interval": 0.5, # Minimum time (seconds) between the *end* of one auto update and the *start* of the next (throttling)
 

@@ -116,6 +116,15 @@ def draw_sdf_bounds_settings(layout: bpy.types.UILayout, context: bpy.types.Cont
     row_smooth_angle.label(text="Smooth Angle:")
     row_smooth_angle.prop(obj_for_props, '["sdf_result_auto_smooth_angle"]', text="")
 
+    layout.separator()
+
+    warning_row = layout.row(align=True)
+    warning_row.label(text="Experimental:")
+
+    color_toggle = layout.row(align=True)
+    color_toggle.label(text="Color:")
+    color_toggle.prop(obj_for_props, '["sdf_calculate_colors"]', text="Toggle", toggle=True, icon='COLOR')
+
 def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Context):
     """ Draws the UI elements for the SDF Group object properties. """
     obj = context.object # Assumes active object is an SDF Group

@@ -728,6 +728,9 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         # 3. Calculate actual resolution using the base resolution
         actual_resolution = max(3, int(base_resolution_setting / (1 << div_to_use)))
 
+        # Read the color updates toggle on the main thread
+        calculate_colors_active = utils.get_bounds_setting(bounds_obj, "sdf_calculate_colors")
+        
         # 4. Define the background worker logic
         def _bg_meshing_worker():
             try:
@@ -742,7 +745,9 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
                 # Calculate vertex color mappings asynchronously inside C++
                 calculated_colors = None
                 c_utils_lib = getattr(lf_ffi, 'custom_c_utils', None)
-                if c_utils_lib is not None and num_sdfs > 0 and mesh_data and mesh_data[0]:
+                
+                # Check if color generation is toggled active
+                if calculate_colors_active and c_utils_lib is not None and num_sdfs > 0 and mesh_data and mesh_data[0]:
                     try:
                         num_verts = len(mesh_data[0])
 
