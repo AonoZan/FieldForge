@@ -468,7 +468,7 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
         direct_2d_children_list = []
         for c_child_obj in obj.children:
             if c_child_obj and c_child_obj.visible_get(view_layer=context.view_layer) and \
-               utils.is_sdf_source(c_child_obj) and utils.get_sdf_param(c_child_obj, "sdf_type", "") in constants._2D_SHAPE_TYPES:
+                utils.is_sdf_source(c_child_obj) and utils.get_sdf_param(c_child_obj, "sdf_type", "") in constants._2D_SHAPE_TYPES:
                 direct_2d_children_list.append(c_child_obj)
         
         sorted_direct_2d_children = sorted(direct_2d_children_list, key=lambda c: (utils.get_sdf_param(c, "sdf_processing_order", float('inf')), c.name))
@@ -501,9 +501,9 @@ def process_sdf_hierarchy(obj: bpy.types.Object, bounds_settings: dict) -> lf.Sh
             if linked_target_canvas and linked_target_canvas != obj and utils.is_sdf_canvas(linked_target_canvas):
                 linked_canvas_2d_children_list = []
                 for linked_c_child_obj in linked_target_canvas.children:
-                     if linked_c_child_obj and linked_c_child_obj.visible_get(view_layer=context.view_layer) and \
+                    if linked_c_child_obj and linked_c_child_obj.visible_get(view_layer=context.view_layer) and \
                         utils.is_sdf_source(linked_c_child_obj) and utils.get_sdf_param(linked_c_child_obj, "sdf_type", "") in constants._2D_SHAPE_TYPES:
-                         linked_canvas_2d_children_list.append(linked_c_child_obj)
+                        linked_canvas_2d_children_list.append(linked_c_child_obj)
                 
                 sorted_linked_canvas_2d_children = sorted(linked_canvas_2d_children_list, key=lambda c: (utils.get_sdf_param(c, "sdf_processing_order", float('inf')), c.name))
 

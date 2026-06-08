@@ -856,12 +856,12 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
 
     result_obj = utils.find_result_object(context, result_name)
     if not result_obj and result_name and sdf_settings_from_bounds.get("sdf_create_result_object"):
-         new_mesh_bdata = bpy.data.meshes.new(name=result_name + "_Mesh")
-         result_obj = bpy.data.objects.new(result_name, new_mesh_bdata)
-         link_collection = bounds_obj.users_collection[0] if bounds_obj.users_collection else scene.collection
-         link_collection.objects.link(result_obj)
-         result_obj.matrix_world = Matrix.Identity(4) 
-         result_obj.hide_select = True
+        new_mesh_bdata = bpy.data.meshes.new(name=result_name + "_Mesh")
+        result_obj = bpy.data.objects.new(result_name, new_mesh_bdata)
+        link_collection = bounds_obj.users_collection[0] if bounds_obj.users_collection else scene.collection
+        link_collection.objects.link(result_obj)
+        result_obj.matrix_world = Matrix.Identity(4) 
+        result_obj.hide_select = True
     
     mesh_update_successful = False
     if result_obj and result_obj.type == 'MESH':
@@ -927,60 +927,60 @@ def _apply_mesh_data(bounds_obj, trigger_state: dict, mesh_data, meshing_time: f
         
         # Apply smooth shading and modifier logic
         if mesh_update_successful and len(new_mesh_bdata.polygons) > 0:
-             addon_modifier_name = "FieldForge_Smooth"
-             auto_smooth_angle_deg = sdf_settings_from_bounds.get("sdf_result_auto_smooth_angle", 45.0)
-             auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
-             
-             existing_mod = result_obj.modifiers.get(addon_modifier_name)
-             if not existing_mod:
-                 try:
-                     existing_mod = result_obj.modifiers.new(name=addon_modifier_name, type='NODES')
-                     existing_mod.node_group = utils.get_or_create_smooth_node_group()
-                 except Exception as e_mod:
-                     print(f"FF WARN: Could not dynamically assign 'Smooth by Angle' modifier: {e_mod}")
-             
-             # Locate socket identifier dynamically by name to support future Blender modifications
-             angle_input_identifier = "Socket_2" # Set "Socket_2" as the default fallback
-             if existing_mod and existing_mod.node_group and hasattr(existing_mod.node_group, 'interface'):
-                 try:
-                     interface = existing_mod.node_group.interface
-                     items_prop = bpy.types.NodeTreeInterface.items.__get__(interface, bpy.types.NodeTreeInterface)
-                     for item in items_prop:
-                         item_type = getattr(item, 'item_type', '')
-                         in_out = getattr(item, 'in_out', '')
-                         if item_type == 'SOCKET' and in_out == 'INPUT' and item.name == 'Angle':
-                             angle_input_identifier = item.identifier
-                             break
-                 except Exception:
-                     # Fallback to deterministic default "Socket_2" if custom lookup fails
-                     pass
-             
-             if existing_mod and angle_input_identifier in existing_mod:
-                 try: 
-                     existing_mod[angle_input_identifier] = auto_smooth_angle_rad
-                 except Exception: 
-                     pass
+            addon_modifier_name = "FieldForge_Smooth"
+            auto_smooth_angle_deg = sdf_settings_from_bounds.get("sdf_result_auto_smooth_angle", 45.0)
+            auto_smooth_angle_rad = math.radians(auto_smooth_angle_deg)
+            
+            existing_mod = result_obj.modifiers.get(addon_modifier_name)
+            if not existing_mod:
+                try:
+                    existing_mod = result_obj.modifiers.new(name=addon_modifier_name, type='NODES')
+                    existing_mod.node_group = utils.get_or_create_smooth_node_group()
+                except Exception as e_mod:
+                    print(f"FF WARN: Could not dynamically assign 'Smooth by Angle' modifier: {e_mod}")
+            
+            # Locate socket identifier dynamically by name to support future Blender modifications
+            angle_input_identifier = "Socket_2" # Set "Socket_2" as the default fallback
+            if existing_mod and existing_mod.node_group and hasattr(existing_mod.node_group, 'interface'):
+                try:
+                    interface = existing_mod.node_group.interface
+                    items_prop = bpy.types.NodeTreeInterface.items.__get__(interface, bpy.types.NodeTreeInterface)
+                    for item in items_prop:
+                        item_type = getattr(item, 'item_type', '')
+                        in_out = getattr(item, 'in_out', '')
+                        if item_type == 'SOCKET' and in_out == 'INPUT' and item.name == 'Angle':
+                            angle_input_identifier = item.identifier
+                            break
+                except Exception:
+                    # Fallback to deterministic default "Socket_2" if custom lookup fails
+                    pass
+            
+            if existing_mod and angle_input_identifier in existing_mod:
+                try: 
+                    existing_mod[angle_input_identifier] = auto_smooth_angle_rad
+                except Exception: 
+                    pass
 
-             # Viewport optimization: disable modifier evaluation during viewport updates to eliminate modifier stutters
-             # It turns back on for the high-resolution step (div == MIN_DIV)
-             if existing_mod:
-                 existing_mod.show_viewport = (not is_viewport_update) or (actual_rendered_div == MIN_DIV)
+            # Viewport optimization: disable modifier evaluation during viewport updates to eliminate modifier stutters
+            # It turns back on for the high-resolution step (div == MIN_DIV)
+            if existing_mod:
+                existing_mod.show_viewport = (not is_viewport_update) or (actual_rendered_div == MIN_DIV)
 
-             # Set Material properties
-             mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
-             if mat_name:
-                 material = bpy.data.materials.get(mat_name)
-                 if material:
-                     if not new_mesh_bdata.materials:
-                         new_mesh_bdata.materials.append(material)
-                     else:
-                         new_mesh_bdata.materials[0] = material
-             else:
-                 # Auto-provision standard color attribute shader if computed colors are present
-                 if colors_data:
-                     _ensure_sdf_material(result_obj)
-                 elif len(new_mesh_bdata.materials) > 0:
-                     new_mesh_bdata.materials.clear()
+            # Set Material properties
+            mat_name = sdf_settings_from_bounds.get("sdf_result_material_name", "")
+            if mat_name:
+                material = bpy.data.materials.get(mat_name)
+                if material:
+                    if not new_mesh_bdata.materials:
+                        new_mesh_bdata.materials.append(material)
+                    else:
+                        new_mesh_bdata.materials[0] = material
+            else:
+                # Auto-provision standard color attribute shader if computed colors are present
+                if colors_data:
+                    _ensure_sdf_material(result_obj)
+                elif len(new_mesh_bdata.materials) > 0:
+                    new_mesh_bdata.materials.clear()
 
     update_sdf_cache(trigger_state, bounds_name)
 

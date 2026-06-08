@@ -59,11 +59,11 @@ class VIEW3D_MT_add_sdf(Menu):
         # These should only be enabled if the active object can be a parent
         active_obj = context.active_object
         parent_is_valid_for_any_child = active_obj is not None and \
-                         (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
-                          active_obj.get(constants.SDF_GROUP_MARKER, False) or
-                          active_obj.get(constants.SDF_CANVAS_MARKER, False) or
-                          utils.is_sdf_source(active_obj) or
-                          utils.find_parent_bounds(active_obj) is not None)
+                        (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
+                        active_obj.get(constants.SDF_GROUP_MARKER, False) or
+                        active_obj.get(constants.SDF_CANVAS_MARKER, False) or
+                        utils.is_sdf_source(active_obj) or
+                        utils.find_parent_bounds(active_obj) is not None)
 
         # Use a column layout for the source shapes section
         col = layout.column()
@@ -103,11 +103,11 @@ class VIEW3D_MT_add_sdf(Menu):
 
         # Optional: Add informational text below if adding sources is disabled
         if not parent_is_valid_for_any_child:
-             layout.separator()
-             col_info = layout.column()
-             col_info.active = False # Make text greyed out
-             col_info.label(text="Select Bounds, Group, Canvas or Source object", icon='INFO')
-             col_info.label(text="to add new child items.")
+            layout.separator()
+            col_info = layout.column()
+            col_info.active = False # Make text greyed out
+            col_info.label(text="Select Bounds, Group, Canvas or Source object", icon='INFO')
+            col_info.label(text="to add new child items.")
 
 
 # --- Menu Function (for Appending) ---

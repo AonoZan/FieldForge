@@ -66,7 +66,7 @@ def ff_load_post_handler(dummy):
     try:
         operators.start_select_handler_via_timer()
     except AttributeError:
-         print("FieldForge ERROR (load_post): Could not find function to start select handler in operators.py")
+        print("FieldForge ERROR (load_post): Could not find function to start select handler in operators.py")
     except Exception as e:
         print(f"FieldForge ERROR (load_post): Failed to start modal select handler via timer: {e}")
 

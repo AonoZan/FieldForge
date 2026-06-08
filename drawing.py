@@ -165,7 +165,7 @@ def offset_vertices(vertices, region_data: bpy.types.RegionView3D, camera_loc: V
         try:
             view_direction_ortho = -region_data.view_matrix.col[2].xyz.normalized()
         except (AttributeError, TypeError, ValueError, Exception) as e:
-             view_direction_ortho = None
+            view_direction_ortho = None
 
     for v in vertices:
         v_vec = Vector(v) if not isinstance(v, Vector) else v.copy()
@@ -174,7 +174,7 @@ def offset_vertices(vertices, region_data: bpy.types.RegionView3D, camera_loc: V
             if camera_loc:
                 view_dir_unnormalized = camera_loc - v_vec
                 if view_dir_unnormalized.length_squared > 1e-9:
-                     offset_dir = view_dir_unnormalized.normalized()
+                    offset_dir = view_dir_unnormalized.normalized()
         elif view_direction_ortho:
             offset_dir = view_direction_ortho
 
@@ -520,8 +520,8 @@ def ff_draw_callback():
                 if area_iter.type == 'VIEW_3D':
                     spaces = getattr(area_iter, 'spaces', None)
                     if spaces:
-                         space_data = getattr(spaces, 'active', None)
-                         if space_data: area = area_iter; break
+                        space_data = getattr(spaces, 'active', None)
+                        if space_data: area = area_iter; break
     if not space_data: return
     region_3d = getattr(space_data, 'region_3d', None)
     if not scene or not region_3d: return

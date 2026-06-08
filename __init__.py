@@ -181,7 +181,7 @@ def unregister():
         try:
             bpy.utils.unregister_class(cls)
         except (RuntimeError, ValueError):
-             pass # Ignore if already unregistered or Blender shutting down
+            pass # Ignore if already unregistered or Blender shutting down
         except Exception as e:
             print(f"  ERROR: Failed to unregister class {cls.__name__}: {e}")
 
@@ -218,9 +218,9 @@ def unregister():
         # Stop Modal Operator (Best effort: rely on its cancel/timer checks)
         # Setting the global flag helps it stop cleanly on next tick/timer
         if operators._selection_handler_running: # Assuming flag defined in operators.py
-             print("  - Signaling modal select handler to stop...")
-             operators._selection_handler_running = False
-             # We don't have the instance here to call cancel_modal directly
+            print("  - Signaling modal select handler to stop...")
+            operators._selection_handler_running = False
+            # We don't have the instance here to call cancel_modal directly
 
     except Exception as e:
         print(f"  ERROR: Error removing handlers: {e}")

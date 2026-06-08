@@ -138,7 +138,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                 props_to_track_group = {}
                 props_to_track_group[constants.SDF_LINK_TARGET_NAME_PROP] = actual_child_obj.get(constants.SDF_LINK_TARGET_NAME_PROP, "")
                 for key, default_val in constants.DEFAULT_GROUP_SETTINGS.items():
-                     if key != constants.SDF_LINK_TARGET_NAME_PROP:
+                    if key != constants.SDF_LINK_TARGET_NAME_PROP:
                         value = utils.get_sdf_param(actual_child_obj, key, default_val)
                         if isinstance(default_val, float):
                             value = round(float(value), 5)
@@ -160,7 +160,7 @@ def get_current_sdf_state(context: bpy.types.Context, bounds_obj: bpy.types.Obje
                 current_state['canvas_objects'][child_name] = canvas_obj_state
                 queue.append(actual_child_obj)
             elif actual_child_obj.visible_get(view_layer=context.view_layer) and actual_child_obj.children:
-                 queue.append(actual_child_obj)
+                queue.append(actual_child_obj)
     return current_state
 
 
@@ -197,7 +197,7 @@ def has_state_changed(current_state: dict, cached_state: dict | None) -> bool:
         cached_obj_state = cached_sources.get(obj_name)
         # This check should be redundant due to key set check, but safe backup
         if not cached_obj_state:
-             return True
+            return True
 
         # Compare matrix
         if not utils.compare_matrices(current_obj_state.get('matrix'), cached_obj_state.get('matrix'), tolerance=1e-4):

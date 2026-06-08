@@ -150,7 +150,7 @@ def draw_sdf_group_settings(layout: bpy.types.UILayout, context: bpy.types.Conte
         sdf_siblings = []
         for child in obj.parent.children:
             if child and (utils.is_sdf_source(child) or utils.is_sdf_group(child) or utils.is_sdf_canvas(child)) and \
-               child.visible_get(view_layer=context.view_layer):
+                child.visible_get(view_layer=context.view_layer):
                 sdf_siblings.append(child)
         
         if len(sdf_siblings) > 1:
@@ -579,7 +579,7 @@ def draw_sdf_source_info(layout: bpy.types.UILayout, context: bpy.types.Context)
         extrude_2d_row = layout.row(align=True)
         extrude_2d_row.prop(obj_for_props, '["sdf_extrusion_depth"]', text="Extrusion Depth")
         if not has_params_drawn and sdf_type == "circle":
-             has_params_drawn = True
+            has_params_drawn = True
             
     elif sdf_type == "half_space":
         info_row = layout.row(align=True)

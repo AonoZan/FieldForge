@@ -200,7 +200,7 @@ def compare_dicts(dict1: dict | None, dict2: dict | None, tolerance=constants.CA
         elif isinstance(val1, Matrix):
             if not compare_matrices(val1, val2, tolerance): return False
         elif isinstance(val1, Vector):
-             if not compare_vectors(val1, val2, tolerance): return False
+            if not compare_vectors(val1, val2, tolerance): return False
         elif type(val1) != type(val2):
             return False
         elif val1 != val2:
@@ -311,11 +311,11 @@ def get_blender_select_mouse() -> str:
                            not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey)
                 if is_strict: found_button=kmi.type; break
         if not found_button:
-             for kmi in km.keymap_items:
-                 if kmi.idname=='view3d.select' and kmi.value=='PRESS' and \
+            for kmi in km.keymap_items:
+                if kmi.idname=='view3d.select' and kmi.value=='PRESS' and \
                     kmi.type in {'LEFTMOUSE','RIGHTMOUSE'} and \
                     not kmi.shift and not kmi.ctrl and not kmi.alt and not kmi.oskey:
-                     found_button=kmi.type; break
+                    found_button=kmi.type; break
         if found_button: return found_button
     except Exception: pass 
     return default_button 
@@ -413,7 +413,7 @@ def normalize_sibling_order_and_names(parent_obj: bpy.types.Object):
             if base_name_val in ["SDF_Item", "Empty"] or base_name_val.endswith("_temp"):
                 if sdf_type and isinstance(sdf_type, str): new_base_name = sdf_type.capitalize()
             elif base_name_val.startswith("FF_") and sdf_type and isinstance(sdf_type, str): # e.g. FF_Cube -> Cube
-                 if base_name_val[3:].lower() == sdf_type.lower(): new_base_name = sdf_type.capitalize()
+                if base_name_val[3:].lower() == sdf_type.lower(): new_base_name = sdf_type.capitalize()
 
 
         if child_obj.get("sdf_base_name") != new_base_name : child_obj["sdf_base_name"] = new_base_name

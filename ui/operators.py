@@ -68,7 +68,7 @@ class OBJECT_OT_add_sdf_bounds(Operator):
         # Create Bounds Empty
         # Use context override to ensure placement if called from different context
         with context.temp_override(window=context.window, area=context.area, region=context.region):
-             bpy.ops.object.empty_add(type='CUBE', radius=1.0, location=self.location)
+            bpy.ops.object.empty_add(type='CUBE', radius=1.0, location=self.location)
         bounds_obj = context.active_object
         if not bounds_obj:
             self.report({'ERROR'}, "Failed to create Bounds Empty object.")
@@ -166,7 +166,7 @@ class OBJECT_OT_add_sdf_group(Operator):
             if target_parent.get(constants.SDF_BOUNDS_MARKER, False):
                 parent_bounds = target_parent
             elif target_parent.get(constants.SDF_GROUP_MARKER, False) or utils.is_sdf_source(target_parent):
-                 parent_bounds = utils.find_parent_bounds(target_parent)
+                parent_bounds = utils.find_parent_bounds(target_parent)
 
         if not parent_bounds:
             self.report({'ERROR'}, "Could not determine root SDF Bounds for hierarchy. Cannot add Group.")
@@ -200,7 +200,7 @@ class OBJECT_OT_add_sdf_group(Operator):
                 else:
                     obj[key] = value
             except TypeError as e:
-                 print(f"FieldForge WARN: Could not set default group property '{key}' on {obj.name}: {e}. Value: {value}")
+                print(f"FieldForge WARN: Could not set default group property '{key}' on {obj.name}: {e}. Value: {value}")
 
         obj.color = (0.2, 1.0, 0.2, 0.8)
 
@@ -401,13 +401,13 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
             initial_rotation = (0,0,0)
         try:
             with context.temp_override(window=context.window, area=context.area, region=context.region):
-                 bpy.ops.object.empty_add(
-                     type=display_type,
-                     radius=0,
-                     location=initial_location,
-                     rotation=target_parent.matrix_world.to_euler() if is_parent_canvas and is_2d_shape_being_added else (0,0,0),
-                     scale=(1.0, 1.0, 1.0)
-                 )
+                bpy.ops.object.empty_add(
+                    type=display_type,
+                    radius=0,
+                    location=initial_location,
+                    rotation=target_parent.matrix_world.to_euler() if is_parent_canvas and is_2d_shape_being_added else (0,0,0),
+                    scale=(1.0, 1.0, 1.0)
+                )
             obj = context.active_object
             if not obj: raise RuntimeError("Failed to get active object after empty_add.")
         except Exception as e:
@@ -592,7 +592,7 @@ class OBJECT_OT_add_sdf_text_source(AddSdfSourceBase):
         # Only add extrusion depth if you want it to be part of the Text object's initial setup
         # And if you've modified sdf_logic.py to make "text" extrudable.
         if self.initial_extrusion_depth > 1e-5 : # Only set if user provided a value
-             props_to_set["sdf_extrusion_depth"] = self.initial_extrusion_depth
+            props_to_set["sdf_extrusion_depth"] = self.initial_extrusion_depth
         
         return self.add_sdf_empty(context, "text", 'PLAIN_AXES', "FF_Text", props_to_set=props_to_set)
 
@@ -619,7 +619,7 @@ class OBJECT_OT_sdf_manual_update(Operator):
         print(f"FieldForge: Manual final update triggered for {bounds_name}.")
         
         if update_manager._updates_pending.get(bounds_name, False):
-             self.report({'WARNING'}, f"Update already in progress for {bounds_name}."); return {'CANCELLED'}
+            self.report({'WARNING'}, f"Update already in progress for {bounds_name}."); return {'CANCELLED'}
         current_state = state.get_current_sdf_state(context, bounds_obj) # Use state module function
         if not current_state: self.report({'ERROR'}, f"Failed get state for {bounds_name}."); return {'CANCELLED'}
         update_manager._updates_pending[bounds_name] = True
@@ -895,8 +895,8 @@ class OBJECT_OT_fieldforge_toggle_group_symmetry(Operator):
         selected_obj = context.active_object
         obj_to_modify = utils.get_effective_sdf_object(selected_obj)
         if not obj_to_modify or not utils.is_sdf_group(obj_to_modify): # Ensure target is still a group
-             self.report({'WARNING'}, f"Target for symmetry '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
-             return {'CANCELLED'}
+            self.report({'WARNING'}, f"Target for symmetry '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+            return {'CANCELLED'}
 
         prop_name = f"sdf_group_symmetry_{self.axis.lower()}"
         current_val = obj_to_modify.get(prop_name, False)
@@ -928,8 +928,8 @@ class OBJECT_OT_fieldforge_toggle_group_taper_z(Operator):
         selected_obj = context.active_object
         obj_to_modify = utils.get_effective_sdf_object(selected_obj)
         if not obj_to_modify or not utils.is_sdf_group(obj_to_modify):
-             self.report({'WARNING'}, f"Target for taper '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
-             return {'CANCELLED'}
+            self.report({'WARNING'}, f"Target for taper '{obj_to_modify.name if obj_to_modify else 'None'}' is not a valid group.")
+            return {'CANCELLED'}
 
         prop_name = "sdf_group_taper_z_active"
         current_val = obj_to_modify.get(prop_name, False)
@@ -1083,7 +1083,7 @@ class OBJECT_OT_fieldforge_set_group_twirl_axis(Operator):
         if not effective_obj: effective_obj = obj # Fallback if link is broken
 
         return obj and utils.is_sdf_group(obj) and \
-               effective_obj and effective_obj.get("sdf_group_twirl_active", False)
+            effective_obj and effective_obj.get("sdf_group_twirl_active", False)
 
 
     def execute(self, context):
@@ -1351,8 +1351,8 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
             init_3d = view3d_utils.region_2d_to_location_3d(self.grab_region, self.grab_region_data, self.initial_mouse_region_pos, ref_point)
             curr_3d = view3d_utils.region_2d_to_location_3d(self.grab_region, self.grab_region_data, current_region_pos, init_3d if init_3d else ref_point) # Use init_3d as depth ref if valid
             if init_3d and curr_3d:
-                 delta = curr_3d - init_3d; new_matrix = Matrix.Translation(delta) @ self.initial_world_matrix
-                 self.target_obj_on_press.matrix_world = new_matrix
+                delta = curr_3d - init_3d; new_matrix = Matrix.Translation(delta) @ self.initial_world_matrix
+                self.target_obj_on_press.matrix_world = new_matrix
         except Exception as e_drag: print(f"ERROR manual drag update: {e_drag}"); self.reset_drag_state()
 
     def reset_drag_state(self):
@@ -1477,9 +1477,9 @@ class VIEW3D_OT_fieldforge_select_handler(Operator):
         self.reset_drag_state();
         wm = getattr(context, 'window_manager', None);
         if self._timer and wm:
-             try: wm.event_timer_remove(self._timer)
-             except Exception: pass
-             self._timer = None
+            try: wm.event_timer_remove(self._timer)
+            except Exception: pass
+            self._timer = None
         if _selection_handler_running: _selection_handler_running = False
         tag_redraw_all_view3d(); return {'CANCELLED'}
 
