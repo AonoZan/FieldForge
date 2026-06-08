@@ -21,36 +21,9 @@ from __future__ import annotations
 import math
 import bpy
 
-try:
-    import libfive.stdlib as lf
-    import libfive.shape as libfive_shape_module
-    _lf_imported_ok = True
-except ImportError:
-    print("FieldForge WARN (sdf_logic.py): libfive modules not found during import.")
-    _lf_imported_ok = False
-    # Define dummy lf object so functions don't immediately crash on load,
-    # although they will fail if called without libfive.
-    class LFDummy:
-        def __getattr__(self, name):
-            if name == "emptiness":
-                return lambda: None
-            if name == "Shape":
-                # Fallback object to satisfy type annotation evaluation at runtime
-                return object
-            raise RuntimeError(f"libfive not available (tried to access lf.{name})")
-    lf = LFDummy()
-    class ShapeDummy:
-        @staticmethod
-        def X(): raise RuntimeError("libfive not available (Shape.X)")
-        @staticmethod
-        def Y(): raise RuntimeError("libfive not available (Shape.Y)")
-        @staticmethod
-        def Z(): raise RuntimeError("libfive not available (Shape.Z)")
-    libfive_shape_module = type('module', (), {'Shape': ShapeDummy})()
-
-
 from mathutils import Vector, Matrix
 
+from .. import lf, libfive_shape_module, libfive_available as _lf_imported_ok
 from .. import constants
 from .. import utils
 

@@ -25,22 +25,15 @@ from bpy.types import Operator
 from bpy_extras import view3d_utils
 from mathutils import Vector, Matrix
 
-# Use relative imports assuming this file is in FieldForge/ui/
-try:
-    from .. import constants
-    from .. import utils # For general helpers
-    from ..core import state as ff_state # Alias state module
-    from .. import drawing as ff_drawing
-    from ..core import update_manager as ff_update # Alias update manager
-    from ..drawing import tag_redraw_all_view3d, _draw_line_data_read # Import redraw utility and READ buffer for picking
-except ImportError:
-    # Fallback for running script directly - replace with actual paths/names if needed
-    print("FieldForge WARN (operators.py): Could not perform relative imports. Using placeholders.")
-    import constants
-    import utils
-    from core import state as ff_state
-    from core import update_manager as ff_update
-    from drawing import tag_redraw_all_view3d, _draw_line_data_read # Might fail if not run as addon
+
+from .. import constants
+from .. import utils # For general helpers
+from .. import libfive_available
+from ..core import state as ff_state # Alias state module
+from .. import drawing as ff_drawing
+from ..core import update_manager as ff_update # Alias update manager
+from ..drawing import tag_redraw_all_view3d, _draw_line_data_read # Import redraw utility and READ buffer for picking
+
 
 # --- Global State (for Modal Operator) ---
 # Flag managed by the modal operator itself and register/unregister
@@ -119,7 +112,7 @@ class OBJECT_OT_add_sdf_bounds(Operator):
 
 
         # Trigger initial update check using function from update_manager
-        if utils.lf is not None: # Only schedule if libfive seems available
+        if libfive_available: # Only schedule if libfive seems available
             try:
                 # Use timer to ensure object is fully integrated
                 bpy.app.timers.register(
@@ -156,7 +149,7 @@ class OBJECT_OT_add_sdf_group(Operator):
     @classmethod
     def poll(cls, context):
         active_obj = context.active_object
-        return utils.lf is not None and active_obj is not None and \
+        return libfive_available and active_obj is not None and \
                (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
                 active_obj.get(constants.SDF_GROUP_MARKER, False) or
                 utils.is_sdf_source(active_obj) or
@@ -272,7 +265,7 @@ class OBJECT_OT_add_sdf_canvas(Operator):
     @classmethod
     def poll(cls, context):
         active_obj = context.active_object
-        return utils.lf is not None and active_obj is not None and \
+        return libfive_available and active_obj is not None and \
                (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
                 active_obj.get(constants.SDF_GROUP_MARKER, False) or
                 utils.is_sdf_source(active_obj) or
@@ -376,7 +369,7 @@ class AddSdfSourceBase(Operator): # Keep existing class definition
     @classmethod
     def poll(cls, context):
         active_obj = context.active_object
-        return utils.lf is not None and active_obj is not None and \
+        return libfive_available and active_obj is not None and \
                (active_obj.get(constants.SDF_BOUNDS_MARKER, False) or
                 active_obj.get(constants.SDF_GROUP_MARKER, False) or 
                 utils.find_parent_bounds(active_obj) is not None)
@@ -625,7 +618,7 @@ class OBJECT_OT_sdf_manual_update(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return utils.lf is not None and obj and obj.get(constants.SDF_BOUNDS_MARKER, False)
+        return libfive_available and obj and obj.get(constants.SDF_BOUNDS_MARKER, False)
 
     def execute(self, context):
         bounds_obj = context.active_object; bounds_name = bounds_obj.name

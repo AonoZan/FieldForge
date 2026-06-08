@@ -22,6 +22,7 @@ from bpy.types import Panel
 # Use relative imports assuming this file is in FieldForge/ui/
 from .. import constants
 from .. import utils # For find_parent_bounds, is_sdf_source, is_valid_2d_loft_source, get_bounds_setting
+from .. import libfive_available
 # Import operator IDs needed for buttons (operators are defined in operators.py)
 from .operators import (
     OBJECT_OT_sdf_manual_update,
@@ -706,7 +707,7 @@ class VIEW3D_PT_fieldforge_main(Panel):
     # Optional: @classmethod poll(cls, context) to disable panel if libfive not available?
     @classmethod
     def poll(cls, context):
-        return utils.lf is not None # Only show panel if libfive is available
+        return libfive_available # Only show panel if libfive is available
 
     def draw_header(self, context): # Add a header to the panel
         layout = self.layout
@@ -733,7 +734,7 @@ class VIEW3D_PT_fieldforge_main(Panel):
         layout = self.layout
         obj = context.object
 
-        if utils.lf is None: # Should be caught by poll, but good safety
+        if not libfive_available: # Should be caught by poll, but good safety
             layout.label(text="libfive library not found!", icon='ERROR')
             layout.separator()
             layout.label(text="Check Blender Console.")

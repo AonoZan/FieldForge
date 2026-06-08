@@ -49,10 +49,12 @@ else:
 libfive_available = False
 lf = None
 ffi = None
+libfive_shape_module = None
+
 try:
     # Import libfive components (assuming they are importable after path setup)
     import libfive.ffi as ffi
-    import libfive.shape # Import shape early if stdlib depends on it
+    import libfive.shape as libfive_shape_module
     import libfive.stdlib as lf
 
     # Basic check for successful loading
@@ -71,6 +73,26 @@ except ImportError as e:
 except Exception as e:
     traceback.print_exc()
     print("FieldForge: Dynamic functionality disabled.")
+
+# Define dummy objects if NOT libfive_available
+if not libfive_available:
+    class LFDummy:
+        def __getattr__(self, name):
+            if name == "emptiness":
+                return lambda: None
+            if name == "Shape":
+                return object
+            raise RuntimeError(f"libfive not available (tried to access lf.{name})")
+    lf = LFDummy()
+    
+    class ShapeDummy:
+        @staticmethod
+        def X(): raise RuntimeError("libfive not available (Shape.X)")
+        @staticmethod
+        def Y(): raise RuntimeError("libfive not available (Shape.Y)")
+        @staticmethod
+        def Z(): raise RuntimeError("libfive not available (Shape.Z)")
+    libfive_shape_module = type('module', (), {'Shape': ShapeDummy})()
 
 # --- Module Imports (Relative) ---
 # Use a structure that allows reloading during development if needed
@@ -109,16 +131,6 @@ else:
     from .ui import operators
     from .ui import panels
     from .ui import menus
-
-# Make libfive accessible to other modules if needed (alternative is passing it)
-# This depends on how you structure dependencies. If sdf_logic, etc., import
-# lf directly from libfive, this might not be needed. If they expect it passed
-# or imported from the root __init__, keep these lines.
-if libfive_available:
-    utils.lf = lf
-    utils.ffi = ffi
-    sdf_logic.lf = lf
-    sdf_logic.ffi = ffi
 
 # --- Collect Classes ---
 # Assumes each module defines a tuple/list named 'classes_to_register'

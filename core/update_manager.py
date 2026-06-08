@@ -33,16 +33,7 @@ from .. import constants
 from .. import utils # For find_parent_bounds, get_all_bounds_objects, get_bounds_setting, find_result_object
 from . import state # For get_current_sdf_state, has_state_changed
 from . import sdf_logic # For process_sdf_hierarchy
-
-# Import libfive if available (needed for run_sdf_update)
-try:
-    import libfive.stdlib as lf
-    _lf_imported_ok = True
-except ImportError:
-    _lf_imported_ok = False
-    class LFDummy:
-        def emptiness(self): return None # Simulate emptiness
-    lf = LFDummy()
+from .. import lf, ffi as lf_ffi, libfive_available as _lf_imported_ok
 
 
 # --- Global State Dictionaries (Managed by this module) ---
@@ -521,7 +512,6 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
             final_combined_shape = lf.emptiness()
 
         # Gather color-related properties safely on the main thread and receive inverse cache
-        import libfive.ffi as lf_ffi
         gathered_data, inv_cache = _gather_leaf_shapes_and_properties(bounds_obj, context)
         num_sdfs = len(gathered_data)
 
@@ -643,7 +633,6 @@ def run_sdf_update(bounds_name: str, trigger_state: dict, is_viewport_update: bo
         all_sdf_bytes = b"".join(sdf_bytes_list)
 
         # 1. Main Thread: Pack contiguous ShapeConfig configuration array
-        import libfive.ffi as lf_ffi
         shapes_buffer = (lf_ffi.ShapeConfig * num_sdfs)()
         c_sdf_data_sizes = (ctypes.c_int * num_sdfs)(*sdf_sizes)
 
